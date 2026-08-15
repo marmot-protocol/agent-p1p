@@ -1,0 +1,12 @@
+{
+  "slug": "pip-mdk",
+  "name": "Pip v2 — MDK Shadow Pilot",
+  "repository": "marmot-protocol/mdk",
+  "intake_label": "pip-ok",
+  "intake_enabled": false,
+  "dispatch_enabled": false,
+  "archived_until_activation": true,
+  "merge_mode": "shadow",
+  "autonomous_merge": false,
+  "legacy_board_owns_existing_work": true
+}

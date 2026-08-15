@@ -1,0 +1,16 @@
+{
+  "name": "builder-grok",
+  "execution": "cursor",
+  "provider": "cursor",
+  "model": "cursor-grok-4.6-high",
+  "reasoning": "high",
+  "outer_reasoning_model": null,
+  "fresh_session": true,
+  "skills": [
+    "workflow-contract",
+    "builder-grok"
+  ],
+  "toolsets": [],
+  "result_schema": "builder-result",
+  "description": "Direct Cursor builder restricted to one assigned repository worktree."
+}

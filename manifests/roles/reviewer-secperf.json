@@ -1,0 +1,16 @@
+{
+  "name": "reviewer-secperf",
+  "execution": "cursor",
+  "provider": "cursor",
+  "model": "kimi-k3-high",
+  "reasoning": "high",
+  "outer_reasoning_model": null,
+  "fresh_session": true,
+  "skills": [
+    "workflow-contract",
+    "reviewer-secperf"
+  ],
+  "toolsets": [],
+  "result_schema": "review-result",
+  "description": "Direct Cursor exact-head security, privacy, concurrency, and performance reviewer."
+}

@@ -1,0 +1,22 @@
+{
+  "name": "final-reviewer",
+  "execution": "hermes",
+  "provider": "openai-codex",
+  "model": "gpt-5.6-sol",
+  "reasoning": "xhigh",
+  "outer_reasoning_model": null,
+  "fresh_session": true,
+  "skills": [
+    "workflow-contract",
+    "final-reviewer"
+  ],
+  "toolsets": [
+    "terminal",
+    "file",
+    "web",
+    "skills",
+    "kanban"
+  ],
+  "result_schema": "final-result",
+  "description": "Holistic final gate over issue intent, plans, code, reviews, CI, and authorization."
+}

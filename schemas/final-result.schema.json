@@ -77,6 +77,10 @@
     "decision_rationale": {
       "type": "string",
       "minLength": 1
+    },
+    "pr_number": {
+      "type": "integer",
+      "minimum": 1
     }
   },
   "required": [
@@ -94,6 +98,7 @@
     "evidence",
     "final_review_round",
     "plan_version",
+    "pr_number",
     "reviewed_head_sha",
     "residual_uncertainties",
     "decision_rationale"

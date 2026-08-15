@@ -11,6 +11,12 @@ dependencies = [
   "jsonschema>=4.23,<5",
 ]
 
+[project.scripts]
+pip-v2-bootstrap = "pip_agent.bootstrap:main"
+pip-v2-cursor = "pip_agent.cursor_adapter:main"
+pip-v2-fixture = "pip_agent.offline_fixture:main"
+pip-v2-intake = "pip_agent.intake:main"
+
 [dependency-groups]
 dev = [
   "pytest>=8.3,<9",

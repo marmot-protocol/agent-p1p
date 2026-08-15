@@ -5,10 +5,12 @@
   "type": "object",
   "properties": {
     "case_id": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1
     },
     "repository": {
-      "type": "string"
+      "type": "string",
+      "pattern": "^[^/]+/[^/]+$"
     },
     "issue_number": {
       "type": "integer",
@@ -17,21 +19,20 @@
     "workflow_version": {
       "const": 2
     },
-    "phase": {
+    "intake_label": {
+      "const": "pip-ok"
+    },
+    "state": {
       "enum": [
-        "NEW",
-        "VALIDATING",
-        "WAITING_FOR_ISSUE_CREATOR",
-        "WAITING_FOR_DEPENDENCY",
-        "PLAN_READY",
+        "PLANNING",
+        "WAITING_HUMAN",
         "BUILDING",
-        "AWAITING_INITIAL_CI",
         "REVIEWING",
         "FINAL_REVIEW",
-        "SHADOW_MERGE_READY",
-        "MERGING",
-        "MERGED",
+        "SHADOW_READY",
+        "COMPLETED",
         "BLOCKED",
+        "ESCALATED",
         "ABANDONED"
       ]
     },
@@ -39,37 +40,25 @@
       "type": "integer",
       "minimum": 0
     },
-    "build_round": {
-      "type": "integer",
-      "minimum": 0
-    },
-    "review_round": {
-      "type": "integer",
-      "minimum": 0
-    },
-    "final_review_round": {
+    "remediation_round": {
       "type": "integer",
       "minimum": 0
     },
     "pr_number": {
-      "type": [
-        "integer",
-        "null"
-      ],
+      "type": ["integer", "null"],
       "minimum": 1
     },
     "current_pr_head": {
-      "type": [
-        "string",
-        "null"
-      ],
+      "type": ["string", "null"],
       "pattern": "^[0-9a-f]{40}$"
     },
-    "blockers": {
-      "type": "array"
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
     },
-    "dependencies": {
-      "type": "array"
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
     }
   },
   "required": [
@@ -77,15 +66,14 @@
     "repository",
     "issue_number",
     "workflow_version",
-    "phase",
+    "intake_label",
+    "state",
     "plan_version",
-    "build_round",
-    "review_round",
-    "final_review_round",
+    "remediation_round",
     "pr_number",
     "current_pr_head",
-    "blockers",
-    "dependencies"
+    "created_at",
+    "updated_at"
   ],
   "additionalProperties": false
 }

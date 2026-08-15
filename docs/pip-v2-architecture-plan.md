@@ -1,6 +1,6 @@
 # Pip v2: Repository-Scoped Autonomous Fix Pipeline
 
-**Status:** Architecture and implementation plan; not yet implemented
+**Status:** Runtime foundation implemented; MDK pilot archived and disabled pending explicit activation
 **Audience:** JG, Pip, and future implementers
 **Purpose:** Provide one durable reference for the agreed target architecture, unresolved policy decisions, pilot rollout, and acceptance criteria.
 
@@ -56,7 +56,7 @@ Build a durable, conservative autonomous issue-fixing system that:
              +-------- repository-scoped cases -------+
                                   |
                                   v
-                      ISSUE INTAKE: agent-ok
+                      ISSUE INTAKE: pip-ok
                                   |
                                   v
                   PHASE 1: PLAN AND VALIDATE
@@ -193,6 +193,12 @@ Every run starts a new session. No profile carries a long-running issue conversa
 ## 6. Permanent case and immutable runs
 
 Create one permanent case per issue. Never repeatedly reopen one mutable task to represent the whole workflow.
+
+Here, immutable means append-only through the control-plane API. SQLite guards
+detect accidental bypass but are not a security boundary against the database
+file owner, who can replace the file or schema. Before activation, the state
+directory must be exclusively writable by the control-plane OS identity and
+must not be exposed to planner, builder, or reviewer roles.
 
 Example:
 
@@ -810,7 +816,7 @@ MDK was selected because it has a large actionable issue backlog and is highly v
 - Create the `pip-mdk` board.
 - Establish the MDK intake cutover boundary.
 - Run one controlled issue manually.
-- Enable limited `agent-ok` intake.
+- Enable limited `pip-ok` intake.
 - Operate in shadow merge mode.
 - Compare outcomes with JG.
 - Enable guarded autonomous merge only after approval.

@@ -1,0 +1,22 @@
+{
+  "name": "reviewer-general",
+  "execution": "hermes",
+  "provider": "openai-codex",
+  "model": "gpt-5.6-sol",
+  "reasoning": "high",
+  "outer_reasoning_model": null,
+  "fresh_session": true,
+  "skills": [
+    "workflow-contract",
+    "reviewer-general"
+  ],
+  "toolsets": [
+    "terminal",
+    "file",
+    "web",
+    "skills",
+    "kanban"
+  ],
+  "result_schema": "review-result",
+  "description": "Independent exact-head correctness, integration, test, and maintainability reviewer."
+}

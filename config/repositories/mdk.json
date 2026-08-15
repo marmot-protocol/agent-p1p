@@ -7,7 +7,17 @@
   "autonomous_merge": false,
   "legacy_existing_work_stays_on_legacy_board": true,
   "new_intake_enabled": false,
-  "intake_label": "agent-ok",
+  "dispatch_enabled": false,
+  "intake_label": "pip-ok",
+  "trusted_issue_actors": [
+    "erskingardner",
+    "agent-r3n",
+    "agent-p1p"
+  ],
+  "excluded_issue_numbers": [
+    1366,
+    1384
+  ],
   "branch_prefix": "pip/v2/",
   "models": {
     "planner": "openai-codex/gpt-5.6-sol",
