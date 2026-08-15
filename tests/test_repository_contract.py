@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
+import tomllib
 import zipfile
 from pathlib import Path
 
@@ -13,7 +16,7 @@ from pip_agent.contracts import (
     load_schema,
     validate_contract,
 )
-
+from pip_agent.control_plane import render_service_unit
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -170,7 +173,9 @@ def test_validate_contract_accepts_valid_review_result() -> None:
         "blocking_findings": [],
         "finding_confirmations": [],
         "suggestions": [],
-        "evidence": {"review_url": "https://github.com/marmot-protocol/mdk/pull/1400#issuecomment-1"},
+        "evidence": {
+            "review_url": "https://github.com/marmot-protocol/mdk/pull/1400#issuecomment-1"
+        },
     }
 
     validate_contract("review-result", result)
@@ -218,7 +223,9 @@ def test_schema_name_cannot_escape_registry() -> None:
         load_schema("../../tmp/attacker")
 
 
-def test_review_contract_rejects_invalid_role_timestamp_and_approval_with_blocker() -> None:
+def test_review_contract_rejects_invalid_role_timestamp_and_approval_with_blocker() -> (
+    None
+):
     result = {
         "schema_version": 1,
         "workflow_version": 2,
@@ -467,6 +474,8 @@ def test_built_wheel_contains_contract_schemas(tmp_path: Path) -> None:
     wheel = next(tmp_path.glob("*.whl"))
     with zipfile.ZipFile(wheel) as archive:
         names = set(archive.namelist())
+        app = tmp_path / "app"
+        archive.extractall(app)
 
     expected = {
         f"pip_agent/schemas/{name}.schema.json"
@@ -480,3 +489,78 @@ def test_built_wheel_contains_contract_schemas(tmp_path: Path) -> None:
         )
     }
     assert expected <= names
+    unit = tmp_path / "pip-v2-control.service"
+    subprocess.run(
+        [
+            sys.executable,
+            "-P",
+            "-m",
+            "pip_agent.control_plane",
+            "render-unit",
+            "--caller-group",
+            "jeff",
+            "--output",
+            str(unit),
+        ],
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": str(app)},
+        check=True,
+    )
+    app.rename(tmp_path / "release")
+    assert "Type=notify" in unit.read_text()
+
+
+def test_control_plane_install_artifacts_are_hardened_and_packaged() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    assert (
+        project["project"]["scripts"]["pip-v2-control"]
+        == "pip_agent.control_plane:main"
+    )
+
+    unit = render_service_unit("jeff")
+    for directive in (
+        "User=pip-v2-control",
+        "Group=pip-v2-control",
+        "Type=notify",
+        "NotifyAccess=main",
+        "SupplementaryGroups=jeff",
+        "StateDirectory=pip-v2",
+        "RuntimeDirectory=pip-v2",
+        "ProtectSystem=strict",
+        "ProtectHome=true",
+        "NoNewPrivileges=true",
+        "PrivateTmp=true",
+        "RestrictAddressFamilies=AF_UNIX",
+        "Environment=PYTHONSAFEPATH=1",
+        "UMask=0077",
+    ):
+        assert directive in unit
+    assert "pip-v2-control serve --config /etc/pip-v2/control.json" in unit
+
+    installer = ROOT / "scripts/install-control-plane.sh"
+    subprocess.run(["bash", "-n", str(installer)], check=True)
+    script = installer.read_text()
+    assert "pip-v2-control" in script
+    assert "useradd --system" in script
+    assert "groupadd --system" in script
+    assert "usermod" not in script
+    assert "pip-v2-control identity is not exclusively configured" in script
+    assert "userdel pip-v2-control" in script
+    assert "groupdel pip-v2-control" in script
+    assert 'rm -rf -- "$RELEASE_DIR"' in script
+    assert "systemctl enable pip-v2-control.service" in script
+    assert "systemctl restart pip-v2-control.service" in script
+    assert "--installer-sha256" in script
+    assert "installer SHA-256 mismatch" in script
+    assert "installer must be a root-owned" in script
+    assert "PATH=/usr/sbin:/usr/bin:/sbin:/bin" in script
+    assert "/usr/bin/python3 -P" in script
+    assert script.index("render-unit") < script.index('mv "$INSTALL_TMP/app"')
+    assert "--sha256" in script
+    assert "wheel SHA-256 mismatch" in script
+    assert '[[ "$ISSUE" == "1240" ]]' in script
+    assert 'runuser -u "$CALLER" -- test -e /var/lib/pip-v2/cases.db' in script
+    assert "control-plane boundary validation failed" in script
+    assert "rollback_install" in script
+    assert "restoring the previous control-plane deployment" in script
+    assert "chmod 0640" in script

@@ -198,7 +198,13 @@ Here, immutable means append-only through the control-plane API. SQLite guards
 detect accidental bypass but are not a security boundary against the database
 file owner, who can replace the file or schema. Before activation, the state
 directory must be exclusively writable by the control-plane OS identity and
-must not be exposed to planner, builder, or reviewer roles.
+must not be filesystem-accessible to planner, builder, or reviewer roles.
+The initial activation service exposes only root-policy-bound `ensure_canary`
+and read-only `status` operations over a bounded Unix socket. It accepts no
+caller-selected issue, transition, run, PR, head, or merge fields. This makes
+socket calls from same-UID Hermes workers harmless for the initial planning
+canary while keeping lifecycle mutations disabled until independently verified
+evidence reconciliation exists.
 
 Example:
 

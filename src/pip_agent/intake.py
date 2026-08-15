@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from .case_store import CaseStore
+from .control_plane import ControlPlaneError, control_request
 
 
 class IntakeError(RuntimeError):
@@ -159,6 +159,23 @@ def planner_task_command(
     ]
 
 
+def ensure_controlled_case(socket_path: Path, candidate: IntakeCandidate) -> bool:
+    try:
+        response = control_request(socket_path, {"operation": "ensure_canary"})
+    except (ControlPlaneError, OSError) as exc:
+        raise IntakeError(f"control-plane case creation failed: {exc}") from exc
+    if response.get("ok") is not True:
+        raise IntakeError(
+            f"control-plane case creation failed: {response.get('error', 'unknown error')}"
+        )
+    if response.get("case_id") != candidate.case_id:
+        raise IntakeError("control plane is bound to a different case")
+    created = response.get("created")
+    if type(created) is not bool:
+        raise IntakeError("control plane returned an invalid case result")
+    return created
+
+
 def _gh_json(endpoint: str, *, paginate: bool = False) -> Any:
     def fetch_page(page_endpoint: str) -> Any:
         command = [
@@ -203,7 +220,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Authorize one Pip v2 GitHub issue")
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--issue", type=int, required=True)
-    parser.add_argument("--database", type=Path)
+    parser.add_argument("--database", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--control-socket", type=Path)
     parser.add_argument("--enqueue", action="store_true")
     args = parser.parse_args(argv)
     config = json.loads(args.config.read_text())
@@ -216,16 +234,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     candidate = authorize_issue(issue, timeline, config)
     command = planner_task_command(candidate, config) if args.enqueue else None
     if args.enqueue:
-        if args.database is None:
-            raise IntakeError("--database is required with --enqueue")
+        if args.database is not None:
+            raise IntakeError(
+                "direct database enqueue is disabled; use the isolated control socket"
+            )
+        if args.control_socket is None:
+            raise IntakeError("--control-socket is required with --enqueue")
         assert command is not None
-        store = CaseStore(args.database)
-        store.ensure_case(
-            candidate.case_id,
-            candidate.repository,
-            candidate.issue_number,
-            candidate.intake_label,
-        )
+        ensure_controlled_case(args.control_socket, candidate)
         completed = subprocess.run(command, text=True, capture_output=True, check=False)
         if completed.returncode != 0:
             raise IntakeError(

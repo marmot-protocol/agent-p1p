@@ -81,9 +81,42 @@ process with arbitrary write access can replace the database, drop triggers, or
 register replacement SQLite functions. `CaseStore` creates the database as
 mode `0600`, rejects symlinked or foreign-owned files, and the production state
 directory must be exclusively writable by the deterministic control-plane OS
-identity. Worker roles must never receive that path. This exclusive-writer
-boundary is a prerequisite for activation; the archived pilot has no live case
-database.
+identity. Worker roles must never receive filesystem access to that path.
+
+`pip-v2-control` provides the first activation slice. A dedicated systemd user
+owns `/var/lib/pip-v2` and exposes a bounded Unix socket. The public protocol has
+only two operations: idempotently create the single root-configured canary case,
+and read its status. Callers cannot supply a repository, issue number, state,
+run, transition, PR, or merge decision. This deliberately makes same-UID worker
+access to the socket non-authoritative: it cannot select new work or mutate the
+workflow. Lifecycle/result submission remains disabled until a later control
+plane can validate evidence independently.
+
+Copy and verify the installer as root before executing it; do not run the
+user-writable checkout script directly:
+
+```bash
+sudo bash -c '
+  set -euo pipefail
+  src=$1; installer_sha=$2; shift 2
+  pinned=$(mktemp /root/pip-v2-installer.XXXXXX)
+  trap "rm -f -- $pinned" EXIT
+  install -o root -g root -m 0700 "$src" "$pinned"
+  printf "%s  %s\\n" "$installer_sha" "$pinned" | sha256sum -c -
+  "$pinned" --installer-sha256 "$installer_sha" "$@"
+' bash \
+  /home/jeff/code/agent-p1p/scripts/install-control-plane.sh \
+  <verified-installer-sha256> \
+  --wheel /home/jeff/code/agent-p1p/dist/agent_p1p-0.1.0-py3-none-any.whl \
+  --sha256 <verified-wheel-sha256> \
+  --caller jeff \
+  --issue 1240
+```
+
+The installer creates the system identity, installs a root-owned wheel release,
+writes an exact shadow/human-merge-only policy, installs a hardened systemd
+unit, starts it, and verifies the caller can reach the status endpoint. It does
+not activate the `pip-mdk` board or enqueue a task.
 
 ## MDK pilot
 
