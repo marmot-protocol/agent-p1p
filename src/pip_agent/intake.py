@@ -98,6 +98,9 @@ def planner_task_command(
         raise IntakeError("new Pip v2 intake is disabled")
     if config.get("dispatch_enabled") is not True:
         raise IntakeError("Pip v2 dispatch is disabled")
+    canary_issue = config.get("canary_issue_number")
+    if type(canary_issue) is not int or canary_issue != candidate.issue_number:
+        raise IntakeError("dispatch requires an exact one-issue canary binding")
     if (
         config.get("merge_mode") != "shadow"
         or config.get("autonomous_merge") is not False
@@ -157,34 +160,43 @@ def planner_task_command(
 
 
 def _gh_json(endpoint: str, *, paginate: bool = False) -> Any:
-    command = [
-        "gh",
-        "api",
-        endpoint,
-        "-H",
-        "Accept: application/vnd.github+json",
-    ]
-    if paginate:
-        command.extend(["--paginate", "--slurp"])
-    completed = subprocess.run(
-        command,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if completed.returncode != 0:
-        raise IntakeError(f"GitHub lookup failed: {completed.stderr.strip()}")
-    try:
-        payload = json.loads(completed.stdout)
-    except json.JSONDecodeError as exc:
-        raise IntakeError("GitHub returned malformed JSON") from exc
-    if paginate:
-        if not isinstance(payload, list) or not all(
-            isinstance(page, list) for page in payload
-        ):
-            raise IntakeError("GitHub pagination returned an invalid envelope")
-        return [item for page in payload for item in page]
-    return payload
+    def fetch_page(page_endpoint: str) -> Any:
+        command = [
+            "gh",
+            "api",
+            page_endpoint,
+            "-H",
+            "Accept: application/vnd.github+json",
+        ]
+        completed = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise IntakeError(f"GitHub lookup failed: {completed.stderr.strip()}")
+        try:
+            return json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            raise IntakeError("GitHub returned malformed JSON") from exc
+
+    if not paginate:
+        return fetch_page(endpoint)
+
+    if "per_page=" not in endpoint:
+        separator = "&" if "?" in endpoint else "?"
+        endpoint = f"{endpoint}{separator}per_page=100"
+    separator = "&" if "?" in endpoint else "?"
+    items: list[Any] = []
+    for page in range(1, 101):
+        payload = fetch_page(f"{endpoint}{separator}page={page}")
+        if not isinstance(payload, list):
+            raise IntakeError("GitHub pagination returned an invalid page")
+        items.extend(payload)
+        if len(payload) < 100:
+            return items
+    raise IntakeError("GitHub pagination exceeded the 100-page safety bound")
 
 
 def main(argv: Sequence[str] | None = None) -> int:

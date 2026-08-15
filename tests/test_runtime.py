@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import pip_agent.cursor_adapter as cursor_module
+import pip_agent.intake as intake_module
 from pip_agent.bootstrap import (
     CLI_TOOLSET_CATALOG,
     BootstrapError,
@@ -163,10 +164,42 @@ def test_intake_uses_latest_label_lifecycle_beyond_first_page() -> None:
         authorize_issue(issue, timeline, config)
 
 
+def test_github_pagination_does_not_require_gh_slurp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        endpoint = command[2]
+        if endpoint.endswith("page=1"):
+            payload = [{"event": "commented", "id": index} for index in range(100)]
+        elif endpoint.endswith("page=2"):
+            payload = [{"event": "labeled", "id": 100}]
+        else:
+            raise AssertionError(endpoint)
+        return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+    monkeypatch.setattr(intake_module.subprocess, "run", fake_run)
+    timeline = intake_module._gh_json(
+        "repos/marmot-protocol/mdk/issues/1240/timeline?per_page=100",
+        paginate=True,
+    )
+
+    assert len(timeline) == 101
+    assert timeline[-1]["event"] == "labeled"
+    assert [command[2] for command in calls] == [
+        "repos/marmot-protocol/mdk/issues/1240/timeline?per_page=100&page=1",
+        "repos/marmot-protocol/mdk/issues/1240/timeline?per_page=100&page=2",
+    ]
+    assert all("--slurp" not in command for command in calls)
+
+
 def test_planner_task_routing_is_deduplicated_and_force_loads_both_skills() -> None:
     config = json.loads((ROOT / "config/repositories/mdk.json").read_text())
     config["new_intake_enabled"] = True
     config["dispatch_enabled"] = True
+    config["canary_issue_number"] = 1400
     issue = {
         "number": 1400,
         "state": "open",
@@ -192,6 +225,11 @@ def test_planner_task_routing_is_deduplicated_and_force_loads_both_skills() -> N
     assert "workflow-contract" in command
     assert "planner" in command
     assert "pip-v2:marmot-protocol/mdk:1400:plan-v1" in command
+
+    config["canary_issue_number"] = 1401
+    with pytest.raises(IntakeError, match="exact one-issue canary"):
+        planner_task_command(candidate, config)
+    config["canary_issue_number"] = 1400
 
     config["new_intake_enabled"] = False
     with pytest.raises(IntakeError, match="disabled"):
