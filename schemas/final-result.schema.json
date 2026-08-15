@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://marmot-protocol.github.io/agent-p1p/schemas/final-result.schema.json",
+  "title": "final-result",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "workflow_version": {
+      "const": 2
+    },
+    "case_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "role": {
+      "const": "final-reviewer"
+    },
+    "outcome": {
+      "enum": [
+        "MERGE",
+        "RETURN_TO_BUILD",
+        "RETURN_TO_REVIEW",
+        "RETURN_TO_PLANNING",
+        "WAIT_FOR_ISSUE_CREATOR",
+        "BLOCKED",
+        "ABANDON",
+        "BLOCKED_UNEXPECTED_MODEL"
+      ]
+    },
+    "requested_model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "actual_model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "skills_repository_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "evidence": {
+      "type": "object"
+    },
+    "final_review_round": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "plan_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "reviewed_head_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "residual_uncertainties": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "decision_rationale": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "schema_version",
+    "workflow_version",
+    "case_id",
+    "task_id",
+    "role",
+    "outcome",
+    "requested_model",
+    "actual_model",
+    "skills_repository_commit",
+    "started_at",
+    "completed_at",
+    "evidence",
+    "final_review_round",
+    "plan_version",
+    "reviewed_head_sha",
+    "residual_uncertainties",
+    "decision_rationale"
+  ],
+  "additionalProperties": false
+}

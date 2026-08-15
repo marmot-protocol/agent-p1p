@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://marmot-protocol.github.io/agent-p1p/schemas/review-result.schema.json",
+  "title": "review-result",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "workflow_version": {
+      "const": 2
+    },
+    "case_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "role": {
+      "enum": [
+        "reviewer-general",
+        "reviewer-secperf"
+      ]
+    },
+    "outcome": {
+      "enum": [
+        "APPROVE",
+        "REQUEST_CHANGES",
+        "BLOCKED",
+        "BLOCKED_UNEXPECTED_MODEL"
+      ]
+    },
+    "requested_model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "actual_model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "skills_repository_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "evidence": {
+      "type": "object"
+    },
+    "review_round": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "reviewed_head_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "blocking_findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Z]+-R[0-9]+-[0-9]{3}$"
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1
+          },
+          "defect": {
+            "type": "string",
+            "minLength": 1
+          },
+          "consequence": {
+            "type": "string",
+            "minLength": 1
+          },
+          "corrective_direction": {
+            "type": "string",
+            "minLength": 1
+          },
+          "required_evidence": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "status": {
+            "const": "OPEN"
+          }
+        },
+        "required": [
+          "id",
+          "summary",
+          "defect",
+          "consequence",
+          "corrective_direction",
+          "required_evidence",
+          "status"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "suggestions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "summary": {
+            "type": "string",
+            "minLength": 1
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "summary",
+          "rationale"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "finding_confirmations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "finding_id": {
+            "type": "string",
+            "pattern": "^[A-Z]+-R[0-9]+-[0-9]{3}$"
+          },
+          "status": {
+            "enum": [
+              "CONFIRMED_RESOLVED",
+              "STILL_OPEN"
+            ]
+          },
+          "reviewed_fix_sha": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          },
+          "evidence": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "required": [
+          "finding_id",
+          "status",
+          "reviewed_fix_sha",
+          "evidence"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "plan_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "pr_number": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "required": [
+    "schema_version",
+    "workflow_version",
+    "case_id",
+    "task_id",
+    "role",
+    "outcome",
+    "requested_model",
+    "actual_model",
+    "skills_repository_commit",
+    "started_at",
+    "completed_at",
+    "evidence",
+    "review_round",
+    "reviewed_head_sha",
+    "blocking_findings",
+    "suggestions",
+    "finding_confirmations",
+    "plan_version",
+    "pr_number"
+  ],
+  "additionalProperties": false
+}

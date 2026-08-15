@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://marmot-protocol.github.io/agent-p1p/schemas/builder-result.schema.json",
+  "title": "builder-result",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "workflow_version": {
+      "const": 2
+    },
+    "case_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "role": {
+      "const": "builder-grok"
+    },
+    "outcome": {
+      "enum": [
+        "REVIEW_READY",
+        "RETURN_TO_PLANNING",
+        "BLOCKED",
+        "ABANDON",
+        "BLOCKED_UNEXPECTED_MODEL"
+      ]
+    },
+    "requested_model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "actual_model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "skills_repository_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "evidence": {
+      "type": "object"
+    },
+    "plan_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "build_round": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "pr_number": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "head_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "ci_head_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "github_ci_green": {
+      "type": "boolean"
+    },
+    "local_checks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "finding_resolutions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "finding_id": {
+            "type": "string",
+            "pattern": "^[A-Z]+-R[0-9]+-[0-9]{3}$"
+          },
+          "resolution_commit": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          },
+          "resolved_head_sha": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          },
+          "resolution_summary": {
+            "type": "string",
+            "minLength": 1
+          },
+          "tests": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "required": [
+          "finding_id",
+          "resolution_commit",
+          "resolved_head_sha",
+          "resolution_summary",
+          "tests"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "workflow_version",
+    "case_id",
+    "task_id",
+    "role",
+    "outcome",
+    "requested_model",
+    "actual_model",
+    "skills_repository_commit",
+    "started_at",
+    "completed_at",
+    "evidence",
+    "plan_version",
+    "build_round",
+    "pr_number",
+    "head_sha",
+    "ci_head_sha",
+    "github_ci_green",
+    "local_checks",
+    "finding_resolutions"
+  ],
+  "additionalProperties": false
+}

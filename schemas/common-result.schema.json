@@ -1,0 +1,225 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://marmot-protocol.github.io/agent-p1p/schemas/common-result.schema.json",
+  "title": "common-result",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "workflow_version": {
+      "const": 2
+    },
+    "case_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "role": {
+      "enum": [
+        "planner",
+        "builder-grok",
+        "reviewer-general",
+        "reviewer-secperf",
+        "final-reviewer"
+      ]
+    },
+    "outcome": {
+      "enum": [
+        "ABANDON",
+        "ALREADY_FIXED",
+        "APPROVE",
+        "BLOCKED",
+        "CROSS_REPO_DEPENDENCY",
+        "DUPLICATE",
+        "MERGE",
+        "NEEDS_HUMAN_SCOPE_DECISION",
+        "NOT_REPRODUCIBLE",
+        "PROCEED",
+        "REQUEST_CHANGES",
+        "RETURN_TO_BUILD",
+        "RETURN_TO_PLANNING",
+        "RETURN_TO_REVIEW",
+        "REVIEW_READY",
+        "ROOT_CAUSE_DIFFERENT_SCOPE",
+        "WAITING_FOR_ISSUE_CREATOR",
+        "WAIT_FOR_ISSUE_CREATOR",
+        "BLOCKED_UNEXPECTED_MODEL"
+      ]
+    },
+    "requested_model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "actual_model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "skills_repository_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "evidence": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema_version",
+    "workflow_version",
+    "case_id",
+    "task_id",
+    "role",
+    "outcome",
+    "requested_model",
+    "actual_model",
+    "skills_repository_commit",
+    "started_at",
+    "completed_at",
+    "evidence"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "role": {
+            "const": "planner"
+          }
+        },
+        "required": [
+          "role"
+        ]
+      },
+      "then": {
+        "properties": {
+          "outcome": {
+            "enum": [
+              "PROCEED",
+              "ALREADY_FIXED",
+              "NOT_REPRODUCIBLE",
+              "DUPLICATE",
+              "ROOT_CAUSE_DIFFERENT_SCOPE",
+              "CROSS_REPO_DEPENDENCY",
+              "WAITING_FOR_ISSUE_CREATOR",
+              "NEEDS_HUMAN_SCOPE_DECISION",
+              "ABANDON",
+              "BLOCKED_UNEXPECTED_MODEL"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "role": {
+            "const": "builder-grok"
+          }
+        },
+        "required": [
+          "role"
+        ]
+      },
+      "then": {
+        "properties": {
+          "outcome": {
+            "enum": [
+              "REVIEW_READY",
+              "RETURN_TO_PLANNING",
+              "BLOCKED",
+              "ABANDON",
+              "BLOCKED_UNEXPECTED_MODEL"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "role": {
+            "const": "reviewer-general"
+          }
+        },
+        "required": [
+          "role"
+        ]
+      },
+      "then": {
+        "properties": {
+          "outcome": {
+            "enum": [
+              "APPROVE",
+              "REQUEST_CHANGES",
+              "BLOCKED",
+              "BLOCKED_UNEXPECTED_MODEL"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "role": {
+            "const": "reviewer-secperf"
+          }
+        },
+        "required": [
+          "role"
+        ]
+      },
+      "then": {
+        "properties": {
+          "outcome": {
+            "enum": [
+              "APPROVE",
+              "REQUEST_CHANGES",
+              "BLOCKED",
+              "BLOCKED_UNEXPECTED_MODEL"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "role": {
+            "const": "final-reviewer"
+          }
+        },
+        "required": [
+          "role"
+        ]
+      },
+      "then": {
+        "properties": {
+          "outcome": {
+            "enum": [
+              "MERGE",
+              "RETURN_TO_BUILD",
+              "RETURN_TO_REVIEW",
+              "RETURN_TO_PLANNING",
+              "WAIT_FOR_ISSUE_CREATOR",
+              "BLOCKED",
+              "ABANDON",
+              "BLOCKED_UNEXPECTED_MODEL"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

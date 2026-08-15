@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://marmot-protocol.github.io/agent-p1p/schemas/case.schema.json",
+  "title": "case",
+  "type": "object",
+  "properties": {
+    "case_id": {
+      "type": "string"
+    },
+    "repository": {
+      "type": "string"
+    },
+    "issue_number": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "workflow_version": {
+      "const": 2
+    },
+    "phase": {
+      "enum": [
+        "NEW",
+        "VALIDATING",
+        "WAITING_FOR_ISSUE_CREATOR",
+        "WAITING_FOR_DEPENDENCY",
+        "PLAN_READY",
+        "BUILDING",
+        "AWAITING_INITIAL_CI",
+        "REVIEWING",
+        "FINAL_REVIEW",
+        "SHADOW_MERGE_READY",
+        "MERGING",
+        "MERGED",
+        "BLOCKED",
+        "ABANDONED"
+      ]
+    },
+    "plan_version": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "build_round": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "review_round": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "final_review_round": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "pr_number": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "current_pr_head": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "blockers": {
+      "type": "array"
+    },
+    "dependencies": {
+      "type": "array"
+    }
+  },
+  "required": [
+    "case_id",
+    "repository",
+    "issue_number",
+    "workflow_version",
+    "phase",
+    "plan_version",
+    "build_round",
+    "review_round",
+    "final_review_round",
+    "pr_number",
+    "current_pr_head",
+    "blockers",
+    "dependencies"
+  ],
+  "additionalProperties": false
+}

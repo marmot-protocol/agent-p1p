@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://marmot-protocol.github.io/agent-p1p/schemas/planner-result.schema.json",
+  "title": "planner-result",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "workflow_version": {
+      "const": 2
+    },
+    "case_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "role": {
+      "const": "planner"
+    },
+    "outcome": {
+      "enum": [
+        "PROCEED",
+        "ALREADY_FIXED",
+        "NOT_REPRODUCIBLE",
+        "DUPLICATE",
+        "ROOT_CAUSE_DIFFERENT_SCOPE",
+        "CROSS_REPO_DEPENDENCY",
+        "WAITING_FOR_ISSUE_CREATOR",
+        "NEEDS_HUMAN_SCOPE_DECISION",
+        "ABANDON",
+        "BLOCKED_UNEXPECTED_MODEL"
+      ]
+    },
+    "requested_model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "actual_model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "skills_repository_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "evidence": {
+      "type": "object"
+    },
+    "plan_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "planned_base_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "root_cause": {
+      "type": "string"
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "open_decisions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "plan_file": {
+      "type": "string",
+      "minLength": 1
+    },
+    "issue_comment_url": {
+      "type": "string",
+      "format": "uri"
+    }
+  },
+  "required": [
+    "schema_version",
+    "workflow_version",
+    "case_id",
+    "task_id",
+    "role",
+    "outcome",
+    "requested_model",
+    "actual_model",
+    "skills_repository_commit",
+    "started_at",
+    "completed_at",
+    "evidence",
+    "plan_version",
+    "planned_base_sha",
+    "root_cause",
+    "dependencies",
+    "open_decisions",
+    "plan_file",
+    "issue_comment_url"
+  ],
+  "additionalProperties": false
+}
