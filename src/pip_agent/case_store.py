@@ -591,6 +591,17 @@ class CaseStore:
             raise CaseStoreError(f"unknown case: {case_id}")
         return dict(row)
 
+    def list_events(self, case_id: str) -> list[dict[str, Any]]:
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT event_id, case_id, from_state, to_state, reason, created_at
+                FROM events WHERE case_id = ? ORDER BY event_id
+                """,
+                (case_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def list_runs(self, case_id: str) -> list[dict[str, Any]]:
         with self._connect() as db:
             rows = db.execute(

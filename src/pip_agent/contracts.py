@@ -2,13 +2,20 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
+from datetime import datetime
 from importlib import resources
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
-from jsonschema import Draft202012Validator, FormatChecker
-from jsonschema.exceptions import SchemaError, ValidationError
-
+try:
+    from jsonschema import Draft202012Validator, FormatChecker
+    from jsonschema.exceptions import SchemaError, ValidationError
+except ModuleNotFoundError:  # Runtime releases are dependency-free wheel extracts.
+    Draft202012Validator = None  # type: ignore[assignment,misc]
+    FormatChecker = None  # type: ignore[assignment,misc]
+    SchemaError = ValueError  # type: ignore[assignment,misc]
+    ValidationError = ValueError  # type: ignore[assignment,misc]
 
 SOURCE_SCHEMA_DIR = Path(__file__).resolve().parents[2] / "schemas"
 SCHEMA_REGISTRY = frozenset(
@@ -49,33 +56,112 @@ def _schema_text(name: str) -> str:
 def load_schema(name: str) -> dict[str, Any]:
     try:
         schema = json.loads(_schema_text(name))
-        Draft202012Validator.check_schema(schema)
+        if Draft202012Validator is not None:
+            Draft202012Validator.check_schema(schema)
     except (json.JSONDecodeError, SchemaError) as exc:
         raise ContractError(f"invalid schema {name}: {exc}") from exc
     return schema
 
 
+def _minimal_validate(
+    schema: Mapping[str, Any], value: Any, path: str = "<root>"
+) -> None:
+    expected_type = schema.get("type")
+    valid_type = {
+        "object": lambda item: isinstance(item, dict),
+        "array": lambda item: isinstance(item, list),
+        "string": lambda item: isinstance(item, str),
+        "integer": lambda item: type(item) is int,
+        "boolean": lambda item: type(item) is bool,
+    }.get(expected_type)
+    if valid_type is not None and not valid_type(value):
+        raise ContractError(f"contract violation at {path}: expected {expected_type}")
+    if "const" in schema and value != schema["const"]:
+        raise ContractError(f"contract violation at {path}: unexpected value")
+    if "enum" in schema and value not in schema["enum"]:
+        raise ContractError(f"contract violation at {path}: value is not allowed")
+    if isinstance(value, str):
+        if len(value) < schema.get("minLength", 0):
+            raise ContractError(f"contract violation at {path}: string is too short")
+        pattern = schema.get("pattern")
+        if isinstance(pattern, str) and re.fullmatch(pattern, value) is None:
+            raise ContractError(f"contract violation at {path}: pattern mismatch")
+        if schema.get("format") == "date-time":
+            try:
+                datetime.fromisoformat(value)
+            except ValueError as exc:
+                raise ContractError(
+                    f"contract violation at {path}: invalid date-time"
+                ) from exc
+    if type(value) is int and value < schema.get("minimum", value):
+        raise ContractError(f"contract violation at {path}: value is too small")
+    if isinstance(value, list):
+        if len(value) < schema.get("minItems", 0):
+            raise ContractError(f"contract violation at {path}: too few items")
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, item in enumerate(value):
+                _minimal_validate(item_schema, item, f"{path}.{index}")
+    if isinstance(value, dict):
+        properties = schema.get("properties", {})
+        for required in schema.get("required", []):
+            if required not in value:
+                raise ContractError(
+                    f"contract violation at {path}: missing {required!r}"
+                )
+        if schema.get("additionalProperties") is False:
+            extra = set(value) - set(properties)
+            if extra:
+                raise ContractError(
+                    f"contract violation at {path}: unexpected {sorted(extra)!r}"
+                )
+        for key, item in value.items():
+            item_schema = properties.get(key)
+            if isinstance(item_schema, dict):
+                _minimal_validate(item_schema, item, f"{path}.{key}")
+    for condition in schema.get("allOf", []):
+        conditional = condition.get("if")
+        applies = True
+        if isinstance(conditional, dict):
+            try:
+                _minimal_validate(conditional, value, path)
+            except ContractError:
+                applies = False
+        selected = condition.get("then" if applies else "else")
+        if isinstance(selected, dict):
+            _minimal_validate(selected, value, path)
+
+
 def validate_contract(name: str, payload: Mapping[str, Any]) -> None:
     schema = load_schema(name)
-    try:
-        Draft202012Validator(schema, format_checker=FormatChecker()).validate(
-            dict(payload)
-        )
-    except ValidationError as exc:
-        location = ".".join(str(part) for part in exc.absolute_path) or "<root>"
-        raise ContractError(
-            f"{name} contract violation at {location}: {exc.message}"
-        ) from exc
+    if Draft202012Validator is None:
+        _minimal_validate(schema, dict(payload))
+    else:
+        try:
+            Draft202012Validator(schema, format_checker=FormatChecker()).validate(
+                dict(payload)
+            )
+        except ValidationError as exc:
+            location = ".".join(str(part) for part in exc.absolute_path) or "<root>"
+            raise ContractError(
+                f"{name} contract violation at {location}: {exc.message}"
+            ) from exc
 
     requested = payload.get("requested_model")
     actual = payload.get("actual_model")
     outcome = payload.get("outcome")
-    if requested is not None and requested != actual and outcome != "BLOCKED_UNEXPECTED_MODEL":
+    if (
+        requested is not None
+        and requested != actual
+        and outcome != "BLOCKED_UNEXPECTED_MODEL"
+    ):
         raise ContractError(
             f"model substitution is forbidden: requested {requested!r}, actual {actual!r}"
         )
     if requested == actual and outcome == "BLOCKED_UNEXPECTED_MODEL":
-        raise ContractError("BLOCKED_UNEXPECTED_MODEL requires an actual model mismatch")
+        raise ContractError(
+            "BLOCKED_UNEXPECTED_MODEL requires an actual model mismatch"
+        )
 
     if name == "review-result":
         if payload.get("outcome") == "APPROVE" and payload.get("blocking_findings"):
@@ -175,7 +261,9 @@ def assert_exact_head_evidence(
             raise ContractError(f"mandatory finding {finding_id} has invalid origin")
         resolution = resolutions.get(finding_id)
         if resolution is None or resolution.get("resolved_head_sha") != head_sha:
-            raise ContractError(f"mandatory finding {finding_id} lacks exact-head resolution")
+            raise ContractError(
+                f"mandatory finding {finding_id} lacks exact-head resolution"
+            )
         confirmations = _index_unique(
             reviews[origin_role].get("finding_confirmations", []),
             "finding_id",
@@ -213,9 +301,7 @@ def assert_exact_head_evidence(
         raise ContractError("issue authorization is no longer valid")
 
 
-def _index_unique(
-    items: Any, key: str, label: str
-) -> dict[str, Mapping[str, Any]]:
+def _index_unique(items: Any, key: str, label: str) -> dict[str, Mapping[str, Any]]:
     if not isinstance(items, list):
         raise ContractError(f"{label}s must be a list")
     indexed: dict[str, Mapping[str, Any]] = {}

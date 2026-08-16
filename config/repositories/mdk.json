@@ -8,6 +8,13 @@
   "legacy_existing_work_stays_on_legacy_board": true,
   "new_intake_enabled": false,
   "dispatch_enabled": false,
+  "human_attention": {
+    "platform": "telegram",
+    "chat_id": "483923125",
+    "chat_type": "dm",
+    "user_id": "483923125",
+    "notifier_profile": "default"
+  },
   "intake_label": "pip-ok",
   "trusted_issue_actors": [
     "erskingardner",

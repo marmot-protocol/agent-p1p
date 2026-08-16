@@ -24,10 +24,14 @@ HEAD = "b" * 40
 SKILLS_COMMIT = "a" * 40
 STAMP_START = "2026-08-15T12:00:00Z"
 STAMP_END = "2026-08-15T12:10:00Z"
+ROUTE_ID = "decision-" + "d" * 64
+DECISION_BODY_SHA = "e" * 64
+PLANNER_BODY_SHA = "f" * 64
+PLANNED_BASE_SHA = "c" * 40
 
 
 def _common(task_id: str, role: str, model: str) -> dict[str, Any]:
-    return {
+    result = {
         "schema_version": 1,
         "workflow_version": 2,
         "case_id": CASE_ID,
@@ -40,6 +44,18 @@ def _common(task_id: str, role: str, model: str) -> dict[str, Any]:
         "completed_at": STAMP_END,
         "evidence": {"fixture": True},
     }
+    if role != "planner":
+        result.update(
+            {
+                "route_id": ROUTE_ID,
+                "comment_id": 2,
+                "evidence_body_sha256": DECISION_BODY_SHA,
+                "planner_comment_id": 1,
+                "planner_body_sha256": PLANNER_BODY_SHA,
+                "planned_base_sha": PLANNED_BASE_SHA,
+            }
+        )
+    return result
 
 
 def _planner() -> dict[str, Any]:
@@ -88,7 +104,7 @@ def _review(role: str, model: str) -> dict[str, Any]:
 def _final() -> dict[str, Any]:
     return {
         **_common("final-review-r1", "final-reviewer", "openai-codex/gpt-5.6-sol"),
-        "outcome": "MERGE",
+        "outcome": "HUMAN_REVIEW_REQUIRED",
         "final_review_round": 1,
         "plan_version": 1,
         "pr_number": PR_NUMBER,

@@ -14,6 +14,8 @@ from pip_agent.bootstrap import (
     CLI_TOOLSET_CATALOG,
     BootstrapError,
     apply_profiles,
+    ensure_kanban_board,
+    install_cursor_role_links,
     install_shared_auth_links,
     install_skill_links,
     plan_profiles,
@@ -225,6 +227,7 @@ def test_planner_task_routing_is_deduplicated_and_force_loads_both_skills() -> N
     assert "workflow-contract" in command
     assert "planner" in command
     assert "pip-v2:marmot-protocol/mdk:1400:plan-v1" in command
+    assert command[command.index("--initial-status") + 1] == "blocked"
 
     config["canary_issue_number"] = 1401
     with pytest.raises(IntakeError, match="exact one-issue canary"):
@@ -282,6 +285,76 @@ def test_skill_links_are_idempotent_and_reject_foreign_targets(tmp_path: Path) -
         )
 
 
+def test_cursor_runner_profiles_receive_only_the_pinned_role_skills(
+    tmp_path: Path,
+) -> None:
+    profiles = tmp_path / "profiles"
+    (profiles / "cursor-fixer").mkdir(parents=True)
+    (profiles / "cursor-reviewer").mkdir(parents=True)
+
+    links = install_cursor_role_links(profiles_root=profiles, repo_root=ROOT)
+
+    assert {path.name for path in links} == {
+        "builder-grok",
+        "reviewer-secperf",
+        "workflow-contract",
+    }
+    assert (profiles / "cursor-fixer" / "skills" / "builder-grok").resolve() == (
+        ROOT / "skills" / "builder-grok"
+    ).resolve()
+    assert (profiles / "cursor-reviewer" / "skills" / "reviewer-secperf").resolve() == (
+        ROOT / "skills" / "reviewer-secperf"
+    ).resolve()
+
+
+def test_cursor_role_link_failure_rolls_back_all_links_created_by_call(
+    tmp_path: Path,
+) -> None:
+    profiles = tmp_path / "profiles"
+    (profiles / "cursor-fixer").mkdir(parents=True)
+    reviewer_skills = profiles / "cursor-reviewer" / "skills"
+    reviewer_skills.mkdir(parents=True)
+    foreign = reviewer_skills / "reviewer-secperf"
+    foreign.symlink_to(tmp_path / "foreign", target_is_directory=True)
+
+    with pytest.raises(BootstrapError, match="foreign symlink"):
+        install_cursor_role_links(profiles_root=profiles, repo_root=ROOT)
+
+    assert not (profiles / "cursor-fixer" / "skills" / "builder-grok").is_symlink()
+    assert not (profiles / "cursor-fixer" / "skills" / "workflow-contract").is_symlink()
+    assert foreign.is_symlink()
+
+
+def test_ensure_kanban_board_creates_only_when_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(command: object, **_: object) -> subprocess.CompletedProcess[str]:
+        materialized = list(command)  # type: ignore[arg-type]
+        commands.append(materialized)
+        if "list" in materialized:
+            return subprocess.CompletedProcess(materialized, 0, "[]", "")
+        return subprocess.CompletedProcess(materialized, 0, "", "")
+
+    monkeypatch.setattr("pip_agent.bootstrap.subprocess.run", fake_run)
+    assert ensure_kanban_board("pip-mdk") is True
+    assert any("create" in command for command in commands)
+
+    commands.clear()
+
+    def existing(command: object, **_: object) -> subprocess.CompletedProcess[str]:
+        materialized = list(command)  # type: ignore[arg-type]
+        commands.append(materialized)
+        return subprocess.CompletedProcess(
+            materialized, 0, json.dumps([{"slug": "pip-mdk"}]), ""
+        )
+
+    monkeypatch.setattr("pip_agent.bootstrap.subprocess.run", existing)
+    assert ensure_kanban_board("pip-mdk") is False
+    assert all("create" not in command for command in commands)
+
+
 def test_shared_auth_links_use_one_lock_and_reject_copied_credentials(
     tmp_path: Path,
 ) -> None:
@@ -334,6 +407,14 @@ def test_profile_apply_scopes_every_config_write_to_named_profile(
         "model.reasoning_effort" in command or "reasoning_effort" not in command
         for command in config_commands
     )
+    terminal_home_commands = [
+        command for command in config_commands if "terminal.home_mode" in command
+    ]
+    assert len(terminal_home_commands) == 3
+    assert all(
+        command[-2:] == ["terminal.home_mode", "real"]
+        for command in terminal_home_commands
+    )
     tool_commands = [command for command in commands if "tools" in command]
     assert sum("disable" in command for command in tool_commands) == (
         len(CLI_TOOLSET_CATALOG) * 3
@@ -378,6 +459,12 @@ def _builder_payload(model: str = "cursor/cursor-grok-4.6-high") -> dict:
         "schema_version": 1,
         "workflow_version": 2,
         "case_id": "mdk#fixture",
+        "route_id": "decision-" + "d" * 64,
+        "comment_id": 2,
+        "evidence_body_sha256": "e" * 64,
+        "planner_comment_id": 1,
+        "planner_body_sha256": "f" * 64,
+        "planned_base_sha": "c" * 40,
         "task_id": "build-r1",
         "role": "builder-grok",
         "outcome": "REVIEW_READY",
@@ -406,6 +493,12 @@ def test_cursor_adapter_renders_both_skills_and_validates_fixture_output(
     _write_fake_cursor(executable, _builder_payload())
     task = {
         "case_id": "mdk#fixture",
+        "route_id": "decision-" + "d" * 64,
+        "comment_id": 2,
+        "evidence_body_sha256": "e" * 64,
+        "planner_comment_id": 1,
+        "planner_body_sha256": "f" * 64,
+        "planned_base_sha": "c" * 40,
         "task_id": "build-r1",
         "schema": "builder-result",
         "plan": {"version": 1, "summary": "fixture only"},
@@ -851,7 +944,10 @@ def test_state_machine_routes_happy_path_and_rejects_stale_events() -> None:
     assert transition(CaseState.BUILDING, "RETURN_TO_PLANNING") is CaseState.PLANNING
     assert transition(CaseState.BUILDING, "ABANDON") is CaseState.ABANDONED
     assert transition(CaseState.REVIEWING, "REVIEWS_APPROVED") is CaseState.FINAL_REVIEW
-    assert transition(CaseState.FINAL_REVIEW, "MERGE") is CaseState.SHADOW_READY
+    assert (
+        transition(CaseState.FINAL_REVIEW, "HUMAN_REVIEW_REQUIRED")
+        is CaseState.SHADOW_READY
+    )
 
     with pytest.raises(TransitionError):
         transition(CaseState.PLANNING, "MERGE")

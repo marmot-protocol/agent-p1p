@@ -1,0 +1,237 @@
+from __future__ import annotations
+
+import json
+import subprocess
+from collections.abc import Callable
+from pathlib import Path
+
+import pytest
+
+from pip_agent.decision_reconciler import HumanDecision, PlannerEvidence
+from pip_agent.route_consumer import (
+    RouteConsumerError,
+    _validate_live_route,
+    consume_route,
+    render_route_consumer_service,
+)
+
+
+def test_passive_route_does_not_touch_kanban() -> None:
+    route = {
+        "ok": True,
+        "case_id": "mdk#1240",
+        "action": "continue",
+        "state": "PLANNING",
+    }
+    assert consume_route(route, board="pip-mdk") == {
+        "status": "passive",
+        "action": "continue",
+    }
+
+
+def test_router_unit_has_no_custom_ledger_or_worktree_mutation() -> None:
+    unit = render_route_consumer_service("jeff", "jeff", Path("/home/jeff"))
+    assert "--board pip-mdk" in unit
+    assert "ledger" not in unit
+    assert "/code/worktrees" not in unit
+    assert "ReadWritePaths=/home/jeff/.hermes" in unit
+    assert "Environment=PATH=/home/jeff/.local/bin:/usr/local/bin:/usr/bin:/bin" in unit
+
+
+def test_stop_archives_only_nonterminal_pip_v2_canary_tasks() -> None:
+    commands: list[list[str]] = []
+    terminated: list[int] = []
+
+    def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        if "list" in command:
+            output = json.dumps(
+                [
+                    {
+                        "id": "t-active",
+                        "created_by": "pip-v2-router",
+                        "body": 'Authorization: {"case_id": "mdk#1240"}',
+                        "status": "running",
+                    },
+                    {
+                        "id": "t-v1",
+                        "created_by": "pip-issue-scanner",
+                        "body": 'Authorization: {"case_id": "mdk#1240"}',
+                        "status": "ready",
+                    },
+                    {
+                        "id": "t-staged",
+                        "created_by": "pip-v2-router",
+                        "body": 'Authorization: ***"case_id": "mdk#1240"',
+                        "status": "blocked",
+                    },
+                    {
+                        "id": "t-done-gate",
+                        "created_by": "pip-v2-router",
+                        "body": '{"activation_gate": "build", "case_id": "mdk#1240", "route_id": "old"}',
+                        "status": "done",
+                    },
+                    {
+                        "id": "t-final-disposition",
+                        "created_by": "pip-v2-router",
+                        "body": '{"case_id": "mdk#1240", "outcome": "BLOCKED", "route_id": "old"}\nBlocked disposition',
+                        "status": "blocked",
+                    },
+                ]
+            )
+        elif "show" in command:
+            output = json.dumps({"runs": [{"worker_pid": 1234}]})
+        else:
+            output = ""
+        return subprocess.CompletedProcess(command, 0, output, "")
+
+    result = consume_route(
+        {"ok": False, "case_id": "mdk#1240", "action": "stop"},
+        board="pip-mdk",
+        runner=runner,
+        terminator=terminated.append,
+    )
+
+    assert result["archived_tasks"] == [
+        "t-active",
+        "t-staged",
+        "t-done-gate",
+        "t-final-disposition",
+    ]
+    assert terminated == [1234]
+    assert commands[2][commands[2].index("archive") + 1] == "t-active"
+    assert "t-staged" in commands[2]
+    assert "t-done-gate" in commands[2]
+    assert "t-final-disposition" in commands[2]
+    assert "t-v1" not in commands[2]
+
+
+def test_live_route_revalidation_rejects_base_change_before_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    planned = "a" * 40
+    planner = PlannerEvidence(7, "https://planner", "b" * 64, 2, planned, "now")
+    decision = HumanDecision(
+        "approve", "erskingardner", 8, "https://decision", "c" * 64, None
+    )
+    route = {
+        "action": "dispatch_builder",
+        "decision": "approve",
+        "comment_id": 8,
+        "comment_url": "https://decision",
+        "evidence_body_sha256": "c" * 64,
+        "planner_comment_id": 7,
+        "planner_comment_url": "https://planner",
+        "planner_body_sha256": "b" * 64,
+        "plan_version": 2,
+        "planned_base_sha": planned,
+        "narrowed_scope": None,
+    }
+    monkeypatch.setattr(
+        "pip_agent.decision_reconciler.fetch_canary_issue_authorization", lambda: None
+    )
+    monkeypatch.setattr("pip_agent.decision_reconciler.fetch_canary_comments", list)
+    monkeypatch.setattr(
+        "pip_agent.decision_reconciler.parse_planner_evidence", lambda _: planner
+    )
+    monkeypatch.setattr(
+        "pip_agent.decision_reconciler.parse_human_decision", lambda _: decision
+    )
+    monkeypatch.setattr(
+        "pip_agent.decision_reconciler.fetch_canary_base_sha", lambda: "d" * 40
+    )
+
+    with pytest.raises(RouteConsumerError, match="became stale"):
+        _validate_live_route(route)
+
+
+def _active_task_runner(
+    commands: list[list[str]], *, worker_pid: int
+) -> Callable[[list[str]], subprocess.CompletedProcess[str]]:
+    def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        if "list" in command:
+            output = json.dumps(
+                [
+                    {
+                        "id": "t-active",
+                        "created_by": "pip-v2-router",
+                        "body": 'Authorization: ***"case_id": "mdk#1240"}',
+                        "status": "running",
+                    }
+                ]
+            )
+        elif "show" in command:
+            output = json.dumps({"runs": [{"worker_pid": worker_pid}]})
+        else:
+            output = ""
+        return subprocess.CompletedProcess(command, 0, output, "")
+
+    return runner
+
+
+def test_replan_quiesces_superseded_workers_before_planner_activation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+    terminated: list[int] = []
+    routed_after_quiesce: list[bool] = []
+    runner = _active_task_runner(commands, worker_pid=4321)
+
+    def fake_route_once(route, *, board, runner, before_activate):
+        routed_after_quiesce.append(terminated == [4321])
+        before_activate()
+        return {"replan": "t-replan"}
+
+    monkeypatch.setattr("pip_agent.route_consumer.route_once", fake_route_once)
+    result = consume_route(
+        {"ok": True, "case_id": "mdk#1240", "action": "replan"},
+        board="pip-mdk",
+        runner=runner,
+        terminator=terminated.append,
+        live_validator=lambda route: None,
+    )
+
+    assert result["tasks"] == {"replan": "t-replan"}
+    assert routed_after_quiesce == [True]
+    assert terminated == [4321]
+
+
+def test_live_revocation_during_staging_stops_existing_worker_and_never_gates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+    terminated: list[int] = []
+    validations = 0
+    gate_calls = 0
+    runner = _active_task_runner(commands, worker_pid=9876)
+
+    def live_validator(route) -> None:
+        nonlocal validations
+        validations += 1
+        if validations == 2:
+            raise RouteConsumerError("authorization changed during staging")
+
+    def fake_route_once(route, *, board, runner, before_activate):
+        before_activate()
+        raise AssertionError("activation must not follow revoked authorization")
+
+    def fake_gate(*args, **kwargs):
+        nonlocal gate_calls
+        gate_calls += 1
+
+    monkeypatch.setattr("pip_agent.route_consumer.route_once", fake_route_once)
+
+    with pytest.raises(RouteConsumerError, match="changed during staging"):
+        consume_route(
+            {"ok": True, "case_id": "mdk#1240", "action": "dispatch_builder"},
+            board="pip-mdk",
+            runner=runner,
+            terminator=terminated.append,
+            live_validator=live_validator,
+            gate_advancer=fake_gate,
+        )
+
+    assert validations == 2
+    assert terminated == [9876]
+    assert gate_calls == 0

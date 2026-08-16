@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import pip_agent.decision_reconciler as decision_module
 import pip_agent.intake as intake_module
 from pip_agent.case_store import CaseStore
 from pip_agent.control_plane import (
@@ -20,6 +21,7 @@ from pip_agent.control_plane import (
     control_request,
     load_policy,
     notify_systemd_ready,
+    reconcile_once,
 )
 from pip_agent.control_plane import main as control_main
 from pip_agent.intake import IntakeCandidate, IntakeError, ensure_controlled_case
@@ -59,6 +61,108 @@ def test_control_service_creates_only_the_configured_canary(tmp_path: Path) -> N
     assert status_response["case"]["state"] == "PLANNING"
     assert socket_mode == 0o660
     assert database_mode == 0o600
+
+
+def test_control_service_reconciles_only_live_fixed_github_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    planner_body = "pinned plan"
+    monkeypatch.setattr(
+        decision_module,
+        "CANARY_PLANNER_COMMENT_SHA256",
+        __import__("hashlib").sha256(planner_body.encode()).hexdigest(),
+    )
+    comments = [
+        {
+            "id": decision_module.CANARY_PLANNER_COMMENT_ID,
+            "user": {"login": "agent-p1p", "id": 292420120},
+            "body": planner_body,
+            "created_at": "2026-08-15T21:06:24Z",
+            "updated_at": "2026-08-15T21:06:24Z",
+            "html_url": (
+                "https://github.com/marmot-protocol/mdk/issues/1240"
+                f"#issuecomment-{decision_module.CANARY_PLANNER_COMMENT_ID}"
+            ),
+        },
+        {
+            "id": decision_module.CANARY_PLANNER_COMMENT_ID + 1,
+            "user": {"login": "erskingardner", "id": 202880},
+            "body": "Pip: approve exact scope",
+            "created_at": "2026-08-15T21:07:00Z",
+            "updated_at": "2026-08-15T21:07:00Z",
+            "html_url": (
+                "https://github.com/marmot-protocol/mdk/issues/1240"
+                f"#issuecomment-{decision_module.CANARY_PLANNER_COMMENT_ID + 1}"
+            ),
+        },
+    ]
+    policy = ControlPolicy(
+        repository="marmot-protocol/mdk",
+        issue_number=1240,
+        intake_label="pip-ok",
+        merge_mode="shadow",
+        autonomous_merge=False,
+        state_database=tmp_path / "state" / "cases.db",
+        socket_path=tmp_path / "run" / "control.sock",
+        socket_group=os.getgid(),
+        allowed_uids=(os.getuid(),),
+    )
+    store = CaseStore(policy.state_database)
+    store.create_case("mdk#1240", "marmot-protocol/mdk", 1240, "pip-ok")
+    route_output = tmp_path / "run" / "decision-route.json"
+    response = reconcile_once(
+        policy,
+        route_output,
+        comment_fetcher=lambda: comments,
+        base_fetcher=lambda: decision_module.CANARY_PLANNED_BASE_SHA,
+    )
+    repeated = reconcile_once(
+        policy,
+        route_output,
+        comment_fetcher=lambda: comments,
+        base_fetcher=lambda: decision_module.CANARY_PLANNED_BASE_SHA,
+    )
+
+    assert response["ok"] is True
+    assert response["action"] == "dispatch_builder"
+    assert response["state"] == "BUILDING"
+    assert repeated == response
+    assert json.loads(route_output.read_text()) == response
+    assert stat.S_IMODE(route_output.stat().st_mode) == 0o640
+
+
+def test_reconcile_failure_replaces_stale_dispatch_route_with_stop(
+    tmp_path: Path,
+) -> None:
+    policy = ControlPolicy(
+        repository="marmot-protocol/mdk",
+        issue_number=1240,
+        intake_label="pip-ok",
+        merge_mode="shadow",
+        autonomous_merge=False,
+        state_database=tmp_path / "state" / "cases.db",
+        socket_path=tmp_path / "run" / "control.sock",
+        socket_group=os.getgid(),
+        allowed_uids=(os.getuid(),),
+    )
+    store = CaseStore(policy.state_database)
+    store.create_case("mdk#1240", "marmot-protocol/mdk", 1240, "pip-ok")
+    route_output = tmp_path / "run" / "decision-route.json"
+    route_output.parent.mkdir(parents=True)
+    route_output.write_text('{"action":"dispatch_builder"}\n')
+
+    def fail() -> list[dict]:
+        raise decision_module.DecisionError("fixture lookup failed")
+
+    with pytest.raises(decision_module.DecisionError, match="fixture"):
+        reconcile_once(policy, route_output, comment_fetcher=fail)
+
+    route = json.loads(route_output.read_text())
+    assert route["ok"] is False
+    assert route["action"] == "stop"
+    assert route["case_id"] == "mdk#1240"
+    assert route["state"] == "PLANNING"
+    assert route["error"] == "decision_reconciliation_failed"
 
 
 def test_control_policy_and_protocol_fail_closed(tmp_path: Path) -> None:
@@ -340,13 +444,19 @@ def test_intake_enqueue_uses_control_socket(
         "_gh_json",
         lambda endpoint, **kwargs: timeline if "timeline" in endpoint else issue,
     )
-    monkeypatch.setattr(
-        intake_module.subprocess,
-        "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(
-            args[0], 0, json.dumps({"id": "planner-task"}), ""
-        ),
-    )
+    subprocess_calls: list[list[str]] = []
+
+    def fake_run(
+        command: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        subprocess_calls.append(command)
+        if "create" in command:
+            stdout = json.dumps({"id": "planner-task", "status": "blocked"})
+        else:
+            stdout = "ok\n"
+        return subprocess.CompletedProcess(command, 0, stdout, "")
+
+    monkeypatch.setattr(intake_module.subprocess, "run", fake_run)
     server = ControlServer(policy)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -369,5 +479,15 @@ def test_intake_enqueue_uses_control_socket(
 
     output = json.loads(capsys.readouterr().out)
     assert result == 0
-    assert output["task"] == {"id": "planner-task"}
+    assert output["task"] == {"id": "planner-task", "status": "blocked"}
+    assert [command[4] for command in subprocess_calls] == [
+        "create",
+        "notify-subscribe",
+        "unblock",
+    ]
+    subscribe = subprocess_calls[1]
+    assert subscribe[5] == "planner-task"
+    assert subscribe[subscribe.index("--platform") + 1] == "telegram"
+    assert subscribe[subscribe.index("--chat-id") + 1] == "483923125"
+    assert subscribe[subscribe.index("--notifier-profile") + 1] == "default"
     assert CaseStore(policy.state_database).get_case("mdk#1240")["state"] == "PLANNING"

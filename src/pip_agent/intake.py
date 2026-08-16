@@ -112,6 +112,7 @@ def planner_task_command(
     model = config.get("models", {}).get("planner")
     if model != "openai-codex/gpt-5.6-sol":
         raise IntakeError("planner model configuration is invalid")
+    _human_attention_destination(config)
     body = json.dumps(
         {
             "workflow_version": 2,
@@ -155,8 +156,55 @@ def planner_task_command(
         "gpt-5.6-sol",
         "--provider",
         "openai-codex",
+        "--initial-status",
+        "blocked",
         "--json",
     ]
+
+
+def _human_attention_destination(config: Mapping[str, Any]) -> dict[str, str]:
+    raw = config.get("human_attention")
+    if not isinstance(raw, Mapping):
+        raise IntakeError("human attention destination is missing")
+    expected = {
+        "platform": "telegram",
+        "chat_id": "483923125",
+        "chat_type": "dm",
+        "user_id": "483923125",
+        "notifier_profile": "default",
+    }
+    if dict(raw) != expected:
+        raise IntakeError("human attention destination is invalid")
+    return expected
+
+
+def planner_notification_commands(
+    task_id: str, config: Mapping[str, Any]
+) -> tuple[list[str], list[str]]:
+    if not task_id:
+        raise IntakeError("planner task id is invalid")
+    board = config.get("board")
+    if not isinstance(board, str) or not board:
+        raise IntakeError("board configuration is invalid")
+    destination = _human_attention_destination(config)
+    prefix = ["hermes", "kanban", "--board", board]
+    subscribe = [
+        *prefix,
+        "notify-subscribe",
+        task_id,
+        "--platform",
+        destination["platform"],
+        "--chat-id",
+        destination["chat_id"],
+        "--chat-type",
+        destination["chat_type"],
+        "--user-id",
+        destination["user_id"],
+        "--notifier-profile",
+        destination["notifier_profile"],
+    ]
+    unblock = [*prefix, "unblock", task_id]
+    return subscribe, unblock
 
 
 def ensure_controlled_case(socket_path: Path, candidate: IntakeCandidate) -> bool:
@@ -248,6 +296,26 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"planner task creation failed: {completed.stderr.strip()}"
             )
         task = json.loads(completed.stdout)
+        if not isinstance(task, Mapping):
+            raise IntakeError("planner task creation returned invalid JSON")
+        task_id = task.get("id")
+        if not isinstance(task_id, str) or not task_id:
+            raise IntakeError("planner task creation returned no task id")
+        if task.get("status") != "blocked":
+            raise IntakeError("planner task was not safely staged as blocked")
+        subscribe, unblock = planner_notification_commands(task_id, config)
+        completed = subprocess.run(
+            subscribe, text=True, capture_output=True, check=False
+        )
+        if completed.returncode != 0:
+            raise IntakeError(
+                f"human attention subscription failed: {completed.stderr.strip()}"
+            )
+        completed = subprocess.run(unblock, text=True, capture_output=True, check=False)
+        if completed.returncode != 0:
+            raise IntakeError(
+                f"planner task activation failed: {completed.stderr.strip()}"
+            )
     else:
         task = None
     print(

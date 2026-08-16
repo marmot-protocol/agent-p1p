@@ -17,6 +17,7 @@ pip-v2-control = "pip_agent.control_plane:main"
 pip-v2-cursor = "pip_agent.cursor_adapter:main"
 pip-v2-fixture = "pip_agent.offline_fixture:main"
 pip-v2-intake = "pip_agent.intake:main"
+pip-v2-route-consumer = "pip_agent.route_consumer:main"
 
 [dependency-groups]
 dev = [
@@ -28,6 +29,8 @@ packages = ["src/pip_agent"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "schemas" = "pip_agent/schemas"
+"manifests" = "pip_agent/resources/manifests"
+"skills" = "pip_agent/resources/skills"
 
 [tool.pytest.ini_options]
 addopts = "-q"

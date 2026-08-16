@@ -77,26 +77,79 @@ def install_skill_links(
 ) -> list[Path]:
     skills_home = profile_home / "skills"
     skills_home.mkdir(parents=True, exist_ok=True)
+    stable_root = repo_root.absolute()
     targets = {
-        role_name: (repo_root / "skills" / role_name).resolve(),
-        "workflow-contract": (
-            repo_root / "skills" / "shared" / "workflow-contract"
-        ).resolve(),
+        role_name: stable_root / "skills" / role_name,
+        "workflow-contract": stable_root / "skills" / "shared" / "workflow-contract",
     }
-    installed: list[Path] = []
+    planned: list[tuple[Path, Path, bool]] = []
     for link_name, target in sorted(targets.items()):
         if not target.is_dir():
             raise BootstrapError(f"canonical skill is missing: {target}")
         link = skills_home / link_name
+        existed = link.exists() or link.is_symlink()
         if link.is_symlink():
-            if link.resolve(strict=False) != target:
+            if link.resolve(strict=False) != target.resolve(strict=False):
                 raise BootstrapError(f"refusing to replace foreign symlink: {link}")
         elif link.exists():
             raise BootstrapError(f"refusing to replace existing skill path: {link}")
-        else:
-            link.symlink_to(target, target_is_directory=True)
-        installed.append(link)
-    return installed
+        planned.append((link, target, existed))
+    created: list[tuple[Path, Path]] = []
+    try:
+        for link, target, existed in planned:
+            if not existed:
+                link.symlink_to(target, target_is_directory=True)
+                created.append((link, target))
+    except BaseException:
+        for link, target in reversed(created):
+            if link.is_symlink() and link.resolve(strict=False) == target.resolve(
+                strict=False
+            ):
+                link.unlink()
+        raise
+    return [link for link, _, _ in planned]
+
+
+def install_cursor_role_links(*, profiles_root: Path, repo_root: Path) -> list[Path]:
+    """Expose pinned direct-Cursor role contracts to v1 runner profiles."""
+    assignments = (
+        ("cursor-fixer", "builder-grok"),
+        ("cursor-reviewer", "reviewer-secperf"),
+    )
+    expected: dict[Path, Path] = {}
+    for profile, role in assignments:
+        profile_home = profiles_root / profile
+        if not profile_home.is_dir():
+            raise BootstrapError(
+                f"required cursor runner profile is missing: {profile}"
+            )
+        expected[profile_home / "skills" / role] = (
+            repo_root.absolute() / "skills" / role
+        )
+        expected[profile_home / "skills" / "workflow-contract"] = (
+            repo_root.absolute() / "skills" / "shared" / "workflow-contract"
+        )
+    preexisting = {path for path in expected if path.exists() or path.is_symlink()}
+    installed: list[Path] = []
+    try:
+        for profile, role in assignments:
+            installed.extend(
+                install_skill_links(
+                    profile_home=profiles_root / profile,
+                    repo_root=repo_root,
+                    role_name=role,
+                )
+            )
+    except BaseException:
+        for path, target in expected.items():
+            if (
+                path not in preexisting
+                and path.is_symlink()
+                and path.resolve(strict=False) == target.resolve(strict=False)
+            ):
+                path.unlink()
+        raise
+    return sorted(set(installed), key=str)
 
 
 def install_shared_auth_links(profile_home: Path, shared_home: Path) -> list[Path]:
@@ -182,6 +235,33 @@ def _run(command: Sequence[str], env: Mapping[str, str] | None = None) -> None:
     if completed.returncode != 0:
         detail = completed.stderr.strip() or completed.stdout.strip()
         raise BootstrapError(f"Hermes command failed: {detail}")
+
+
+def ensure_kanban_board(board: str) -> bool:
+    if re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", board) is None:
+        raise BootstrapError("invalid Kanban board slug")
+    completed = subprocess.run(
+        ["hermes", "kanban", "boards", "list", "--json"],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise BootstrapError(f"cannot inspect Kanban boards: {detail}")
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise BootstrapError(
+            "Hermes returned malformed Kanban board inventory"
+        ) from exc
+    boards = payload.get("boards") if isinstance(payload, dict) else payload
+    if not isinstance(boards, list):
+        raise BootstrapError("Hermes returned invalid Kanban board inventory")
+    if any(isinstance(item, dict) and item.get("slug") == board for item in boards):
+        return False
+    _run(["hermes", "kanban", "boards", "create", board])
+    return True
 
 
 def _discover_toolsets(env: Mapping[str, str]) -> tuple[str, ...]:
@@ -303,6 +383,18 @@ def apply_profiles(
                 action.profile,
                 "config",
                 "set",
+                "terminal.home_mode",
+                "real",
+            ],
+            environment,
+        )
+        effective_runner(
+            [
+                "hermes",
+                "-p",
+                action.profile,
+                "config",
+                "set",
                 "kanban.max_in_progress_per_profile",
                 "1",
             ],
@@ -349,6 +441,10 @@ def apply_profiles(
                 "shared_auth_links": [str(link) for link in auth_links],
             }
         )
+    if runner is None:
+        install_cursor_role_links(
+            profiles_root=hermes_home / "profiles", repo_root=repo_root
+        )
     return reports
 
 
@@ -357,11 +453,36 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--hermes-home", type=Path, default=Path.home() / ".hermes")
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--link-cursor-roles", action="store_true")
+    parser.add_argument("--ensure-board")
     args = parser.parse_args(argv)
     roles = load_role_manifests(args.repo_root / "manifests" / "roles")
-    if args.apply:
+    selected = sum((args.link_cursor_roles, args.apply, args.ensure_board is not None))
+    if selected > 1:
+        parser.error("choose only one bootstrap operation")
+    if args.ensure_board is not None:
+        created = ensure_kanban_board(args.ensure_board)
+        result = {"board": args.ensure_board, "ensured": True, "created": created}
+    elif args.link_cursor_roles:
+        profiles_root = args.hermes_home.resolve() / "profiles"
+        expected = {
+            profiles_root / "cursor-fixer" / "skills" / "builder-grok",
+            profiles_root / "cursor-fixer" / "skills" / "workflow-contract",
+            profiles_root / "cursor-reviewer" / "skills" / "reviewer-secperf",
+            profiles_root / "cursor-reviewer" / "skills" / "workflow-contract",
+        }
+        preexisting = {path for path in expected if path.exists() or path.is_symlink()}
+        links = install_cursor_role_links(
+            profiles_root=profiles_root,
+            repo_root=args.repo_root.absolute(),
+        )
+        result = {
+            "links": [str(path) for path in links],
+            "created": [str(path) for path in links if path not in preexisting],
+        }
+    elif args.apply:
         result = apply_profiles(
-            repo_root=args.repo_root.resolve(), hermes_home=args.hermes_home.resolve()
+            repo_root=args.repo_root.absolute(), hermes_home=args.hermes_home.resolve()
         )
     else:
         result = [asdict(action) for action in plan_profiles(roles)]

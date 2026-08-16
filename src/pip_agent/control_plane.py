@@ -9,11 +9,18 @@ import socketserver
 import stat
 import struct
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .case_store import CaseStore, CaseStoreError
+from .decision_reconciler import (
+    DecisionError,
+    fetch_canary_base_sha,
+    fetch_canary_comments,
+    reconcile_human_decision,
+)
 
 MAX_REQUEST_BYTES = 16_384
 MAX_CONCURRENT_CLIENTS = 16
@@ -62,6 +69,60 @@ SystemCallArchitectures=native
 [Install]
 WantedBy=multi-user.target
 """
+DECISION_SERVICE_UNIT_TEMPLATE = """[Unit]
+Description=Pip v2 exact-canary GitHub human-decision reconciler
+After=network-online.target pip-v2-control.service
+Wants=network-online.target
+Requires=pip-v2-control.service
+
+[Service]
+Type=oneshot
+User=pip-v2-control
+Group=pip-v2-control
+SupplementaryGroups=@CALLER_GROUP@
+Environment=PYTHONPATH=/opt/pip-v2/current
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONSAFEPATH=1
+ExecStart=/usr/local/bin/pip-v2-control reconcile-once --config /etc/pip-v2/control.json --route-output /run/pip-v2/decision-route.json
+UMask=0027
+StateDirectory=pip-v2
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
+"""
+DECISION_TIMER_UNIT = """[Unit]
+Description=Poll the exact Pip v2 canary for authoritative GitHub decisions
+
+[Timer]
+OnBootSec=2m
+OnUnitActiveSec=2m
+RandomizedDelaySec=15s
+Persistent=true
+Unit=pip-v2-decision.service
+
+[Install]
+WantedBy=timers.target
+"""
 POLICY_KEYS = frozenset(
     {
         "repository",
@@ -87,6 +148,18 @@ def render_service_unit(caller_group: str) -> str:
     if SERVICE_UNIT_TEMPLATE.count("@CALLER_GROUP@") != 1:
         raise ControlPlaneError("control-plane service template is invalid")
     return SERVICE_UNIT_TEMPLATE.replace("@CALLER_GROUP@", caller_group)
+
+
+def render_decision_service_unit(caller_group: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9_.-]+", caller_group) is None:
+        raise ControlPlaneError("decision-service caller group is invalid")
+    if DECISION_SERVICE_UNIT_TEMPLATE.count("@CALLER_GROUP@") != 1:
+        raise ControlPlaneError("decision-service template is invalid")
+    return DECISION_SERVICE_UNIT_TEMPLATE.replace("@CALLER_GROUP@", caller_group)
+
+
+def render_decision_timer_unit() -> str:
+    return DECISION_TIMER_UNIT
 
 
 @dataclass(frozen=True)
@@ -279,7 +352,7 @@ class ControlServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
                         raise
                     case = None
                 return {"ok": True, "case": case}
-        except CaseStoreError as exc:
+        except (CaseStoreError, DecisionError) as exc:
             return {"ok": False, "error": str(exc)}
         return {"ok": False, "error": "unsupported operation"}
 
@@ -329,6 +402,80 @@ def notify_systemd_ready() -> None:
         notifier.sendall(b"READY=1\nSTATUS=Pip v2 control socket ready")
 
 
+def _write_route_output(path: Path, payload: dict[str, Any], *, group_id: int) -> None:
+    if path.is_symlink():
+        raise ControlPlaneError("decision route output must not be a symlink")
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+    if path.exists():
+        metadata = path.stat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid():
+            raise ControlPlaneError("decision route output is not service-owned")
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    descriptor = os.open(
+        temporary,
+        os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW,
+        0o640,
+    )
+    try:
+        encoded = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
+        view = memoryview(encoded)
+        while view:
+            written = os.write(descriptor, view)
+            if written < 1:
+                raise ControlPlaneError("decision route output write made no progress")
+            view = view[written:]
+        os.fsync(descriptor)
+        os.fchown(descriptor, -1, group_id)
+        os.fchmod(descriptor, 0o640)
+        os.close(descriptor)
+        descriptor = -1
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def reconcile_once(
+    policy: ControlPolicy,
+    route_output: Path,
+    *,
+    comment_fetcher: Callable[[], list[dict[str, Any]]] = fetch_canary_comments,
+    base_fetcher: Callable[[], str] = fetch_canary_base_sha,
+) -> dict[str, Any]:
+    store = CaseStore(policy.state_database)
+    try:
+        result = reconcile_human_decision(
+            store, comment_fetcher(), current_base_sha=base_fetcher()
+        )
+    except BaseException:
+        try:
+            state = store.get_case(policy.case_id)["state"]
+        except CaseStoreError:
+            state = "UNKNOWN"
+        failure = {
+            "ok": False,
+            "action": "stop",
+            "case_id": policy.case_id,
+            "state": state,
+            "error": "decision_reconciliation_failed",
+        }
+        _write_route_output(route_output, failure, group_id=policy.socket_group)
+        raise
+    payload = {"ok": True, "case_id": policy.case_id, **result}
+    _write_route_output(route_output, payload, group_id=policy.socket_group)
+    return payload
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Pip v2 isolated case writer")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -337,17 +484,47 @@ def main(argv: list[str] | None = None) -> int:
     request = commands.add_parser("request", help="Call the isolated writer service")
     request.add_argument("--socket", type=Path, required=True)
     request.add_argument(
-        "--operation", choices=("ensure_canary", "status"), required=True
+        "--operation",
+        choices=("ensure_canary", "status"),
+        required=True,
     )
+    reconcile_command = commands.add_parser(
+        "reconcile-once", help="Fetch and reconcile the exact canary human decision"
+    )
+    reconcile_command.add_argument("--config", type=Path, required=True)
+    reconcile_command.add_argument("--route-output", type=Path, required=True)
     render = commands.add_parser(
         "render-unit", help="Render the packaged hardened systemd unit"
     )
     render.add_argument("--caller-group", required=True)
     render.add_argument("--output", type=Path, required=True)
+    render_decision = commands.add_parser(
+        "render-decision-units",
+        help="Render the exact-canary decision service and timer",
+    )
+    render_decision.add_argument("--caller-group", required=True)
+    render_decision.add_argument("--service-output", type=Path, required=True)
+    render_decision.add_argument("--timer-output", type=Path, required=True)
     args = parser.parse_args(argv)
 
     if args.command == "render-unit":
         args.output.write_text(render_service_unit(args.caller_group))
+        return 0
+
+    if args.command == "render-decision-units":
+        args.service_output.write_text(render_decision_service_unit(args.caller_group))
+        args.timer_output.write_text(render_decision_timer_unit())
+        return 0
+
+    if args.command == "reconcile-once":
+        try:
+            payload = reconcile_once(
+                load_policy(args.config),
+                args.route_output,
+            )
+        except (ControlPlaneError, CaseStoreError, DecisionError, OSError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 
     if args.command == "serve":

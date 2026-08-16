@@ -24,12 +24,18 @@ Holistically adjudicate the complete case using GPT-5.6-Sol at `xhigh` reasoning
 4. Inspect both review histories, CodeRabbit findings when present, and resolution evidence.
 5. Verify the join bundle binds mandatory approvals and green CI to the current exact head.
 6. Decide whether the work solves the right root problem with sufficient evidence.
-7. Return `MERGE`, `RETURN_TO_BUILD`, `RETURN_TO_REVIEW`, `RETURN_TO_PLANNING`, `WAIT_FOR_ISSUE_CREATOR`, `BLOCKED`, `ABANDON`, or `BLOCKED_UNEXPECTED_MODEL`.
+7. Return `HUMAN_REVIEW_REQUIRED`, `RETURN_TO_BUILD`, `RETURN_TO_REVIEW`, `RETURN_TO_PLANNING`, `WAIT_FOR_ISSUE_CREATOR`, `BLOCKED`, `ABANDON`, or `BLOCKED_UNEXPECTED_MODEL`.
 
 ## Merge separation
 
-Do not directly invoke merge. A `MERGE` result authorizes only the deterministic guarded merge transaction, which must re-fetch and revalidate live state.
+Do not invoke merge, notify a human, or claim merge or notification authority. MDK is human-merge-only. A clean result means only that the deterministic post-validation consumer may later send JG the PR link, exact head, CI/review evidence, and a recommendation. Any unresolved blocker, reviewer mismatch, later commit, red CI, sensitive-scope change, or missing human review remains held.
 
 ## Completion
 
-Post a final role-stamped rationale and return a validating `final-result` tied to the exact reviewed head.
+Post a final role-stamped rationale inside a validating `final-result` tied to
+the exact reviewed head. After validating it, call `kanban_complete` with a
+concise summary and the complete object as `metadata`; Hermes must durably
+store the contract in the Kanban run metadata. Then return the same JSON object
+as the entire final response without prose or a code fence. Use
+`HUMAN_REVIEW_REQUIRED` when every gate passes. Do not send, subscribe, stage,
+or otherwise trigger a human notification. Never merge.

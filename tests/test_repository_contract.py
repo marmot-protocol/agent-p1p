@@ -16,9 +16,28 @@ from pip_agent.contracts import (
     load_schema,
     validate_contract,
 )
-from pip_agent.control_plane import render_service_unit
+from pip_agent.control_plane import (
+    render_decision_service_unit,
+    render_decision_timer_unit,
+    render_service_unit,
+)
+from pip_agent.route_consumer import (
+    render_route_consumer_service,
+    render_route_consumer_timer,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def route_binding() -> dict[str, object]:
+    return {
+        "route_id": "decision-" + "d" * 64,
+        "comment_id": 2,
+        "evidence_body_sha256": "e" * 64,
+        "planner_comment_id": 1,
+        "planner_body_sha256": "f" * 64,
+        "planned_base_sha": "c" * 40,
+    }
 
 
 def review_result(role: str, head: str, *, outcome: str = "APPROVE") -> dict:
@@ -31,6 +50,7 @@ def review_result(role: str, head: str, *, outcome: str = "APPROVE") -> dict:
         "schema_version": 1,
         "workflow_version": 2,
         "case_id": "mdk#1400",
+        **route_binding(),
         "task_id": f"{role}-r1",
         "role": role,
         "outcome": outcome,
@@ -55,6 +75,7 @@ def builder_result(head: str, *, resolutions: list[dict] | None = None) -> dict:
         "schema_version": 1,
         "workflow_version": 2,
         "case_id": "mdk#1400",
+        **route_binding(),
         "task_id": "builder-grok-r2",
         "role": "builder-grok",
         "outcome": "REVIEW_READY",
@@ -158,6 +179,7 @@ def test_validate_contract_accepts_valid_review_result() -> None:
         "schema_version": 1,
         "workflow_version": 2,
         "case_id": "mdk#1400",
+        **route_binding(),
         "task_id": "reviewer-general-r1",
         "role": "reviewer-general",
         "outcome": "APPROVE",
@@ -186,6 +208,7 @@ def test_validate_contract_rejects_model_substitution() -> None:
         "schema_version": 1,
         "workflow_version": 2,
         "case_id": "mdk#1400",
+        **route_binding(),
         "task_id": "reviewer-secperf-r1",
         "role": "reviewer-secperf",
         "outcome": "APPROVE",
@@ -230,6 +253,7 @@ def test_review_contract_rejects_invalid_role_timestamp_and_approval_with_blocke
         "schema_version": 1,
         "workflow_version": 2,
         "case_id": "mdk#1400",
+        **route_binding(),
         "task_id": "review-r1",
         "role": "not-a-reviewer",
         "outcome": "APPROVE",
@@ -251,11 +275,29 @@ def test_review_contract_rejects_invalid_role_timestamp_and_approval_with_blocke
         validate_contract("review-result", result)
 
 
+def test_builder_contract_allows_safe_return_to_planning_without_pr() -> None:
+    result = builder_result("b" * 40)
+    result["outcome"] = "RETURN_TO_PLANNING"
+    for key in ("pr_number", "head_sha", "ci_head_sha", "github_ci_green"):
+        result.pop(key)
+
+    validate_contract("builder-result", result)
+
+
+def test_builder_contract_requires_pr_and_exact_head_fields_when_review_ready() -> None:
+    result = builder_result("b" * 40)
+    result.pop("pr_number")
+
+    with pytest.raises(ContractError):
+        validate_contract("builder-result", result)
+
+
 def test_builder_contract_rejects_green_ci_for_stale_head() -> None:
     result = {
         "schema_version": 1,
         "workflow_version": 2,
         "case_id": "mdk#1400",
+        **route_binding(),
         "task_id": "build-r1",
         "role": "builder-grok",
         "outcome": "REVIEW_READY",
@@ -284,6 +326,7 @@ def test_builder_contract_rejects_review_ready_with_red_ci() -> None:
         "schema_version": 1,
         "workflow_version": 2,
         "case_id": "mdk#1400",
+        **route_binding(),
         "task_id": "build-r1",
         "role": "builder-grok",
         "outcome": "REVIEW_READY",
@@ -312,6 +355,7 @@ def test_common_result_rejects_role_outcome_mismatch() -> None:
         "schema_version": 1,
         "workflow_version": 2,
         "case_id": "mdk#1400",
+        **route_binding(),
         "task_id": "build-r1",
         "role": "builder-grok",
         "outcome": "ARBITRARY",
@@ -332,6 +376,7 @@ def test_review_finding_rejects_unstructured_resolution_data() -> None:
         "schema_version": 1,
         "workflow_version": 2,
         "case_id": "mdk#1400",
+        **route_binding(),
         "task_id": "review-r1",
         "role": "reviewer-general",
         "outcome": "REQUEST_CHANGES",
@@ -489,6 +534,9 @@ def test_built_wheel_contains_contract_schemas(tmp_path: Path) -> None:
         )
     }
     assert expected <= names
+    assert "pip_agent/resources/canaries/mdk-1240-plan-v1.json" not in names
+    assert "pip_agent/resources/manifests/roles/builder-grok.json" in names
+    assert "pip_agent/resources/skills/builder-grok/SKILL.md" in names
     unit = tmp_path / "pip-v2-control.service"
     subprocess.run(
         [
@@ -537,11 +585,49 @@ def test_control_plane_install_artifacts_are_hardened_and_packaged() -> None:
         assert directive in unit
     assert "pip-v2-control serve --config /etc/pip-v2/control.json" in unit
 
+    decision_unit = render_decision_service_unit("jeff")
+    for directive in (
+        "User=pip-v2-control",
+        "Group=pip-v2-control",
+        "SupplementaryGroups=jeff",
+        "Type=oneshot",
+        "StateDirectory=pip-v2",
+        "ProtectHome=true",
+        "NoNewPrivileges=true",
+        "RestrictAddressFamilies=AF_INET AF_INET6",
+        "pip-v2-control reconcile-once --config /etc/pip-v2/control.json",
+        "--route-output /run/pip-v2/decision-route.json",
+    ):
+        assert directive in decision_unit
+    timer_unit = render_decision_timer_unit()
+    assert "OnUnitActiveSec=2m" in timer_unit
+    assert "Persistent=true" in timer_unit
+    assert "Unit=pip-v2-decision.service" in timer_unit
+
+    route_unit = render_route_consumer_service("jeff", "jeff", Path("/home/jeff"))
+    for directive in (
+        "User=jeff",
+        "Group=jeff",
+        "Type=oneshot",
+        "NoNewPrivileges=true",
+        "ProtectSystem=strict",
+        "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
+        "pip-v2-route-consumer consume",
+        "--route /run/pip-v2/decision-route.json",
+        "--board pip-mdk",
+        "ReadWritePaths=/home/jeff/.hermes",
+    ):
+        assert directive in route_unit
+    route_timer = render_route_consumer_timer()
+    assert "OnUnitActiveSec=15s" in route_timer
+    assert "Unit=pip-v2-route-consumer.service" in route_timer
+
     installer = ROOT / "scripts/install-control-plane.sh"
     subprocess.run(["bash", "-n", str(installer)], check=True)
     script = installer.read_text()
     assert "pip-v2-control" in script
     assert "useradd --system" in script
+    assert "export PYTHONDONTWRITEBYTECODE=1 PYTHONSAFEPATH=1" in script
     assert "groupadd --system" in script
     assert "usermod" not in script
     assert "pip-v2-control identity is not exclusively configured" in script
@@ -549,6 +635,12 @@ def test_control_plane_install_artifacts_are_hardened_and_packaged() -> None:
     assert "groupdel pip-v2-control" in script
     assert 'rm -rf -- "$RELEASE_DIR"' in script
     assert "systemctl enable pip-v2-control.service" in script
+    assert "systemctl enable pip-v2-decision.timer" in script
+    assert "systemctl enable pip-v2-route-consumer.timer" in script
+    assert "/etc/systemd/system/pip-v2-decision.service" in script
+    assert "/etc/systemd/system/pip-v2-decision.timer" in script
+    assert "/etc/systemd/system/pip-v2-route-consumer.service" in script
+    assert "/etc/systemd/system/pip-v2-route-consumer.timer" in script
     assert "systemctl restart pip-v2-control.service" in script
     assert "--installer-sha256" in script
     assert "installer SHA-256 mismatch" in script
@@ -561,6 +653,17 @@ def test_control_plane_install_artifacts_are_hardened_and_packaged() -> None:
     assert '[[ "$ISSUE" == "1240" ]]' in script
     assert 'runuser -u "$CALLER" -- test -e /var/lib/pip-v2/cases.db' in script
     assert "control-plane boundary validation failed" in script
+    assert "$CALLER_HOME/code" not in script
+    assert "/var/lib/pip-v2-router" not in script
+    assert 'runuser -u "$CALLER" -- /usr/bin/env' in script
+    assert "-m pip_agent.bootstrap" in script
+    assert "CREATED_CURSOR_LINKS" in script
+    assert "PROFILE_SNAPSHOT_READY" in script
+    assert '"$INSTALL_TMP/profile-snapshot/state.json"' in script
+    assert "refusing to snapshot unsafe profile root" in script
+    assert "shutil.rmtree(profile)" in script
+    assert "--apply" in script
+    assert "os.readlink(path) == expected" in script
     assert "rollback_install" in script
     assert "restoring the previous control-plane deployment" in script
     assert "chmod 0640" in script

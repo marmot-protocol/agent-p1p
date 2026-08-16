@@ -33,4 +33,11 @@ Record the reviewed head SHA. Any later commit invalidates the verdict. Confirm 
 
 ## Completion
 
-Post a role-stamped review and return a validating `review-result` with `APPROVE`, `REQUEST_CHANGES`, `BLOCKED`, or `BLOCKED_UNEXPECTED_MODEL`.
+Post a role-stamped review and produce a validating `review-result`. After
+validating it, call `kanban_complete` with a concise summary and the complete
+object as `metadata`; Hermes must durably store the contract in the Kanban run
+metadata. Then return the same object as the entire final response without
+prose or a code fence. Use `APPROVE`, `REQUEST_CHANGES`, `BLOCKED`, or
+`BLOCKED_UNEXPECTED_MODEL`.
+
+Complete the Kanban review task even when the verdict is `REQUEST_CHANGES`; the deterministic remediation child must receive the findings. Use Kanban blocked status only when the review itself cannot be performed. On the re-review round, evaluate the current head independently and explicitly confirm or retain every prior blocker.

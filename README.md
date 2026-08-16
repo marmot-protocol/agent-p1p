@@ -16,7 +16,7 @@ Runtime foundation and an inert MDK shadow pilot. The empty `pip-mdk` board is a
 | `reviewer-secperf` | direct Cursor adapter | `kimi-k3-high` |
 | `final-reviewer` | fresh Hermes profile | `openai-codex/gpt-5.6-sol`, `xhigh` |
 
-The Cursor roles are not wrapped by another reasoning model. Every role starts a fresh session.
+The two Cursor roles use the existing v1 `cursor-fixer` and `cursor-reviewer` Hermes profiles as orchestration shells. Each shell launches one fresh direct Cursor session with the exact requested model. This is cooperative same-UID orchestration, not hostile-worker containment.
 
 ## Skill composition
 
@@ -27,7 +27,19 @@ The Cursor roles are not wrapped by another reasoning model. Every role starts a
 3. immutable task input and repository policy
 4. the required result schema
 
-Hermes profile skill directories symlink both canonical skills. Cursor adapters read and render both canonical files directly. Each adapter saves the rendered prompt and invocation metadata with the run artifacts.
+Hermes role profiles symlink both canonical skills. The two existing Cursor runner profiles receive the matching v2 role contract plus the established v1 Cursor workflow skill. Cursor invocations save their rendered prompt and invocation metadata with the run artifacts.
+
+Hermes Pip profiles use the host account home for subprocesses, so role workers share the existing `agent-p1p` GitHub CLI authentication rather than maintaining copied credentials. One-issue intake stages the planner task as blocked, attaches the configured gateway-owned human-attention subscription, and only then unblocks it for dispatch. This prevents a fast terminal event from racing notification setup; workers never receive Telegram credentials.
+
+The exact `mdk#1240` canary has a separate decision reconciler. `pip-v2-decision.timer` reads the public issue every two minutes as `pip-v2-control`, verifies numeric GitHub identities, parses the latest versioned planner comment and its base SHA, accepts commands only from `erskingardner`, writes the decision into the protected case, and emits a group-readable evidence-bound route at `/run/pip-v2/decision-route.json`. A separate `pip-v2-route-consumer.timer` runs as the host caller and maps active routes into the existing Hermes Kanban board. Kanban idempotency keys prevent accidental duplicate tasks; there is no parallel route ledger, worktree manager, or subprocess scheduler.
+
+- `Pip: approve exact scope` → advance the protected case to `BUILDING` and emit one seven-task builder/review/remediation/re-review/final-review DAG only when that planner version's exact base still equals GitHub `master`; stale evidence remains in `PLANNING` and emits one staged replan task instead;
+- `Pip: narrow scope — <one-line scope>` → return to planning with the supplied boundary;
+- `Pip: reject` → abandon the case and route no work.
+
+A narrowing decision invalidates its planner version. A later approval cannot dispatch until a newer planner comment has been published and the human replies after that update. The final task verifies same-head CI and two independent same-head re-reviews, then notifies JG. It never merges.
+
+No `@agent-p1p` mention is needed. Wrong actors are ignored; ambiguous text remains held; deletion or invalidation of accepted approval blocks an active build. The public control socket remains restricted to `ensure_canary` and `status`; only the network-enabled oneshot reconciler writes decision evidence.
 
 ## Layout
 
@@ -89,8 +101,13 @@ only two operations: idempotently create the single root-configured canary case,
 and read its status. Callers cannot supply a repository, issue number, state,
 run, transition, PR, or merge decision. This deliberately makes same-UID worker
 access to the socket non-authoritative: it cannot select new work or mutate the
-workflow. Lifecycle/result submission remains disabled until a later control
-plane can validate evidence independently.
+workflow. Worker lifecycle/result submission through the protected service
+remains disabled until a later control plane can validate evidence independently.
+Human-decision reconciliation runs
+as a separate root-owned oneshot, and a caller-owned oneshot translates only
+its fixed, plan-bound route file into deterministic v1 Kanban tasks. Kanban
+retains worker artifacts and parent results; it does not gain a generic socket
+operation for mutating the protected case database.
 
 Copy and verify the installer as root before executing it; do not run the
 user-writable checkout script directly:
@@ -113,10 +130,14 @@ sudo bash -c '
   --issue 1240
 ```
 
-The installer creates the system identity, installs a root-owned wheel release,
-writes an exact shadow/human-merge-only policy, installs a hardened systemd
-unit, starts it, and verifies the caller can reach the status endpoint. It does
-not activate the `pip-mdk` board or enqueue a task.
+The installer requires the existing v1 `cursor-fixer` and `cursor-reviewer`
+profile directories. It creates the system identity, installs a root-owned
+wheel release, links only the packaged Cursor role contracts as the caller,
+writes an exact shadow/human-merge-only policy, installs the hardened control,
+decision, and route-consumer units, starts them, and verifies the caller can
+reach the status endpoint. Root never creates, changes ownership of, or changes
+mode on caller workspace paths. The installer does not activate the `pip-mdk`
+board or enqueue a task.
 
 ## MDK pilot
 
