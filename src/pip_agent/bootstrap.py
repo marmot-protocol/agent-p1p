@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import grp
 import json
 import os
+import pwd
 import re
+import stat
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -192,6 +195,24 @@ def _expected_links_exist(
     )
 
 
+def _resolve_link_target(raw_target: str, parent: Path) -> Path:
+    target = Path(raw_target)
+    return (target if target.is_absolute() else parent / target).resolve(strict=False)
+
+
+def _marker_mode_is_safe(mode: int, gid: int) -> bool:
+    if mode & 0o002:
+        return False
+    if not mode & 0o020:
+        return True
+    current = pwd.getpwuid(os.getuid())
+    group = grp.getgrgid(gid)
+    primary_members = {entry.pw_name for entry in pwd.getpwall() if entry.pw_gid == gid}
+    return gid == current.pw_gid and primary_members | set(group.gr_mem) == {
+        current.pw_name
+    }
+
+
 def _ensure_profile_marker(
     *,
     profile_home: Path,
@@ -200,28 +221,188 @@ def _ensure_profile_marker(
     role_name: str,
     created: bool,
 ) -> None:
-    marker = profile_home / PROFILE_MARKER
+    if profile_home.is_symlink() or not profile_home.is_dir():
+        raise BootstrapError(f"unsafe Hermes profile directory: {profile_home}")
     expected = {
         "managed_by": "agent-p1p",
         "workflow_version": 2,
         "role": role_name,
         "repo_root": str(repo_root.resolve()),
     }
-    if marker.exists():
+    profile_fd = os.open(profile_home, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
         try:
-            current = json.loads(marker.read_text())
-        except (OSError, json.JSONDecodeError) as exc:
-            raise BootstrapError(f"invalid profile marker: {marker}") from exc
-        if current != expected:
-            raise BootstrapError(f"profile marker does not match manifest: {marker}")
-        return
-    if not created and not _expected_links_exist(
-        profile_home, repo_root, hermes_home, role_name
-    ):
-        raise BootstrapError(
-            f"refusing to adopt foreign Hermes profile: {profile_home}"
+            skills_stat = os.stat("skills", dir_fd=profile_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            if not created:
+                raise BootstrapError(
+                    f"unsafe Hermes profile skills directory: {profile_home / 'skills'}"
+                )
+            os.mkdir("skills", mode=0o755, dir_fd=profile_fd)
+            skills_stat = os.stat("skills", dir_fd=profile_fd, follow_symlinks=False)
+        if not stat.S_ISDIR(skills_stat.st_mode):
+            raise BootstrapError(
+                f"unsafe Hermes profile skills directory: {profile_home / 'skills'}"
+            )
+        skills_fd = os.open(
+            "skills", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=profile_fd
         )
-    marker.write_text(json.dumps(expected, indent=2, sort_keys=True) + "\n")
+    except BaseException:
+        os.close(profile_fd)
+        raise
+    skills = profile_home / "skills"
+    try:
+        try:
+            marker_stat = os.stat(
+                PROFILE_MARKER, dir_fd=profile_fd, follow_symlinks=False
+            )
+        except FileNotFoundError:
+            marker_stat = None
+        current = None
+        if marker_stat is not None:
+            if (
+                not stat.S_ISREG(marker_stat.st_mode)
+                or marker_stat.st_uid != os.getuid()
+                or not _marker_mode_is_safe(marker_stat.st_mode, marker_stat.st_gid)
+            ):
+                raise BootstrapError(
+                    f"unsafe profile marker metadata: {profile_home / PROFILE_MARKER}"
+                )
+            try:
+                marker_fd = os.open(
+                    PROFILE_MARKER, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=profile_fd
+                )
+                with os.fdopen(marker_fd) as stream:
+                    current = json.load(stream)
+            except (OSError, json.JSONDecodeError) as exc:
+                raise BootstrapError(
+                    f"invalid profile marker: {profile_home / PROFILE_MARKER}"
+                ) from exc
+            if current == expected:
+                return
+
+            immutable = {
+                "managed_by": "agent-p1p",
+                "workflow_version": 2,
+                "role": role_name,
+            }
+            if (
+                not isinstance(current, dict)
+                or set(current) != {*immutable, "repo_root"}
+                or any(current.get(key) != value for key, value in immutable.items())
+                or not isinstance(current.get("repo_root"), str)
+            ):
+                raise BootstrapError(
+                    f"profile marker does not match manifest: {profile_home / PROFILE_MARKER}"
+                )
+            old_root = Path(current["repo_root"])
+            if not old_root.is_absolute():
+                raise BootstrapError(
+                    f"profile marker does not match manifest: {profile_home / PROFILE_MARKER}"
+                )
+            old_root = old_root.resolve()
+            new_root = repo_root.resolve()
+            managed_links = {
+                role_name: (
+                    (old_root / "skills" / role_name).resolve(),
+                    (new_root / "skills" / role_name).resolve(),
+                ),
+                "workflow-contract": (
+                    (old_root / "skills/shared/workflow-contract").resolve(),
+                    (new_root / "skills/shared/workflow-contract").resolve(),
+                ),
+            }
+            if any(not new_target.is_dir() for _, new_target in managed_links.values()):
+                raise BootstrapError(f"profile migration target is missing: {new_root}")
+            for name, (old_target, new_target) in managed_links.items():
+                try:
+                    link_stat = os.stat(name, dir_fd=skills_fd, follow_symlinks=False)
+                    raw_target = os.readlink(name, dir_fd=skills_fd)
+                except OSError as exc:
+                    raise BootstrapError(
+                        f"profile marker does not match managed links: {profile_home / PROFILE_MARKER}"
+                    ) from exc
+                if not stat.S_ISLNK(link_stat.st_mode) or _resolve_link_target(
+                    raw_target, skills
+                ) not in {old_target, new_target}:
+                    raise BootstrapError(
+                        f"profile marker does not match managed links: {profile_home / PROFILE_MARKER}"
+                    )
+            for name, expected_auth in (
+                ("auth.json", (hermes_home / "auth.json").resolve()),
+                ("auth.lock", (hermes_home / "auth.lock").resolve()),
+            ):
+                try:
+                    auth_stat = os.stat(name, dir_fd=profile_fd, follow_symlinks=False)
+                    raw_target = os.readlink(name, dir_fd=profile_fd)
+                except OSError as exc:
+                    raise BootstrapError(
+                        f"profile marker does not match managed links: {profile_home / PROFILE_MARKER}"
+                    ) from exc
+                if (
+                    not stat.S_ISLNK(auth_stat.st_mode)
+                    or _resolve_link_target(raw_target, profile_home) != expected_auth
+                ):
+                    raise BootstrapError(
+                        f"profile marker does not match managed links: {profile_home / PROFILE_MARKER}"
+                    )
+            for index, (name, (_, new_target)) in enumerate(managed_links.items()):
+                if (
+                    _resolve_link_target(os.readlink(name, dir_fd=skills_fd), skills)
+                    == new_target
+                ):
+                    continue
+                temporary = f".{name}.pip-v2-{os.getpid()}-{index}"
+                try:
+                    os.symlink(new_target, temporary, dir_fd=skills_fd)
+                    os.replace(
+                        temporary, name, src_dir_fd=skills_fd, dst_dir_fd=skills_fd
+                    )
+                finally:
+                    try:
+                        os.unlink(temporary, dir_fd=skills_fd)
+                    except FileNotFoundError:
+                        pass
+            os.fsync(skills_fd)
+        elif not created and not _expected_links_exist(
+            profile_home, repo_root, hermes_home, role_name
+        ):
+            raise BootstrapError(
+                f"refusing to adopt foreign Hermes profile: {profile_home}"
+            )
+
+        serialized = json.dumps(expected, indent=2, sort_keys=True) + "\n"
+        temporary_marker = f".{PROFILE_MARKER}.pip-v2-{os.getpid()}"
+        descriptor = None
+        try:
+            descriptor = os.open(
+                temporary_marker,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=profile_fd,
+            )
+            with os.fdopen(descriptor, "w") as stream:
+                descriptor = None
+                stream.write(serialized)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(
+                temporary_marker,
+                PROFILE_MARKER,
+                src_dir_fd=profile_fd,
+                dst_dir_fd=profile_fd,
+            )
+            os.fsync(profile_fd)
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            try:
+                os.unlink(temporary_marker, dir_fd=profile_fd)
+            except FileNotFoundError:
+                pass
+    finally:
+        os.close(skills_fd)
+        os.close(profile_fd)
 
 
 def _run(command: Sequence[str], env: Mapping[str, str] | None = None) -> None:

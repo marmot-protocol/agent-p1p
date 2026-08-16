@@ -13,6 +13,7 @@ import pip_agent.intake as intake_module
 from pip_agent.bootstrap import (
     CLI_TOOLSET_CATALOG,
     BootstrapError,
+    _ensure_profile_marker,
     apply_profiles,
     ensure_kanban_board,
     install_cursor_role_links,
@@ -423,6 +424,152 @@ def test_profile_apply_scopes_every_config_write_to_named_profile(
     assert sum(command[-2:] == ["fallback", "clear"] for command in commands) == 3
     assert environments
     assert all(env["HERMES_HOME"] == str(hermes_home.resolve()) for env in environments)
+
+
+def test_managed_profile_migrates_from_source_tree_to_installed_release(
+    tmp_path: Path,
+) -> None:
+    hermes_home = tmp_path / ".hermes"
+    profile_home = hermes_home / "profiles" / "planner"
+    old_root = tmp_path / "source"
+    new_root = tmp_path / "release"
+    for root in (old_root, new_root):
+        (root / "skills" / "planner").mkdir(parents=True)
+        (root / "skills" / "shared" / "workflow-contract").mkdir(parents=True)
+    profile_home.mkdir(parents=True)
+    (hermes_home / "auth.json").write_text("{}\n")
+    (hermes_home / "auth.lock").write_text("")
+    skills = profile_home / "skills"
+    skills.mkdir()
+    (skills / "planner").symlink_to(old_root / "skills" / "planner")
+    (skills / "workflow-contract").symlink_to(
+        old_root / "skills" / "shared" / "workflow-contract"
+    )
+    (profile_home / "auth.json").symlink_to(hermes_home / "auth.json")
+    (profile_home / "auth.lock").symlink_to(hermes_home / "auth.lock")
+    marker = profile_home / "pip-v2-profile.json"
+    marker.write_text(
+        json.dumps(
+            {
+                "managed_by": "agent-p1p",
+                "workflow_version": 2,
+                "role": "planner",
+                "repo_root": str(old_root.resolve()),
+            }
+        )
+    )
+    marker.chmod(0o600)
+
+    _ensure_profile_marker(
+        profile_home=profile_home,
+        repo_root=new_root,
+        hermes_home=hermes_home,
+        role_name="planner",
+        created=False,
+    )
+
+    assert json.loads(marker.read_text())["repo_root"] == str(new_root.resolve())
+    assert (skills / "planner").resolve() == (new_root / "skills" / "planner")
+    assert (skills / "workflow-contract").resolve() == (
+        new_root / "skills" / "shared" / "workflow-contract"
+    )
+
+    expected_marker = marker.read_text()
+    outside = tmp_path / "outside-marker"
+    outside.write_text(expected_marker)
+    marker.unlink()
+    marker.symlink_to(outside)
+    with pytest.raises(BootstrapError, match="unsafe profile marker metadata"):
+        _ensure_profile_marker(
+            profile_home=profile_home,
+            repo_root=new_root,
+            hermes_home=hermes_home,
+            role_name="planner",
+            created=False,
+        )
+    outside.unlink()
+    with pytest.raises(BootstrapError, match="unsafe profile marker metadata"):
+        _ensure_profile_marker(
+            profile_home=profile_home,
+            repo_root=new_root,
+            hermes_home=hermes_home,
+            role_name="planner",
+            created=False,
+        )
+    assert not outside.exists()
+
+
+def test_managed_profile_migration_recovers_mixed_links_and_rejects_foreign(
+    tmp_path: Path,
+) -> None:
+    hermes_home = tmp_path / ".hermes"
+    profile_home = hermes_home / "profiles" / "planner"
+    old_root = tmp_path / "source"
+    new_root = tmp_path / "release"
+    for root in (old_root, new_root):
+        (root / "skills" / "planner").mkdir(parents=True)
+        (root / "skills" / "shared" / "workflow-contract").mkdir(parents=True)
+    profile_home.mkdir(parents=True)
+    (hermes_home / "auth.json").write_text("{}\n")
+    (hermes_home / "auth.lock").write_text("")
+    skills = profile_home / "skills"
+    skills.mkdir()
+    planner = skills / "planner"
+    contract = skills / "workflow-contract"
+    planner.symlink_to(new_root / "skills" / "planner")
+    contract.symlink_to(old_root / "skills" / "shared" / "workflow-contract")
+    (profile_home / "auth.json").symlink_to(hermes_home / "auth.json")
+    (profile_home / "auth.lock").symlink_to(hermes_home / "auth.lock")
+    marker = profile_home / "pip-v2-profile.json"
+    old_marker = {
+        "managed_by": "agent-p1p",
+        "workflow_version": 2,
+        "role": "planner",
+        "repo_root": str(old_root.resolve()),
+    }
+    marker.write_text(json.dumps(old_marker))
+    marker.chmod(0o600)
+
+    _ensure_profile_marker(
+        profile_home=profile_home,
+        repo_root=new_root,
+        hermes_home=hermes_home,
+        role_name="planner",
+        created=False,
+    )
+    assert planner.resolve() == new_root / "skills" / "planner"
+    assert contract.resolve() == new_root / "skills" / "shared" / "workflow-contract"
+
+    marker.write_text(json.dumps(old_marker))
+    contract.unlink()
+    contract.symlink_to(tmp_path / "foreign")
+    with pytest.raises(BootstrapError, match="does not match managed links"):
+        _ensure_profile_marker(
+            profile_home=profile_home,
+            repo_root=new_root,
+            hermes_home=hermes_home,
+            role_name="planner",
+            created=False,
+        )
+
+    planner.unlink()
+    contract.unlink()
+    skills.rmdir()
+    foreign_skills = tmp_path / "foreign-skills"
+    foreign_skills.mkdir()
+    (foreign_skills / "planner").symlink_to(old_root / "skills" / "planner")
+    (foreign_skills / "workflow-contract").symlink_to(
+        old_root / "skills" / "shared" / "workflow-contract"
+    )
+    skills.symlink_to(foreign_skills)
+    with pytest.raises(BootstrapError, match="unsafe Hermes profile skills directory"):
+        _ensure_profile_marker(
+            profile_home=profile_home,
+            repo_root=new_root,
+            hermes_home=hermes_home,
+            role_name="planner",
+            created=False,
+        )
 
 
 def _write_fake_cursor(

@@ -141,7 +141,12 @@ for role, record in state.items():
         if profile.exists():
             shutil.rmtree(profile)
         continue
+    if profile.is_symlink() or (profile.exists() and not profile.is_dir()):
+        raise SystemExit(f"refusing to restore unsafe profile root: {profile}")
     profile.mkdir(parents=True, exist_ok=True)
+    skills = profile / "skills"
+    if skills.is_symlink() or (skills.exists() and not skills.is_dir()):
+        raise SystemExit(f"refusing to restore unsafe skills directory: {skills}")
     for relative, entry in record["entries"].items():
         path = profile / relative
         if path.is_symlink() or path.is_file():
@@ -156,6 +161,12 @@ for role, record in state.items():
         else:
             path.write_bytes(base64.b64decode(entry["data"]))
             os.chmod(path, entry["mode"])
+    if record["skills"]["existed"]:
+        skills.mkdir(exist_ok=True)
+        os.chmod(skills, record["skills"]["mode"])
+    elif skills.exists():
+        shutil.rmtree(skills)
+    os.chmod(profile, record["mode"])
 PY
   fi
   if [[ "$CREATED_BOARD" == "1" ]]; then
@@ -463,6 +474,13 @@ for role in ("planner", "reviewer-general", "final-reviewer"):
     profile = profiles / role
     if profile.is_symlink() or (profile.exists() and not profile.is_dir()):
         raise SystemExit(f"refusing to snapshot unsafe profile root: {profile}")
+    skills = profile / "skills"
+    if skills.is_symlink() or (skills.exists() and not skills.is_dir()):
+        raise SystemExit(f"refusing to snapshot unsafe skills directory: {skills}")
+    skills_state = {
+        "existed": skills.is_dir(),
+        "mode": (skills.stat().st_mode & 0o777) if skills.is_dir() else None,
+    }
     entries = {}
     for relative in (
         "config.yaml",
@@ -473,6 +491,8 @@ for role in ("planner", "reviewer-general", "final-reviewer"):
         "auth.lock",
     ):
         path = profile / relative
+        if path.is_symlink() and relative in {"config.yaml", "pip-v2-profile.json"}:
+            raise SystemExit(f"refusing to snapshot symlinked profile file: {path}")
         if path.is_symlink():
             entries[relative] = {"type": "symlink", "target": os.readlink(path)}
         elif path.is_file() and relative in {"config.yaml", "pip-v2-profile.json"}:
@@ -485,7 +505,12 @@ for role in ("planner", "reviewer-general", "final-reviewer"):
             raise SystemExit(f"refusing to snapshot unexpected profile path: {path}")
         else:
             entries[relative] = None
-    state[role] = {"existed": profile.is_dir(), "entries": entries}
+    state[role] = {
+        "existed": profile.is_dir(),
+        "mode": (profile.stat().st_mode & 0o777) if profile.is_dir() else None,
+        "skills": skills_state,
+        "entries": entries,
+    }
 output.write_text(json.dumps(state, sort_keys=True) + "\n")
 os.chmod(output, 0o600)
 PY
