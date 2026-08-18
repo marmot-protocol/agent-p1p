@@ -201,6 +201,72 @@ def test_parse_human_decision_accepts_only_explicit_trusted_commands(
     )
 
 
+@pytest.mark.parametrize(
+    ("body", "expected_kind"),
+    [
+        ("approve", "approve"),
+        ("approved", "approve"),
+        ("Approve", "approve"),
+        ("@agent-p1p approve", "approve"),
+        ("@agent-p1p approved", "approve"),
+        ("reject", "reject"),
+        ("rejected", "reject"),
+        ("@agent-p1p reject", "reject"),
+        ("@agent-p1p rejected", "reject"),
+    ],
+)
+def test_parse_human_decision_accepts_simple_whole_comment_aliases(
+    body: str, expected_kind: str
+) -> None:
+    decision = parse_human_decision(
+        [
+            _versioned_planner(version=3, base="a" * 40),
+            _comment(
+                CANARY_PLANNER_COMMENT_ID + 1,
+                "erskingardner",
+                body,
+                created_at="2026-08-15T21:07:00Z",
+            ),
+        ]
+    )
+    assert decision is not None
+    assert decision.kind == expected_kind
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "approved, thanks",
+        "not approved",
+        "approve\nplease",
+        "approve\n",
+        "\napprove",
+        "approve\r",
+        "\rapprove",
+        "approve\r\n",
+        "reject\n",
+        "\nreject",
+        "reject\r",
+        "\rreject",
+        "reject\r\n",
+    ],
+)
+def test_parse_human_decision_rejects_ambiguous_aliases(body: str) -> None:
+    decision = parse_human_decision(
+        [
+            _versioned_planner(version=3, base="a" * 40),
+            _comment(
+                CANARY_PLANNER_COMMENT_ID + 1,
+                "erskingardner",
+                body,
+                created_at="2026-08-15T21:07:00Z",
+            ),
+        ]
+    )
+    assert decision is not None
+    assert decision.kind == "unrecognized"
+
+
 def test_parse_human_decision_routes_latest_trusted_command(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

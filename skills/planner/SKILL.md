@@ -27,6 +27,7 @@ Validate an authorized issue, identify its actual root cause, and produce a vers
 7. Record technically unambiguous cross-repository prerequisites without editing that repository.
 8. Define scope, non-scope, implementation sequence, regression tests, verification commands, risks, and invariants.
 9. Publish a readable issue comment plus versioned Markdown and JSON plan artifacts. When replanning after `Pip: narrow scope — …`, preserve that scope exactly and add one single-line binding to the planner comment: `Pip narrowing binding: {"body_sha256":"<64 hex>","comment_id":<id>,"narrowed_scope":"<exact scope>"}`. Use canonical compact JSON with sorted keys; never broaden or paraphrase the narrowed scope.
+   Tell the authoritative human that approval may be a complete comment containing `approve`, `approved`, `@agent-p1p approve`, or `@agent-p1p approved`; rejection accepts the corresponding `reject`/`rejected` forms. Extra prose is not accepted. Narrowing still requires `Pip: narrow scope — <one-line scope>`.
 10. Return a `planner-result` contract.
 
 ## Stop outcomes

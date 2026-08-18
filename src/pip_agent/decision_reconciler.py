@@ -24,6 +24,12 @@ PLANNER_ACTOR_ID = 292420120
 APPROVE_COMMAND = "Pip: approve exact scope"
 REJECT_COMMAND = "Pip: reject"
 NARROW_PREFIX = "Pip: narrow scope — "
+APPROVE_ALIASES = frozenset(
+    {"approve", "approved", "@agent-p1p approve", "@agent-p1p approved"}
+)
+REJECT_ALIASES = frozenset(
+    {"reject", "rejected", "@agent-p1p reject", "@agent-p1p rejected"}
+)
 GITHUB_COMMENTS_URL = (
     "https://api.github.com/repos/marmot-protocol/mdk/issues/1240/comments"
 )
@@ -298,12 +304,14 @@ def parse_human_decision(comments: list[dict[str, Any]]) -> HumanDecision | None
     if not trusted:
         return None
     latest = max(trusted, key=lambda comment: (comment["created_at"], comment["id"]))
-    body = latest["body"].strip()
+    raw_body = latest["body"]
+    body = raw_body.strip()
+    alias = body.casefold() if "\n" not in raw_body and "\r" not in raw_body else ""
     kind = "unrecognized"
     narrowed_scope: str | None = None
-    if body == APPROVE_COMMAND:
+    if body == APPROVE_COMMAND or alias in APPROVE_ALIASES:
         kind = "approve"
-    elif body == REJECT_COMMAND:
+    elif body == REJECT_COMMAND or alias in REJECT_ALIASES:
         kind = "reject"
     elif body.startswith(NARROW_PREFIX):
         candidate = body[len(NARROW_PREFIX) :].strip()

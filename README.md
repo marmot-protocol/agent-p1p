@@ -37,6 +37,12 @@ The exact `mdk#1240` canary has a separate decision reconciler. `pip-v2-decision
 - `Pip: narrow scope — <one-line scope>` → return to planning with the supplied boundary;
 - `Pip: reject` → abandon the case and route no work.
 
+For approval and rejection, the reconciler also accepts the complete-comment
+aliases `approve`, `approved`, `reject`, and `rejected`, optionally prefixed by
+`@agent-p1p`, with case ignored. Extra prose or multiline comments remain
+unrecognized. Narrowing retains the canonical prefix because its scope text is
+an authorization boundary.
+
 A narrowing decision invalidates its planner version. A later approval cannot dispatch until a newer planner comment has been published and the human replies after that update. The final task verifies same-head CI and two independent same-head re-reviews, then notifies JG. It never merges.
 
 No `@agent-p1p` mention is needed. Wrong actors are ignored; ambiguous text remains held; deletion or invalidation of accepted approval blocks an active build. The public control socket remains restricted to `ensure_canary` and `status`; only the network-enabled oneshot reconciler writes decision evidence.
