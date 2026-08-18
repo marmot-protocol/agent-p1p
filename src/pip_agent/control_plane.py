@@ -114,8 +114,10 @@ DECISION_TIMER_UNIT = """[Unit]
 Description=Poll the exact Pip v2 canary for authoritative GitHub decisions
 
 [Timer]
-OnBootSec=2m
-OnUnitActiveSec=2m
+OnActiveSec=2m
+# Two unauthenticated REST reads per pass must remain below GitHub's
+# 60-request hourly limit, with headroom for activation revalidation.
+OnUnitActiveSec=5m
 RandomizedDelaySec=15s
 Persistent=true
 Unit=pip-v2-decision.service

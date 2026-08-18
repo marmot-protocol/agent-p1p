@@ -600,7 +600,10 @@ def test_control_plane_install_artifacts_are_hardened_and_packaged() -> None:
     ):
         assert directive in decision_unit
     timer_unit = render_decision_timer_unit()
-    assert "OnUnitActiveSec=2m" in timer_unit
+    assert "OnActiveSec=2m" in timer_unit
+    assert "OnBootSec=" not in timer_unit
+    assert "OnUnitActiveSec=5m" in timer_unit
+    assert "OnUnitActiveSec=2m" not in timer_unit
     assert "Persistent=true" in timer_unit
     assert "Unit=pip-v2-decision.service" in timer_unit
 
@@ -619,6 +622,8 @@ def test_control_plane_install_artifacts_are_hardened_and_packaged() -> None:
     ):
         assert directive in route_unit
     route_timer = render_route_consumer_timer()
+    assert "OnActiveSec=15s" in route_timer
+    assert "OnBootSec=" not in route_timer
     assert "OnUnitActiveSec=15s" in route_timer
     assert "Unit=pip-v2-route-consumer.service" in route_timer
 
@@ -636,6 +641,20 @@ def test_control_plane_install_artifacts_are_hardened_and_packaged() -> None:
     assert 'rm -rf -- "$RELEASE_DIR"' in script
     assert "systemctl enable pip-v2-control.service" in script
     assert "systemctl enable pip-v2-decision.timer" in script
+    assert "systemctl start pip-v2-decision.service" not in script
+    assert "decision_reconciliation_pending" in script
+    assert "HAD_DECISION_ROUTE" in script
+    assert "DECISION_ROUTE_REPLACED" in script
+    assert "failed to quiesce $unit" in script
+    assert script.index("existing decision route is unsafe") < script.index(
+        "MUTATION_STARTED=1"
+    )
+    assert script.index("systemctl stop pip-v2-route-consumer.timer") < script.index(
+        "mv -Tf /opt/pip-v2/current.new /opt/pip-v2/current"
+    )
+    assert script.index("control-plane boundary validation failed") < script.rindex(
+        "systemctl start pip-v2-decision.timer"
+    )
     assert "systemctl enable pip-v2-route-consumer.timer" in script
     assert "/etc/systemd/system/pip-v2-decision.service" in script
     assert "/etc/systemd/system/pip-v2-decision.timer" in script

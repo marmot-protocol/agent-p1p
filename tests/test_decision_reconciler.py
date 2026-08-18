@@ -57,6 +57,19 @@ def test_fetch_canary_comments_uses_only_fixed_bounded_endpoint() -> None:
     ]
 
 
+def test_fetch_canary_comments_fails_closed_instead_of_paginating() -> None:
+    calls = 0
+
+    def opener(request: object, *, timeout: int) -> _Response:
+        nonlocal calls
+        calls += 1
+        return _Response(json.dumps([{"id": value} for value in range(100)]).encode())
+
+    with pytest.raises(DecisionError, match="pagination limit exceeded"):
+        fetch_canary_comments(opener=opener)
+    assert calls == 1
+
+
 def test_fetch_canary_base_uses_only_fixed_bounded_endpoint() -> None:
     import json
 

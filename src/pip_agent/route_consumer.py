@@ -59,7 +59,7 @@ ROUTE_CONSUMER_TIMER = """[Unit]
 Description=Poll Pip v2 exact-canary decision route
 
 [Timer]
-OnBootSec=45s
+OnActiveSec=15s
 OnUnitActiveSec=15s
 AccuracySec=1s
 Persistent=true
@@ -348,7 +348,6 @@ def consume_route(
             terminator,
             preserve_route_id=str(route.get("route_id")),
         )
-    checked_live()
     task_ids = route_once(
         route,
         board=board,
@@ -357,7 +356,6 @@ def consume_route(
     )
     result: dict[str, Any] = {"status": "routed", "action": action, "tasks": task_ids}
     if action == "dispatch_builder":
-        checked_live()
         result["gate"] = gate_advancer(
             route,
             task_ids,

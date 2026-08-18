@@ -209,8 +209,7 @@ def test_live_revocation_during_staging_stops_existing_worker_and_never_gates(
     def live_validator(route) -> None:
         nonlocal validations
         validations += 1
-        if validations == 2:
-            raise RouteConsumerError("authorization changed during staging")
+        raise RouteConsumerError("authorization changed during staging")
 
     def fake_route_once(route, *, board, runner, before_activate):
         before_activate()
@@ -232,6 +231,31 @@ def test_live_revocation_during_staging_stops_existing_worker_and_never_gates(
             gate_advancer=fake_gate,
         )
 
-    assert validations == 2
+    assert validations == 1
     assert terminated == [9876]
     assert gate_calls == 0
+
+
+def test_unchanged_materialized_route_does_not_revalidate_without_activation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    validations = 0
+
+    def live_validator(route) -> None:
+        nonlocal validations
+        validations += 1
+
+    monkeypatch.setattr(
+        "pip_agent.route_consumer.route_once",
+        lambda *args, **kwargs: {"build": "t-build"},
+    )
+    result = consume_route(
+        {"ok": True, "case_id": "mdk#1240", "action": "dispatch_builder"},
+        board="pip-mdk",
+        runner=lambda command: subprocess.CompletedProcess(command, 0, "", ""),
+        live_validator=live_validator,
+        gate_advancer=lambda *args, **kwargs: {"status": "waiting"},
+    )
+
+    assert result["gate"] == {"status": "waiting"}
+    assert validations == 0

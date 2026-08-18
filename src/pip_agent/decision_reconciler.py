@@ -36,7 +36,7 @@ GITHUB_COMMENTS_URL = (
 GITHUB_MASTER_URL = "https://api.github.com/repos/marmot-protocol/mdk/commits/master"
 GITHUB_ISSUE_URL = "https://api.github.com/repos/marmot-protocol/mdk/issues/1240"
 CANARY_PLANNED_BASE_SHA = "735c8ff256d33be282044d13abd8dd92b57d4ec8"
-MAX_GITHUB_PAGES = 5
+MAX_GITHUB_PAGES = 1
 MAX_GITHUB_RESPONSE_BYTES = 1_048_576
 
 

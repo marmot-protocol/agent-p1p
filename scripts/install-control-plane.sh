@@ -71,6 +71,8 @@ HAD_DECISION_TIMER=0
 HAD_ROUTER_UNIT=0
 HAD_ROUTER_TIMER=0
 HAD_WHEEL_SHA=0
+HAD_DECISION_ROUTE=0
+DECISION_ROUTE_REPLACED=0
 CREATED_GROUP=0
 CREATED_USER=0
 CREATED_RELEASE=0
@@ -202,6 +204,14 @@ PY
   fi
   if [[ "$OLD_ACTIVE" == "1" ]]; then
     systemctl start pip-v2-control.service >/dev/null 2>&1
+  fi
+  if [[ "$DECISION_ROUTE_REPLACED" == "1" ]]; then
+    if [[ "$HAD_DECISION_ROUTE" == "1" ]]; then
+      install -d -o pip-v2-control -g pip-v2-control -m 0755 /run/pip-v2
+      cp -a -- "$INSTALL_TMP/backup/decision-route" /run/pip-v2/decision-route.json
+    else
+      rm -f -- /run/pip-v2/decision-route.json
+    fi
   fi
   if [[ "$OLD_TIMER_ACTIVE" == "1" ]]; then
     systemctl start pip-v2-decision.timer >/dev/null 2>&1
@@ -375,6 +385,38 @@ if [[ -e /etc/systemd/system/pip-v2-route-consumer.service ]]; then cp -a /etc/s
 if [[ -e /etc/systemd/system/pip-v2-route-consumer.timer ]]; then cp -a /etc/systemd/system/pip-v2-route-consumer.timer "$INSTALL_TMP/backup/router-timer"; HAD_ROUTER_TIMER=1; fi
 if [[ -e /opt/pip-v2/WHEEL.SHA256 ]]; then cp -a /opt/pip-v2/WHEEL.SHA256 "$INSTALL_TMP/backup/wheel-sha"; HAD_WHEEL_SHA=1; fi
 
+if [[ -e /run/pip-v2/decision-route.json || -L /run/pip-v2/decision-route.json ]]; then
+  [[ -f /run/pip-v2/decision-route.json && ! -L /run/pip-v2/decision-route.json ]] || {
+    echo "existing decision route is unsafe" >&2
+    exit 1
+  }
+fi
+
+MUTATION_STARTED=1
+stop_if_loaded() {
+  local unit="$1" load_state
+  load_state="$(systemctl show "$unit" -p LoadState --value 2>/dev/null || true)"
+  if [[ "$load_state" != "not-found" ]]; then
+    systemctl stop "$unit"
+  fi
+  if systemctl is-active --quiet "$unit"; then
+    echo "failed to quiesce $unit" >&2
+    return 1
+  fi
+}
+stop_if_loaded pip-v2-route-consumer.timer
+stop_if_loaded pip-v2-route-consumer.service
+stop_if_loaded pip-v2-decision.timer
+stop_if_loaded pip-v2-decision.service
+if [[ -e /run/pip-v2/decision-route.json || -L /run/pip-v2/decision-route.json ]]; then
+  [[ -f /run/pip-v2/decision-route.json && ! -L /run/pip-v2/decision-route.json ]] || {
+    echo "existing decision route is unsafe" >&2
+    exit 1
+  }
+  cp -a -- /run/pip-v2/decision-route.json "$INSTALL_TMP/backup/decision-route"
+  HAD_DECISION_ROUTE=1
+fi
+
 prepare_system_dir() {
   local path="$1" created_var="$2"
   if [[ -e "$path" || -L "$path" ]]; then
@@ -388,7 +430,6 @@ prepare_system_dir() {
   fi
 }
 
-MUTATION_STARTED=1
 prepare_system_dir /opt/pip-v2 CREATED_OPT_DIR
 prepare_system_dir /opt/pip-v2/releases CREATED_RELEASES_DIR
 prepare_system_dir /etc/pip-v2 CREATED_ETC_DIR
@@ -597,13 +638,14 @@ systemctl restart pip-v2-control.service
 systemctl is-active --quiet pip-v2-control.service
 runuser -u "$CALLER" -- /usr/local/bin/pip-v2-control request \
   --socket /run/pip-v2/control.sock --operation ensure_canary >/dev/null
+printf '%s\n' \
+  '{"action":"stop","case_id":"mdk#1240","error":"decision_reconciliation_pending","ok":false}' \
+  > "$INSTALL_TMP/decision-route.json"
+install -o pip-v2-control -g "$CALLER_GID" -m 0640 \
+  "$INSTALL_TMP/decision-route.json" /run/pip-v2/decision-route.json
+DECISION_ROUTE_REPLACED=1
 systemctl enable pip-v2-decision.timer
-systemctl start pip-v2-decision.service
-systemctl restart pip-v2-decision.timer
-systemctl is-active --quiet pip-v2-decision.timer
 systemctl enable pip-v2-route-consumer.timer
-systemctl restart pip-v2-route-consumer.timer
-systemctl is-active --quiet pip-v2-route-consumer.timer
 
 fail_closed() {
   echo "control-plane boundary validation failed" >&2
@@ -623,5 +665,9 @@ fi
 runuser -u "$CALLER" -- /usr/local/bin/pip-v2-control request \
   --socket /run/pip-v2/control.sock --operation status >/dev/null || fail_closed
 
+systemctl start pip-v2-decision.timer
+systemctl is-active --quiet pip-v2-decision.timer
+systemctl start pip-v2-route-consumer.timer
+systemctl is-active --quiet pip-v2-route-consumer.timer
 MUTATION_STARTED=0
 printf 'installed and validated pip-v2-control for marmot-protocol/mdk#%s; caller=%s\n' "$ISSUE" "$CALLER"
