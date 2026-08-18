@@ -29,6 +29,7 @@ ConditionPathExists=/run/pip-v2/decision-route.json
 Type=oneshot
 User=@CALLER@
 Group=@CALLER_GROUP@
+LoadCredential=github.token:/etc/pip-v2/github.token
 Environment=HOME=@CALLER_HOME@
 Environment=PATH=@CALLER_HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=PYTHONPATH=/opt/pip-v2/current

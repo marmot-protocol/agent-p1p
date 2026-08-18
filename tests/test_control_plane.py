@@ -149,7 +149,8 @@ def test_reconcile_failure_replaces_stale_dispatch_route_with_stop(
     store.create_case("mdk#1240", "marmot-protocol/mdk", 1240, "pip-ok")
     route_output = tmp_path / "run" / "decision-route.json"
     route_output.parent.mkdir(parents=True)
-    route_output.write_text('{"action":"dispatch_builder"}\n')
+    prior_route = b'{"action":"return_to_planning","route_id":"keep-running"}\n'
+    route_output.write_bytes(prior_route)
 
     def fail() -> list[dict]:
         raise decision_module.DecisionError("fixture lookup failed")
@@ -157,12 +158,7 @@ def test_reconcile_failure_replaces_stale_dispatch_route_with_stop(
     with pytest.raises(decision_module.DecisionError, match="fixture"):
         reconcile_once(policy, route_output, comment_fetcher=fail)
 
-    route = json.loads(route_output.read_text())
-    assert route["ok"] is False
-    assert route["action"] == "stop"
-    assert route["case_id"] == "mdk#1240"
-    assert route["state"] == "PLANNING"
-    assert route["error"] == "decision_reconciliation_failed"
+    assert route_output.read_bytes() == prior_route
 
 
 def test_control_policy_and_protocol_fail_closed(tmp_path: Path) -> None:

@@ -5,6 +5,7 @@ PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 unset PYTHONPATH PYTHONHOME PYTHONSTARTUP
 umask 077
+GITHUB_CREDENTIAL=/etc/pip-v2/github.token
 
 usage() {
   echo "usage: sudo $0 --installer-sha256 HEX --wheel /absolute/path.whl --sha256 HEX --caller USER --issue 1240" >&2
@@ -384,6 +385,20 @@ if [[ -e /etc/systemd/system/pip-v2-decision.timer ]]; then cp -a /etc/systemd/s
 if [[ -e /etc/systemd/system/pip-v2-route-consumer.service ]]; then cp -a /etc/systemd/system/pip-v2-route-consumer.service "$INSTALL_TMP/backup/router-unit"; HAD_ROUTER_UNIT=1; fi
 if [[ -e /etc/systemd/system/pip-v2-route-consumer.timer ]]; then cp -a /etc/systemd/system/pip-v2-route-consumer.timer "$INSTALL_TMP/backup/router-timer"; HAD_ROUTER_TIMER=1; fi
 if [[ -e /opt/pip-v2/WHEEL.SHA256 ]]; then cp -a /opt/pip-v2/WHEEL.SHA256 "$INSTALL_TMP/backup/wheel-sha"; HAD_WHEEL_SHA=1; fi
+
+if [[ ! -f "$GITHUB_CREDENTIAL" || -L "$GITHUB_CREDENTIAL" ]]; then
+  echo "GitHub credential must be a root-owned mode-0600 regular file" >&2
+  exit 1
+fi
+read -r credential_uid credential_gid credential_mode credential_size < <(
+  stat -Lc '%u %g %a %s' -- "$GITHUB_CREDENTIAL"
+)
+if [[ "$credential_uid" != "0" || "$credential_gid" != "0" ||
+      "$credential_mode" != "600" || "$credential_size" -lt 1 ||
+      "$credential_size" -gt 512 ]]; then
+  echo "GitHub credential must be a root-owned mode-0600 regular file" >&2
+  exit 1
+fi
 
 if [[ -e /run/pip-v2/decision-route.json || -L /run/pip-v2/decision-route.json ]]; then
   [[ -f /run/pip-v2/decision-route.json && ! -L /run/pip-v2/decision-route.json ]] || {

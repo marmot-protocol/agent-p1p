@@ -595,6 +595,7 @@ def test_control_plane_install_artifacts_are_hardened_and_packaged() -> None:
         "ProtectHome=true",
         "NoNewPrivileges=true",
         "RestrictAddressFamilies=AF_INET AF_INET6",
+        "LoadCredential=github.token:/etc/pip-v2/github.token",
         "pip-v2-control reconcile-once --config /etc/pip-v2/control.json",
         "--route-output /run/pip-v2/decision-route.json",
     ):
@@ -611,6 +612,7 @@ def test_control_plane_install_artifacts_are_hardened_and_packaged() -> None:
     for directive in (
         "User=jeff",
         "Group=jeff",
+        "LoadCredential=github.token:/etc/pip-v2/github.token",
         "Type=oneshot",
         "NoNewPrivileges=true",
         "ProtectSystem=strict",
@@ -643,6 +645,8 @@ def test_control_plane_install_artifacts_are_hardened_and_packaged() -> None:
     assert "systemctl enable pip-v2-decision.timer" in script
     assert "systemctl start pip-v2-decision.service" not in script
     assert "decision_reconciliation_pending" in script
+    assert "GITHUB_CREDENTIAL=/etc/pip-v2/github.token" in script
+    assert "GitHub credential must be a root-owned mode-0600 regular file" in script
     assert "HAD_DECISION_ROUTE" in script
     assert "DECISION_ROUTE_REPLACED" in script
     assert "failed to quiesce $unit" in script

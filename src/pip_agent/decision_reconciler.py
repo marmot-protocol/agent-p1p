@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import stat
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -38,6 +41,7 @@ GITHUB_ISSUE_URL = "https://api.github.com/repos/marmot-protocol/mdk/issues/1240
 CANARY_PLANNED_BASE_SHA = "735c8ff256d33be282044d13abd8dd92b57d4ec8"
 MAX_GITHUB_PAGES = 1
 MAX_GITHUB_RESPONSE_BYTES = 1_048_576
+MAX_GITHUB_CREDENTIAL_BYTES = 512
 
 
 class DecisionError(RuntimeError):
@@ -50,6 +54,46 @@ class PinnedEvidenceError(DecisionError):
 
 class NarrowingEvidenceError(PinnedEvidenceError):
     """Previously accepted narrowing evidence changed or disappeared."""
+
+
+def _github_headers() -> dict[str, str]:
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "pip-v2-control/2",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    credentials_directory = os.environ.get("CREDENTIALS_DIRECTORY")
+    if not credentials_directory:
+        raise DecisionError("GitHub credential is unavailable")
+    credential_path = Path(credentials_directory) / "github.token"
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            credential_path,
+            os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+        )
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_size > MAX_GITHUB_CREDENTIAL_BYTES
+        ):
+            raise DecisionError("GitHub credential is malformed")
+        raw = os.read(descriptor, MAX_GITHUB_CREDENTIAL_BYTES + 1)
+    except OSError as exc:
+        raise DecisionError("GitHub credential is unavailable") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    token = raw.removesuffix(b"\n")
+    if (
+        not token
+        or b"\n" in token
+        or b"\r" in token
+        or not re.fullmatch(rb"[A-Za-z0-9_]+", token)
+    ):
+        raise DecisionError("GitHub credential is malformed")
+    headers["Authorization"] = f"Bearer {token.decode('ascii')}"
+    return headers
 
 
 @dataclass(frozen=True)
@@ -82,11 +126,7 @@ def fetch_canary_comments(
     for page in range(1, MAX_GITHUB_PAGES + 1):
         request = Request(
             f"{GITHUB_COMMENTS_URL}?per_page=100&page={page}",
-            headers={
-                "Accept": "application/vnd.github+json",
-                "User-Agent": "pip-v2-control/2",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
+            headers=_github_headers(),
         )
         try:
             with opener(request, timeout=10) as response:
@@ -110,11 +150,7 @@ def fetch_canary_comments(
 def fetch_canary_base_sha(*, opener: Callable[..., Any] = urlopen) -> str:
     request = Request(
         GITHUB_MASTER_URL,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "pip-v2-control/2",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
+        headers=_github_headers(),
     )
     try:
         with opener(request, timeout=10) as response:
@@ -136,11 +172,7 @@ def fetch_canary_base_sha(*, opener: Callable[..., Any] = urlopen) -> str:
 def fetch_canary_issue_authorization(*, opener: Callable[..., Any] = urlopen) -> None:
     request = Request(
         GITHUB_ISSUE_URL,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "pip-v2-control/2",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
+        headers=_github_headers(),
     )
     try:
         with opener(request, timeout=10) as response:

@@ -36,6 +36,12 @@ class _Response:
         return self.payload[:limit]
 
 
+@pytest.fixture(autouse=True)
+def _github_credential(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "github.token").write_text("test_public_read_token\n")
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(tmp_path))
+
+
 def test_fetch_canary_comments_uses_only_fixed_bounded_endpoint() -> None:
     import json
 
@@ -68,6 +74,37 @@ def test_fetch_canary_comments_fails_closed_instead_of_paginating() -> None:
     with pytest.raises(DecisionError, match="pagination limit exceeded"):
         fetch_canary_comments(opener=opener)
     assert calls == 1
+
+
+def test_fetch_canary_comments_uses_systemd_github_credential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "github.token").write_text("test_public_read_token\n")
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(tmp_path))
+
+    def opener(request: object, *, timeout: int) -> _Response:
+        assert request.get_header("Authorization") == "Bearer test_public_read_token"  # type: ignore[attr-defined]
+        return _Response(b"[]")
+
+    assert fetch_canary_comments(opener=opener) == []
+
+
+def test_fetch_canary_comments_requires_systemd_github_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CREDENTIALS_DIRECTORY")
+    with pytest.raises(DecisionError, match="GitHub credential is unavailable"):
+        fetch_canary_comments(opener=lambda *_args, **_kwargs: None)
+
+
+def test_fetch_canary_comments_rejects_multiline_credential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "github.token").write_text("first\nsecond\n")
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(tmp_path))
+
+    with pytest.raises(DecisionError, match="GitHub credential is malformed"):
+        fetch_canary_comments(opener=lambda *_args, **_kwargs: None)
 
 
 def test_fetch_canary_base_uses_only_fixed_bounded_endpoint() -> None:

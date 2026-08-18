@@ -80,6 +80,7 @@ Type=oneshot
 User=pip-v2-control
 Group=pip-v2-control
 SupplementaryGroups=@CALLER_GROUP@
+LoadCredential=github.token:/etc/pip-v2/github.token
 Environment=PYTHONPATH=/opt/pip-v2/current
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONSAFEPATH=1
@@ -455,24 +456,13 @@ def reconcile_once(
     base_fetcher: Callable[[], str] = fetch_canary_base_sha,
 ) -> dict[str, Any]:
     store = CaseStore(policy.state_database)
-    try:
-        result = reconcile_human_decision(
-            store, comment_fetcher(), current_base_sha=base_fetcher()
-        )
-    except BaseException:
-        try:
-            state = store.get_case(policy.case_id)["state"]
-        except CaseStoreError:
-            state = "UNKNOWN"
-        failure = {
-            "ok": False,
-            "action": "stop",
-            "case_id": policy.case_id,
-            "state": state,
-            "error": "decision_reconciliation_failed",
-        }
-        _write_route_output(route_output, failure, group_id=policy.socket_group)
-        raise
+    # A transient external lookup failure must prevent new activation without
+    # destroying already-authorized active work. Keep the last durable route:
+    # route_consumer performs its own live validation immediately before every
+    # activation, while an already-running worker can finish and report.
+    result = reconcile_human_decision(
+        store, comment_fetcher(), current_base_sha=base_fetcher()
+    )
     payload = {"ok": True, "case_id": policy.case_id, **result}
     _write_route_output(route_output, payload, group_id=policy.socket_group)
     return payload
