@@ -28,7 +28,7 @@ The Hermes `cursor-reviewer` profile is the v1-style task orchestrator. It deleg
      --workspace <checkout> \
      <complete-review-prompt>
    ```
-   Include the issue, approved planner evidence, exact PR/head, full diff, security/performance rubric, and review-result contract. Do not use `--resume`, `--continue`, or unsupported `--no-mcps` options.
+   Include the issue, active planner evidence, exact PR/head, full diff, security/performance rubric, and review-result contract. Do not use `--resume`, `--continue`, or unsupported `--no-mcps` options.
 5. Reject any model identifier Cursor reports that differs from the request. Record that Cursor does not independently attest provider-side routing.
 6. Review trust boundaries, data exposure, unsafe parsing, misuse/abuse paths, resource bounds, algorithmic regressions, concurrency, and denial-of-service risk. Treat any unexpected MLS/CGKA, key, trust-anchor, authorization-semantic, or push-context change as blocking and escalate to JG.
 7. Independently verify every material claim against the exact checkout and GitHub. Do not alter branches, commits, PR text, labels, or code.

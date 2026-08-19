@@ -16,6 +16,7 @@ from pip_agent.decision_reconciler import (
     fetch_canary_comments,
     fetch_canary_issue_authorization,
     parse_human_decision,
+    parse_planner_evidence,
     reconcile_human_decision,
 )
 
@@ -190,15 +191,32 @@ def _planner() -> dict[str, object]:
     )
 
 
-def _versioned_planner(*, version: int, base: str) -> dict[str, object]:
+def _versioned_planner(
+    *, version: int, base: str, outcome: str = "NEEDS_HUMAN_SCOPE_DECISION"
+) -> dict[str, object]:
     body = (
         f"Pip planning result for #1240 — plan v{version} "
-        "(`NEEDS_HUMAN_SCOPE_DECISION`)\n\n"
+        f"(`{outcome}`)\n\n"
         f"Freshly revalidated against current `master` at `{base}`.\n\n"
         "Proposed boundary: projection only; no MLS, keys, trust, or authorization changes."
     )
+    if outcome == "PROCEED":
+        binding = json.dumps(
+            {
+                "authorized_scope": "repair repository-local projection delivery",
+                "dependencies": [],
+                "open_decisions": [],
+                "outcome": outcome,
+                "plan_version": version,
+                "sensitive_scope": [],
+                "task_id": f"t_plan{version}",
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        body += f"\n\nPip execution binding: {binding}"
     return _comment(
-        CANARY_PLANNER_COMMENT_ID,
+        CANARY_PLANNER_COMMENT_ID + version * 1_000,
         "agent-p1p",
         body,
         created_at="2026-08-15T21:06:24Z",
@@ -255,11 +273,13 @@ def test_parse_human_decision_accepts_only_explicit_trusted_commands(
     ("body", "expected_kind"),
     [
         ("approve", "approve"),
+        ("approve\n", "approve"),
         ("approved", "approve"),
         ("Approve", "approve"),
         ("@agent-p1p approve", "approve"),
         ("@agent-p1p approved", "approve"),
         ("reject", "reject"),
+        ("reject\n", "reject"),
         ("rejected", "reject"),
         ("@agent-p1p reject", "reject"),
         ("@agent-p1p rejected", "reject"),
@@ -289,13 +309,13 @@ def test_parse_human_decision_accepts_simple_whole_comment_aliases(
         "approved, thanks",
         "not approved",
         "approve\nplease",
-        "approve\n",
         "\napprove",
+        "approve\n\n",
         "approve\r",
         "\rapprove",
         "approve\r\n",
-        "reject\n",
         "\nreject",
+        "reject\n\n",
         "reject\r",
         "\rreject",
         "reject\r\n",
@@ -450,7 +470,7 @@ def test_reconcile_approval_is_durable_idempotent_and_routes_builder(
     assert str(CANARY_PLANNER_COMMENT_ID + 1) in events[-1]["reason"]
 
 
-def test_stale_planned_base_never_dispatches_builder(
+def test_planned_base_drift_does_not_block_human_approved_builder(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -475,23 +495,13 @@ def test_stale_planned_base_never_dispatches_builder(
     first = reconcile_human_decision(store, comments, current_base_sha="b" * 40)
     repeated = reconcile_human_decision(store, comments, current_base_sha="c" * 40)
 
-    assert first["action"] == "replan"
-    assert first["state"] == "PLANNING"
-    assert first["replan_reason"] == "stale_base"
-    assert first["current_base_sha"] == "b" * 40
-    assert repeated["action"] == "replan"
-    assert repeated["state"] == "PLANNING"
+    assert first["action"] == "dispatch_builder"
+    assert first["state"] == "BUILDING"
+    assert repeated == first
     assert store.get_case("mdk#1240")["plan_version"] == 1
-    assert (
-        sum(
-            "HUMAN_APPROVED_STALE_BASE" in event["reason"]
-            for event in store.list_events("mdk#1240")
-        )
-        == 1
-    )
 
 
-def test_accepted_approval_returns_to_planning_when_base_later_changes(
+def test_accepted_approval_remains_stable_when_base_later_changes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -517,10 +527,373 @@ def test_accepted_approval_returns_to_planning_when_base_later_changes(
     replay = reconcile_human_decision(store, comments, current_base_sha="f" * 40)
 
     assert first["action"] == "dispatch_builder"
-    assert replay["action"] == "replan"
-    assert replay["state"] == "PLANNING"
-    assert replay["replan_reason"] == "stale_base"
-    assert replay["route_id"] != first["route_id"]
+    assert replay == first
+
+
+def test_ordinary_proceed_plan_auto_dispatches_without_human_decision(
+    tmp_path: Path,
+) -> None:
+    store = CaseStore(tmp_path / "cases.db")
+    store.create_case("mdk#1240", "marmot-protocol/mdk", 1240, "pip-ok")
+    planner = _versioned_planner(version=1, base="a" * 40, outcome="PROCEED")
+
+    first = reconcile_human_decision(store, [planner], current_base_sha="b" * 40)
+    replay = reconcile_human_decision(store, [planner], current_base_sha="c" * 40)
+
+    assert first["action"] == "dispatch_builder"
+    assert first["decision"] == "automatic"
+    assert first["state"] == "BUILDING"
+    assert replay == first
+    assert store.get_case("mdk#1240")["plan_version"] == 1
+    assert store.get_case("mdk#1240")["state"] == "BUILDING"
+
+
+def test_automatic_proceed_requires_machine_execution_binding(tmp_path: Path) -> None:
+    store = CaseStore(tmp_path / "cases.db")
+    store.create_case("mdk#1240", "marmot-protocol/mdk", 1240, "pip-ok")
+    planner = _versioned_planner(version=2, base="a" * 40, outcome="PROCEED")
+    planner["body"] = str(planner["body"]).split("\n\nPip execution binding:", 1)[0]
+
+    with pytest.raises(DecisionError, match="requires one execution binding"):
+        reconcile_human_decision(store, [planner])
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        "change MLS keys and membership authorization semantics",
+        "rotate key material for message encryption",
+        "replace the trust anchor",
+        "change admin authorization semantics",
+        "change push-payload context construction",
+        "change authentication and session authorization flows",
+        "modify credential storage for notification delivery",
+        "change authorization semantics for membership notification events",
+        "change encrypted push notification metadata construction",
+    ],
+)
+def test_sensitive_scope_cannot_auto_dispatch(tmp_path: Path, scope: str) -> None:
+    store = CaseStore(tmp_path / "cases.db")
+    store.create_case("mdk#1240", "marmot-protocol/mdk", 1240, "pip-ok")
+    planner = _versioned_planner(version=2, base="a" * 40, outcome="PROCEED")
+    prefix, raw_binding = str(planner["body"]).rsplit("Pip execution binding: ", 1)
+    binding = json.loads(raw_binding)
+    binding["authorized_scope"] = scope
+    planner["body"] = (
+        prefix
+        + "Pip execution binding: "
+        + json.dumps(binding, separators=(",", ":"), sort_keys=True)
+    )
+
+    with pytest.raises(DecisionError, match="execution binding is invalid"):
+        reconcile_human_decision(store, [planner])
+
+
+def test_edited_older_immutable_plan_cannot_override_newer_version() -> None:
+    older = _versioned_planner(version=2, base="a" * 40, outcome="PROCEED")
+    newer = _versioned_planner(version=3, base="b" * 40, outcome="PROCEED")
+    newer["created_at"] = newer["updated_at"] = "2026-08-15T21:08:00Z"
+    older["updated_at"] = "2026-08-15T21:09:00Z"
+
+    with pytest.raises(DecisionError, match="immutable planner comment was edited"):
+        parse_planner_evidence([newer, older])
+
+
+def test_pinned_legacy_comment_id_does_not_exempt_changed_body() -> None:
+    changed = _versioned_planner(version=1, base="a" * 40, outcome="PROCEED")
+    changed["id"] = CANARY_PLANNER_COMMENT_ID
+    changed["html_url"] = (
+        "https://github.com/marmot-protocol/mdk/issues/1240"
+        f"#issuecomment-{CANARY_PLANNER_COMMENT_ID}"
+    )
+
+    with pytest.raises(DecisionError, match="legacy planner comment digest"):
+        parse_planner_evidence([changed])
+
+
+def test_unedited_newer_plan_version_wins_over_timestamp_order() -> None:
+    older = _versioned_planner(version=2, base="a" * 40, outcome="PROCEED")
+    newer = _versioned_planner(version=3, base="b" * 40, outcome="PROCEED")
+    older["created_at"] = older["updated_at"] = "2026-08-15T21:09:00Z"
+    newer["created_at"] = newer["updated_at"] = "2026-08-15T21:08:00Z"
+
+    evidence = parse_planner_evidence([newer, older])
+
+    assert evidence.plan_version == 3
+    assert evidence.planned_base_sha == "b" * 40
+
+
+def test_exact_legacy_mutable_plan_can_migrate_to_immutable_new_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy = _versioned_planner(version=5, base="a" * 40, outcome="PROCEED")
+    legacy["id"] = 5331190946
+    legacy["html_url"] = (
+        "https://github.com/marmot-protocol/mdk/issues/1240#issuecomment-5331190946"
+    )
+    legacy["updated_at"] = "2026-08-15T21:09:00Z"
+    monkeypatch.setattr(
+        "pip_agent.decision_reconciler.LEGACY_MUTABLE_PLANNER_COMMENTS",
+        {legacy["id"]: hashlib.sha256(str(legacy["body"]).encode()).hexdigest()},
+    )
+    current = _versioned_planner(version=6, base="b" * 40, outcome="PROCEED")
+    current["created_at"] = current["updated_at"] = "2026-08-15T21:10:00Z"
+
+    evidence = parse_planner_evidence([legacy, current])
+
+    assert evidence.plan_version == 6
+    assert evidence.comment_id == current["id"]
+
+
+def test_mutated_legacy_plan_fails_closed_even_with_new_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy = _versioned_planner(version=5, base="a" * 40, outcome="PROCEED")
+    legacy["id"] = 5331190946
+    legacy["html_url"] = (
+        "https://github.com/marmot-protocol/mdk/issues/1240#issuecomment-5331190946"
+    )
+    monkeypatch.setattr(
+        "pip_agent.decision_reconciler.LEGACY_MUTABLE_PLANNER_COMMENTS",
+        {legacy["id"]: "0" * 64},
+    )
+    current = _versioned_planner(version=6, base="b" * 40, outcome="PROCEED")
+
+    with pytest.raises(DecisionError, match="legacy planner comment digest"):
+        parse_planner_evidence([legacy, current])
+
+
+def test_automatic_proceed_dispatches_builder_without_human_comment(
+    tmp_path: Path,
+) -> None:
+    store = CaseStore(tmp_path / "cases.db")
+    store.create_case("mdk#1240", "marmot-protocol/mdk", 1240, "pip-ok")
+    first_plan = _versioned_planner(version=1, base="a" * 40, outcome="PROCEED")
+    first = reconcile_human_decision(store, [first_plan], current_base_sha="a" * 40)
+
+    newer_plan = _versioned_planner(version=2, base="b" * 40, outcome="PROCEED")
+    result = reconcile_human_decision(
+        store, [first_plan, newer_plan], current_base_sha="b" * 40
+    )
+
+    assert result == first
+    assert result["action"] == "dispatch_builder"
+    assert result["state"] == "BUILDING"
+
+
+def test_rejection_cannot_be_bypassed_by_a_newer_proceed_plan(tmp_path: Path) -> None:
+    store = CaseStore(tmp_path / "cases.db")
+    store.create_case("mdk#1240", "marmot-protocol/mdk", 1240, "pip-ok")
+    rejection = _comment(
+        CANARY_PLANNER_COMMENT_ID + 41,
+        "erskingardner",
+        "Pip: reject",
+        created_at="2026-08-15T21:05:00Z",
+    )
+    planner = _versioned_planner(version=2, base="a" * 40, outcome="PROCEED")
+
+    result = reconcile_human_decision(store, [rejection, planner])
+
+    assert result["action"] == "stop"
+    assert result["decision"] == "reject"
+    assert result["state"] == "ABANDONED"
+
+
+def test_unbound_narrowing_cannot_be_bypassed_by_a_newer_proceed_plan(
+    tmp_path: Path,
+) -> None:
+    store = CaseStore(tmp_path / "cases.db")
+    store.create_case("mdk#1240", "marmot-protocol/mdk", 1240, "pip-ok")
+    narrow = _comment(
+        CANARY_PLANNER_COMMENT_ID + 42,
+        "erskingardner",
+        "Pip: narrow scope — projection only",
+        created_at="2026-08-15T21:05:00Z",
+    )
+    planner = _versioned_planner(version=2, base="a" * 40, outcome="PROCEED")
+
+    result = reconcile_human_decision(store, [narrow, planner])
+
+    assert result["action"] == "replan"
+    assert result["decision"] == "narrow"
+
+
+def test_bound_narrowing_allows_newer_proceed_plan_to_auto_dispatch(
+    tmp_path: Path,
+) -> None:
+    store = CaseStore(tmp_path / "cases.db")
+    store.create_case("mdk#1240", "marmot-protocol/mdk", 1240, "pip-ok")
+    narrow = _comment(
+        CANARY_PLANNER_COMMENT_ID + 43,
+        "erskingardner",
+        "Pip: narrow scope — projection only",
+        created_at="2026-08-15T21:05:00Z",
+    )
+    planner = _versioned_planner(version=2, base="a" * 40, outcome="PROCEED")
+    prefix, raw_execution = str(planner["body"]).rsplit("Pip execution binding: ", 1)
+    execution = json.loads(raw_execution)
+    execution["authorized_scope"] = "projection only"
+    planner["body"] = (
+        prefix
+        + "Pip execution binding: "
+        + json.dumps(execution, separators=(",", ":"), sort_keys=True)
+    )
+    binding = json.dumps(
+        {
+            "body_sha256": hashlib.sha256(str(narrow["body"]).encode()).hexdigest(),
+            "comment_id": narrow["id"],
+            "narrowed_scope": "projection only",
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    planner["body"] = f"{planner['body']}\n\nPip narrowing binding: {binding}"
+
+    result = reconcile_human_decision(store, [narrow, planner])
+
+    assert result["action"] == "dispatch_builder"
+    assert result["decision"] == "automatic"
+    assert result["narrowed_scope"] == "projection only"
+    assert result["authorized_scope"] == "projection only"
+
+
+def test_narrowing_binding_must_exactly_bound_execution_scope(tmp_path: Path) -> None:
+    store = CaseStore(tmp_path / "cases.db")
+    store.create_case("mdk#1240", "marmot-protocol/mdk", 1240, "pip-ok")
+    narrow = _comment(
+        CANARY_PLANNER_COMMENT_ID + 44,
+        "erskingardner",
+        "Pip: narrow scope — tests only",
+        created_at="2026-08-15T21:05:00Z",
+    )
+    planner = _versioned_planner(version=2, base="a" * 40, outcome="PROCEED")
+    binding = json.dumps(
+        {
+            "body_sha256": hashlib.sha256(str(narrow["body"]).encode()).hexdigest(),
+            "comment_id": narrow["id"],
+            "narrowed_scope": "tests only",
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    planner["body"] = f"{planner['body']}\n\nPip narrowing binding: {binding}"
+
+    with pytest.raises(DecisionError, match="execution binding is invalid"):
+        reconcile_human_decision(store, [narrow, planner])
+
+
+def test_human_approval_does_not_retarget_automatic_proceed_plan(
+    tmp_path: Path,
+) -> None:
+    store = CaseStore(tmp_path / "cases.db")
+    store.create_case("mdk#1240", "marmot-protocol/mdk", 1240, "pip-ok")
+    planner = _versioned_planner(version=1, base="a" * 40, outcome="PROCEED")
+    first = reconcile_human_decision(store, [planner], current_base_sha="a" * 40)
+    approval = _comment(
+        CANARY_PLANNER_COMMENT_ID + 1,
+        "erskingardner",
+        "Pip: approve exact scope",
+        created_at="2026-08-15T21:07:00Z",
+    )
+
+    replay = reconcile_human_decision(
+        store, [planner, approval], current_base_sha="b" * 40
+    )
+
+    assert replay == first
+    assert replay["decision"] == "automatic"
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "ALREADY_FIXED",
+        "NOT_REPRODUCIBLE",
+        "DUPLICATE",
+        "CROSS_REPO_DEPENDENCY",
+        "ABANDON",
+        "BLOCKED_UNEXPECTED_MODEL",
+    ],
+)
+def test_approval_never_dispatches_terminal_or_dependency_outcome(
+    tmp_path: Path, outcome: str
+) -> None:
+    store = CaseStore(tmp_path / "cases.db")
+    store.create_case("mdk#1240", "marmot-protocol/mdk", 1240, "pip-ok")
+    planner = _versioned_planner(version=2, base="a" * 40, outcome=outcome)
+    approval = _comment(
+        CANARY_PLANNER_COMMENT_ID + 50,
+        "erskingardner",
+        "Pip: approve exact scope",
+        created_at="2026-08-15T21:07:00Z",
+    )
+
+    result = reconcile_human_decision(store, [planner, approval])
+
+    assert result["action"] == "wait"
+    assert result["state"] == "PLANNING"
+    assert result["reason"] == "planner_outcome_not_executable"
+
+
+@pytest.mark.parametrize(
+    ("created_at", "updated_at"),
+    [
+        ("not-a-timestamp", "not-a-timestamp"),
+        ("2026-08-15T21:07:00+00:00", "2026-08-15T21:07:00+00:00"),
+        ("2026-08-15T21:08:00Z", "2026-08-15T21:07:00Z"),
+    ],
+)
+def test_malformed_or_regressing_comment_timestamps_fail_closed(
+    created_at: str, updated_at: str
+) -> None:
+    planner = _versioned_planner(version=2, base="a" * 40, outcome="PROCEED")
+    approval = _comment(
+        CANARY_PLANNER_COMMENT_ID + 51,
+        "erskingardner",
+        "Pip: approve exact scope",
+        created_at=created_at,
+    )
+    approval["updated_at"] = updated_at
+
+    with pytest.raises(DecisionError, match="timestamp"):
+        parse_human_decision([planner, approval])
+
+
+def test_fractional_timestamp_order_is_chronological() -> None:
+    planner = _versioned_planner(version=2, base="a" * 40, outcome="PROCEED")
+    planner["created_at"] = "2026-08-15T21:07:00Z"
+    planner["updated_at"] = "2026-08-15T21:07:00Z"
+    approval = _comment(
+        CANARY_PLANNER_COMMENT_ID + 52,
+        "erskingardner",
+        "Pip: approve exact scope",
+        created_at="2026-08-15T21:07:00.100000Z",
+    )
+
+    decision = parse_human_decision([planner, approval])
+
+    assert decision is not None
+    assert decision.kind == "approve"
+
+
+def test_human_rejection_supersedes_automatic_proceed_plan(tmp_path: Path) -> None:
+    store = CaseStore(tmp_path / "cases.db")
+    store.create_case("mdk#1240", "marmot-protocol/mdk", 1240, "pip-ok")
+    planner = _versioned_planner(version=1, base="a" * 40, outcome="PROCEED")
+    reconcile_human_decision(store, [planner], current_base_sha="a" * 40)
+    rejection = _comment(
+        CANARY_PLANNER_COMMENT_ID + 1,
+        "erskingardner",
+        "Pip: reject",
+        created_at="2026-08-15T21:07:00Z",
+    )
+
+    result = reconcile_human_decision(
+        store, [planner, rejection], current_base_sha="b" * 40
+    )
+
+    assert result["action"] == "stop"
+    assert result["state"] == "ABANDONED"
 
 
 def test_reconcile_reject_abandons_without_builder_route(
@@ -776,6 +1149,7 @@ def test_new_planner_version_resolves_narrowing_and_can_dispatch(
     reconcile_human_decision(store, [planner_v2, narrow], current_base_sha=base)
 
     planner_v3 = _versioned_planner(version=3, base=base)
+    planner_v3["created_at"] = "2026-08-15T21:08:00Z"
     planner_v3["updated_at"] = "2026-08-15T21:08:00Z"
     approve = _comment(
         CANARY_PLANNER_COMMENT_ID + 2,
@@ -803,6 +1177,7 @@ def test_new_planner_version_resolves_narrowing_and_can_dispatch(
             sort_keys=True,
         )
     )
+    planner_v4["created_at"] = "2026-08-15T21:10:00Z"
     planner_v4["updated_at"] = "2026-08-15T21:10:00Z"
     approve_v4 = _comment(
         CANARY_PLANNER_COMMENT_ID + 3,

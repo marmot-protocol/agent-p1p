@@ -17,7 +17,6 @@ from typing import Any
 from .case_store import CaseStore, CaseStoreError
 from .decision_reconciler import (
     DecisionError,
-    fetch_canary_base_sha,
     fetch_canary_comments,
     reconcile_human_decision,
 )
@@ -116,8 +115,8 @@ Description=Poll the exact Pip v2 canary for authoritative GitHub decisions
 
 [Timer]
 OnActiveSec=2m
-# Two unauthenticated REST reads per pass must remain below GitHub's
-# 60-request hourly limit, with headroom for activation revalidation.
+# One authenticated comments read per pass; activation validation separately
+# reads issue authorization and comments only while advancing active work.
 OnUnitActiveSec=5m
 RandomizedDelaySec=15s
 Persistent=true
@@ -453,16 +452,13 @@ def reconcile_once(
     route_output: Path,
     *,
     comment_fetcher: Callable[[], list[dict[str, Any]]] = fetch_canary_comments,
-    base_fetcher: Callable[[], str] = fetch_canary_base_sha,
 ) -> dict[str, Any]:
     store = CaseStore(policy.state_database)
     # A transient external lookup failure must prevent new activation without
     # destroying already-authorized active work. Keep the last durable route:
     # route_consumer performs its own live validation immediately before every
     # activation, while an already-running worker can finish and report.
-    result = reconcile_human_decision(
-        store, comment_fetcher(), current_base_sha=base_fetcher()
-    )
+    result = reconcile_human_decision(store, comment_fetcher())
     payload = {"ok": True, "case_id": policy.case_id, **result}
     _write_route_output(route_output, payload, group_id=policy.socket_group)
     return payload

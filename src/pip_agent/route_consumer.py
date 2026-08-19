@@ -12,7 +12,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .github_gate import fetch_live_final_evidence, validate_live_final_snapshot
+from .github_gate import (
+    fetch_live_final_evidence,
+    validate_live_final_snapshot,
+    validate_live_implementation_base,
+)
 from .kanban_gate import advance_gates
 from .kanban_router import RouteError, canonical_route_id, route_once, validate_route
 
@@ -271,7 +275,7 @@ def _archive_canary_tasks(
 
 def _validate_live_route(route: dict[str, Any]) -> None:
     from .decision_reconciler import (
-        fetch_canary_base_sha,
+        PLANNER_ACTOR,
         fetch_canary_comments,
         fetch_canary_issue_authorization,
         parse_human_decision,
@@ -280,40 +284,65 @@ def _validate_live_route(route: dict[str, Any]) -> None:
 
     fetch_canary_issue_authorization()
     comments = fetch_canary_comments()
-    planner = parse_planner_evidence(comments)
-    decision = parse_human_decision(comments)
-    if decision is None or decision.kind != route.get("decision"):
-        observed = None if decision is None else decision.kind
-        raise RouteConsumerError(
-            f"live human decision no longer matches route: decision={observed!r}"
-        )
-    expected = {
-        "comment_id": decision.comment_id,
-        "comment_url": decision.comment_url,
-        "evidence_body_sha256": decision.body_sha256,
-        "planner_comment_id": planner.comment_id,
-        "planner_comment_url": planner.comment_url,
-        "planner_body_sha256": planner.body_sha256,
-        "plan_version": planner.plan_version,
-        "planned_base_sha": planner.planned_base_sha,
-        "narrowed_scope": decision.narrowed_scope or planner.narrowed_scope,
-    }
+    if route.get("decision") == "automatic":
+        bound_comment_id = route.get("planner_comment_id")
+        bound_comments = [
+            comment
+            for comment in comments
+            if not isinstance(comment, dict)
+            or not isinstance(comment.get("user"), dict)
+            or comment["user"].get("login") != PLANNER_ACTOR
+            or comment.get("id") == bound_comment_id
+        ]
+        planner = parse_planner_evidence(bound_comments)
+        decision = parse_human_decision(bound_comments)
+    else:
+        planner = parse_planner_evidence(comments)
+        decision = parse_human_decision(comments)
+    if route.get("decision") == "automatic":
+        if decision is not None and decision.kind in {"reject", "narrow"}:
+            raise RouteConsumerError(
+                "live human decision supersedes automatic planner disposition"
+            )
+        if planner.outcome != "PROCEED":
+            raise RouteConsumerError(
+                f"live planner no longer permits automatic work: outcome={planner.outcome!r}"
+            )
+        expected = {
+            "comment_id": planner.comment_id,
+            "comment_url": planner.comment_url,
+            "evidence_body_sha256": planner.body_sha256,
+            "planner_outcome": planner.outcome,
+            "planner_task_id": planner.execution_task_id,
+            "authorized_scope": planner.authorized_scope,
+            "narrowed_scope": planner.narrowed_scope,
+        }
+    else:
+        if decision is None or decision.kind != route.get("decision"):
+            observed = None if decision is None else decision.kind
+            raise RouteConsumerError(
+                f"live human decision no longer matches route: decision={observed!r}"
+            )
+        expected = {
+            "comment_id": decision.comment_id,
+            "comment_url": decision.comment_url,
+            "evidence_body_sha256": decision.body_sha256,
+            "narrowed_scope": decision.narrowed_scope or planner.narrowed_scope,
+        }
+    expected.update(
+        {
+            "planner_comment_id": planner.comment_id,
+            "planner_comment_url": planner.comment_url,
+            "planner_body_sha256": planner.body_sha256,
+            "plan_version": planner.plan_version,
+            "planned_base_sha": planner.planned_base_sha,
+        }
+    )
     mismatches = [key for key, value in expected.items() if route.get(key) != value]
     if mismatches:
         raise RouteConsumerError(
             "live human decision no longer matches route: " + ", ".join(mismatches)
         )
-    current_base = fetch_canary_base_sha()
-    if (
-        route.get("action") == "dispatch_builder"
-        and current_base != planner.planned_base_sha
-    ):
-        raise RouteConsumerError("approved plan base became stale before task creation")
-    if (
-        route.get("replan_reason") == "stale_base"
-        and route.get("current_base_sha") != current_base
-    ):
-        raise RouteConsumerError("stale-base replan route is no longer current")
 
 
 def consume_route(
@@ -336,8 +365,14 @@ def consume_route(
         return {"status": "passive", "action": action}
 
     def checked_live() -> None:
+        from .decision_reconciler import ExternalDecisionError
+
         try:
             live_validator(route)
+        except ExternalDecisionError:
+            # Fail closed for this activation without destroying already-running,
+            # independently authorized work on a transient lookup failure.
+            raise
         except Exception:
             _archive_canary_tasks(board, runner, terminator)
             raise
@@ -363,6 +398,9 @@ def consume_route(
             board=board,
             runner=runner,
             before_activate=checked_live,
+            implementation_base_validator=lambda base, head: (
+                validate_live_implementation_base(base, head, runner=runner)
+            ),
             final_evidence_validator=lambda pr, head: fetch_live_final_evidence(
                 pr, head, runner=runner
             ),

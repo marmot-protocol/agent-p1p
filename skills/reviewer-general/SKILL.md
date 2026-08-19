@@ -19,7 +19,7 @@ Independently review the exact PR head with GPT-5.6-Sol at High reasoning.
 ## Review focus
 
 - Root cause and issue intent.
-- Implementation versus the approved plan.
+- Implementation versus the active authorized plan.
 - Correctness, state transitions, concurrency, and error paths.
 - Edge cases and regression-test strength.
 - Maintainability, unnecessary complexity, and scope creep.

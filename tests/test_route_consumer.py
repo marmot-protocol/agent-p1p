@@ -7,7 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from pip_agent.decision_reconciler import HumanDecision, PlannerEvidence
+from pip_agent.decision_reconciler import (
+    ExternalDecisionError,
+    HumanDecision,
+    PlannerEvidence,
+)
 from pip_agent.route_consumer import (
     RouteConsumerError,
     _validate_live_route,
@@ -106,7 +110,7 @@ def test_stop_archives_only_nonterminal_pip_v2_canary_tasks() -> None:
     assert "t-v1" not in commands[2]
 
 
-def test_live_route_revalidation_rejects_base_change_before_dispatch(
+def test_live_route_revalidation_allows_base_change_before_dispatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     planned = "a" * 40
@@ -137,12 +141,132 @@ def test_live_route_revalidation_rejects_base_change_before_dispatch(
     monkeypatch.setattr(
         "pip_agent.decision_reconciler.parse_human_decision", lambda _: decision
     )
+    _validate_live_route(route)
+
+
+def test_live_route_revalidation_accepts_current_automatic_proceed_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    planner = PlannerEvidence(
+        7,
+        "https://planner",
+        "b" * 64,
+        2,
+        "a" * 40,
+        "now",
+        outcome="PROCEED",
+    )
+    route = {
+        "action": "dispatch_builder",
+        "decision": "automatic",
+        "comment_id": 7,
+        "comment_url": "https://planner",
+        "evidence_body_sha256": "b" * 64,
+        "planner_comment_id": 7,
+        "planner_comment_url": "https://planner",
+        "planner_body_sha256": "b" * 64,
+        "plan_version": 2,
+        "planned_base_sha": "a" * 40,
+        "planner_outcome": "PROCEED",
+        "narrowed_scope": None,
+    }
     monkeypatch.setattr(
-        "pip_agent.decision_reconciler.fetch_canary_base_sha", lambda: "d" * 40
+        "pip_agent.decision_reconciler.fetch_canary_issue_authorization", lambda: None
+    )
+    monkeypatch.setattr("pip_agent.decision_reconciler.fetch_canary_comments", list)
+    monkeypatch.setattr(
+        "pip_agent.decision_reconciler.parse_planner_evidence", lambda _: planner
+    )
+    monkeypatch.setattr(
+        "pip_agent.decision_reconciler.parse_human_decision", lambda _: None
     )
 
-    with pytest.raises(RouteConsumerError, match="became stale"):
-        _validate_live_route(route)
+    _validate_live_route(route)
+
+
+def test_live_automatic_route_stays_bound_to_original_planner_comment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    planner = PlannerEvidence(
+        7,
+        "https://planner",
+        "b" * 64,
+        2,
+        "a" * 40,
+        "now",
+        outcome="PROCEED",
+    )
+    route = {
+        "action": "dispatch_builder",
+        "decision": "automatic",
+        "comment_id": 7,
+        "comment_url": "https://planner",
+        "evidence_body_sha256": "b" * 64,
+        "planner_comment_id": 7,
+        "planner_comment_url": "https://planner",
+        "planner_body_sha256": "b" * 64,
+        "plan_version": 2,
+        "planned_base_sha": "a" * 40,
+        "planner_outcome": "PROCEED",
+        "narrowed_scope": None,
+    }
+    comments = [
+        {"id": 7, "user": {"login": "agent-p1p"}},
+        {"id": 9, "user": {"login": "agent-p1p"}},
+    ]
+    seen: list[list[int]] = []
+
+    def parse_bound(received):
+        seen.append([comment["id"] for comment in received])
+        return planner
+
+    monkeypatch.setattr(
+        "pip_agent.decision_reconciler.fetch_canary_issue_authorization", lambda: None
+    )
+    monkeypatch.setattr(
+        "pip_agent.decision_reconciler.fetch_canary_comments", lambda: comments
+    )
+    monkeypatch.setattr(
+        "pip_agent.decision_reconciler.parse_planner_evidence", parse_bound
+    )
+    monkeypatch.setattr(
+        "pip_agent.decision_reconciler.parse_human_decision",
+        lambda received: seen.append([comment["id"] for comment in received]),
+    )
+
+    _validate_live_route(route)
+
+    assert seen == [[7], [7]]
+
+
+def test_live_automatic_route_rejects_later_human_decision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    planner = PlannerEvidence(
+        7,
+        "https://planner",
+        "b" * 64,
+        2,
+        "a" * 40,
+        "now",
+        outcome="PROCEED",
+    )
+    decision = HumanDecision(
+        "reject", "erskingardner", 8, "https://decision", "c" * 64, None
+    )
+    monkeypatch.setattr(
+        "pip_agent.decision_reconciler.fetch_canary_issue_authorization", lambda: None
+    )
+    monkeypatch.setattr("pip_agent.decision_reconciler.fetch_canary_comments", list)
+    monkeypatch.setattr(
+        "pip_agent.decision_reconciler.parse_planner_evidence", lambda _: planner
+    )
+    monkeypatch.setattr(
+        "pip_agent.decision_reconciler.parse_human_decision", lambda _: decision
+    )
+
+    with pytest.raises(RouteConsumerError, match="supersedes"):
+        _validate_live_route({"action": "dispatch_builder", "decision": "automatic"})
 
 
 def _active_task_runner(
@@ -233,6 +357,41 @@ def test_live_revocation_during_staging_stops_existing_worker_and_never_gates(
 
     assert validations == 1
     assert terminated == [9876]
+    assert gate_calls == 0
+
+
+def test_transient_live_lookup_failure_preserves_existing_worker_and_never_gates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+    terminated: list[int] = []
+    gate_calls = 0
+    runner = _active_task_runner(commands, worker_pid=9876)
+
+    def live_validator(route) -> None:
+        raise ExternalDecisionError("GitHub decision lookup failed")
+
+    def fake_route_once(route, *, board, runner, before_activate):
+        before_activate()
+        raise AssertionError("activation must not follow a failed lookup")
+
+    def fake_gate(*args, **kwargs):
+        nonlocal gate_calls
+        gate_calls += 1
+
+    monkeypatch.setattr("pip_agent.route_consumer.route_once", fake_route_once)
+
+    with pytest.raises(ExternalDecisionError, match="lookup failed"):
+        consume_route(
+            {"ok": True, "case_id": "mdk#1240", "action": "dispatch_builder"},
+            board="pip-mdk",
+            runner=runner,
+            terminator=terminated.append,
+            live_validator=live_validator,
+            gate_advancer=fake_gate,
+        )
+
+    assert terminated == []
     assert gate_calls == 0
 
 

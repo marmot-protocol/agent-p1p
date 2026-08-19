@@ -23,6 +23,7 @@
     "planner_comment_id": { "type": "integer", "minimum": 1 },
     "planner_body_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "planned_base_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "implementation_base_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "task_id": {
       "type": "string",
       "minLength": 1
@@ -143,6 +144,7 @@
     "planner_comment_id",
     "planner_body_sha256",
     "planned_base_sha",
+    "implementation_base_sha",
     "task_id",
     "role",
     "outcome",

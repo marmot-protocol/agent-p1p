@@ -9,9 +9,43 @@ from pip_agent.github_gate import (
     GitHubGateError,
     fetch_live_final_evidence,
     validate_live_final_snapshot,
+    validate_live_implementation_base,
 )
 
 HEAD = "a" * 40
+BASE = "b" * 40
+
+
+def test_implementation_base_must_be_ancestor_of_head_and_master() -> None:
+    commands: list[list[str]] = []
+
+    def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            json.dumps({"status": "ahead", "merge_base_commit": {"sha": BASE}}),
+            "",
+        )
+
+    validate_live_implementation_base(BASE, HEAD, runner=runner)
+
+    assert len(commands) == 2
+    assert commands[0][-1].endswith(f"compare/{BASE}...{HEAD}")
+    assert commands[1][-1].endswith(f"compare/{BASE}...master")
+
+
+def test_implementation_base_rejects_unrelated_commit() -> None:
+    def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            json.dumps({"status": "diverged", "merge_base_commit": {"sha": "c" * 40}}),
+            "",
+        )
+
+    with pytest.raises(GitHubGateError, match="not an ancestor"):
+        validate_live_implementation_base(BASE, HEAD, runner=runner)
 
 
 def _runner(

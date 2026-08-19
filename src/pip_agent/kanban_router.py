@@ -78,6 +78,15 @@ def _task_body(route: Mapping[str, Any], phase: str, instructions: str) -> str:
             "planned_base_sha",
         )
     }
+    for key in (
+        "decision",
+        "planner_outcome",
+        "planner_task_id",
+        "authorized_scope",
+        "narrowed_scope",
+    ):
+        if key in route:
+            evidence[key] = route[key]
     return (
         f"# Pip v2 {phase}\n\n"
         f"Authorization binding:\n```json\n{json.dumps(evidence, indent=2, sort_keys=True)}\n```\n\n"
@@ -102,8 +111,11 @@ def builder_dag(route: Mapping[str, Any]) -> list[TaskSpec]:
                 route,
                 "builder",
                 "Use direct Cursor `cursor-grok-4.6-high` through the builder-grok workflow. "
-                "Implement the approved planner comment exactly. Open a draft PR and do not "
-                "complete until CI is green on its exact head.",
+                "Start from the current default-branch head. Treat planned_base_sha as planning "
+                "context, not a checkout lock; adapt the plan to ordinary upstream movement. "
+                "Return to planning only with a concrete incompatibility that makes the planned "
+                "scope unsafe or unimplementable. Open a draft PR and do not complete until CI is "
+                "green on its exact head.",
             ),
             assignee="cursor-fixer",
             parents=(),
@@ -320,10 +332,11 @@ def route_once(
         body = _task_body(
             route,
             "replan",
-            "Produce a fresh plan against the current default-branch head. Preserve the human's "
-            f"exact narrowed scope: {route.get('narrowed_scope')!r}. Publish or update the "
-            "attributable planner comment, then stop for a new explicit human decision. Do not "
-            "create a branch or PR.",
+            "Reassess the concrete incompatibility against the current default-branch head. "
+            f"Preserve any exact narrowed scope: {route.get('narrowed_scope')!r}. Publish or "
+            "update the attributable planner comment. Return PROCEED for a technically "
+            "unambiguous repository-local plan; request human input only for a real sensitive "
+            "or product-scope decision. Do not create a branch or PR.",
         )
         gate_id, gate_status = _created_task_info(
             runner(_activation_gate_command(board, route_id, "replan", sentinel_id))

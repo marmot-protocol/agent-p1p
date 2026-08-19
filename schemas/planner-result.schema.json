@@ -69,6 +69,26 @@
     "root_cause": {
       "type": "string"
     },
+    "authorized_scope": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000
+    },
+    "sensitive_scope": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "CRYPTOGRAPHY",
+          "MLS_CGKA",
+          "KEY_HANDLING",
+          "TRUST_ANCHOR",
+          "MEMBERSHIP_AUTHORIZATION",
+          "ADMIN_AUTHORIZATION",
+          "PUSH_PAYLOAD_CONTEXT"
+        ]
+      },
+      "uniqueItems": true
+    },
     "dependencies": {
       "type": "array",
       "items": {
@@ -106,6 +126,8 @@
     "plan_version",
     "planned_base_sha",
     "root_cause",
+    "authorized_scope",
+    "sensitive_scope",
     "dependencies",
     "open_decisions",
     "plan_file",

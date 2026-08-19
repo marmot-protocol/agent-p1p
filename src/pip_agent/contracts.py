@@ -163,6 +163,32 @@ def validate_contract(name: str, payload: Mapping[str, Any]) -> None:
             "BLOCKED_UNEXPECTED_MODEL requires an actual model mismatch"
         )
 
+    if name == "planner-result":
+        open_decisions = payload.get("open_decisions", [])
+        dependencies = payload.get("dependencies", [])
+        sensitive_scope = payload.get("sensitive_scope", [])
+        if outcome == "PROCEED" and (open_decisions or dependencies or sensitive_scope):
+            raise ContractError(
+                "PROCEED planner result cannot retain open decisions, dependencies, "
+                "or sensitive scope"
+            )
+        if (
+            outcome
+            in {
+                "WAITING_FOR_ISSUE_CREATOR",
+                "NEEDS_HUMAN_SCOPE_DECISION",
+                "ROOT_CAUSE_DIFFERENT_SCOPE",
+            }
+            and not open_decisions
+        ):
+            raise ContractError(
+                f"{outcome} planner result requires a concrete open decision"
+            )
+        if outcome == "CROSS_REPO_DEPENDENCY" and not dependencies:
+            raise ContractError(
+                "CROSS_REPO_DEPENDENCY planner result requires dependency evidence"
+            )
+
     if name == "review-result":
         if payload.get("outcome") == "APPROVE" and payload.get("blocking_findings"):
             raise ContractError("APPROVE review cannot contain blocking findings")
@@ -180,6 +206,22 @@ def validate_contract(name: str, payload: Mapping[str, Any]) -> None:
                 raise ContractError("CI head does not match the current PR head")
         elif payload.get("github_ci_green") is True:
             raise ContractError("green CI handoff must use REVIEW_READY outcome")
+        if payload.get("outcome") == "RETURN_TO_PLANNING":
+            incompatibility = payload.get("evidence", {}).get("incompatibility")
+            if (
+                not isinstance(incompatibility, Mapping)
+                or not isinstance(incompatibility.get("reason"), str)
+                or not incompatibility["reason"].strip()
+                or not isinstance(incompatibility.get("observations"), list)
+                or not incompatibility["observations"]
+                or not all(
+                    isinstance(item, str) and item.strip()
+                    for item in incompatibility["observations"]
+                )
+            ):
+                raise ContractError(
+                    "RETURN_TO_PLANNING requires concrete incompatibility evidence"
+                )
 
 
 def assert_exact_head_evidence(

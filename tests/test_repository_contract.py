@@ -86,6 +86,7 @@ def builder_result(head: str, *, resolutions: list[dict] | None = None) -> dict:
         "completed_at": "2026-08-15T12:10:00Z",
         "plan_version": 1,
         "build_round": 2,
+        "implementation_base_sha": "b" * 40,
         "pr_number": 1400,
         "head_sha": head,
         "ci_head_sha": head,
@@ -93,6 +94,32 @@ def builder_result(head: str, *, resolutions: list[dict] | None = None) -> dict:
         "local_checks": ["uv run pytest"],
         "finding_resolutions": resolutions or [],
         "evidence": {},
+    }
+
+
+def planner_result(outcome: str = "PROCEED") -> dict:
+    return {
+        "schema_version": 1,
+        "workflow_version": 2,
+        "case_id": "mdk#1240",
+        "task_id": "planner-v6",
+        "role": "planner",
+        "outcome": outcome,
+        "requested_model": "openai-codex/gpt-5.6-sol",
+        "actual_model": "openai-codex/gpt-5.6-sol",
+        "skills_repository_commit": "a" * 40,
+        "started_at": "2026-08-19T12:00:00Z",
+        "completed_at": "2026-08-19T12:10:00Z",
+        "evidence": {},
+        "plan_version": 6,
+        "planned_base_sha": "b" * 40,
+        "root_cause": "repository-local projection gap",
+        "authorized_scope": "repair repository-local projection delivery",
+        "sensitive_scope": [],
+        "dependencies": [],
+        "open_decisions": [],
+        "plan_file": "artifacts/plan-v6.json",
+        "issue_comment_url": "https://github.com/marmot-protocol/mdk/issues/1240#issuecomment-1",
     }
 
 
@@ -241,6 +268,52 @@ def test_model_mismatch_can_be_recorded_as_structured_block() -> None:
     validate_contract("review-result", result)
 
 
+def test_planner_proceed_requires_no_open_decisions() -> None:
+    result = planner_result()
+    validate_contract("planner-result", result)
+    result["open_decisions"] = ["Which public API should change?"]
+
+    with pytest.raises(ContractError, match="cannot retain open decisions"):
+        validate_contract("planner-result", result)
+
+
+def test_planner_proceed_requires_no_dependencies() -> None:
+    result = planner_result()
+    result["dependencies"] = [
+        {
+            "repository": "marmot-protocol/marmot",
+            "issue": 1,
+            "reason": "cross-repository protocol change",
+        }
+    ]
+
+    with pytest.raises(ContractError, match="dependencies"):
+        validate_contract("planner-result", result)
+
+
+def test_planner_proceed_requires_no_sensitive_scope() -> None:
+    result = planner_result()
+    result["sensitive_scope"] = ["MLS_CGKA"]
+    result["authorized_scope"] = "change MLS group state"
+
+    with pytest.raises(ContractError, match="sensitive scope"):
+        validate_contract("planner-result", result)
+
+
+def test_planner_human_wait_requires_concrete_question() -> None:
+    result = planner_result("NEEDS_HUMAN_SCOPE_DECISION")
+
+    with pytest.raises(ContractError, match="requires a concrete open decision"):
+        validate_contract("planner-result", result)
+
+
+def test_planner_cross_repo_outcome_requires_dependency_evidence() -> None:
+    result = planner_result("CROSS_REPO_DEPENDENCY")
+
+    with pytest.raises(ContractError, match="requires dependency evidence"):
+        validate_contract("planner-result", result)
+
+
 def test_schema_name_cannot_escape_registry() -> None:
     with pytest.raises(ContractError, match="unknown schema"):
         load_schema("../../tmp/attacker")
@@ -280,8 +353,24 @@ def test_builder_contract_allows_safe_return_to_planning_without_pr() -> None:
     result["outcome"] = "RETURN_TO_PLANNING"
     for key in ("pr_number", "head_sha", "ci_head_sha", "github_ci_green"):
         result.pop(key)
+    result["evidence"] = {
+        "incompatibility": {
+            "reason": "upstream removed the repository-local extension point",
+            "observations": ["src/projection.rs no longer exposes ProjectionSink"],
+        }
+    }
 
     validate_contract("builder-result", result)
+
+
+def test_builder_contract_rejects_return_to_planning_without_incompatibility() -> None:
+    result = builder_result("b" * 40)
+    result["outcome"] = "RETURN_TO_PLANNING"
+    for key in ("pr_number", "head_sha", "ci_head_sha", "github_ci_green"):
+        result.pop(key)
+
+    with pytest.raises(ContractError, match="concrete incompatibility"):
+        validate_contract("builder-result", result)
 
 
 def test_builder_contract_requires_pr_and_exact_head_fields_when_review_ready() -> None:
@@ -308,6 +397,7 @@ def test_builder_contract_rejects_green_ci_for_stale_head() -> None:
         "completed_at": "2026-08-15T12:10:00Z",
         "plan_version": 1,
         "build_round": 1,
+        "implementation_base_sha": "b" * 40,
         "pr_number": 1400,
         "head_sha": "b" * 40,
         "ci_head_sha": "c" * 40,
@@ -337,6 +427,7 @@ def test_builder_contract_rejects_review_ready_with_red_ci() -> None:
         "completed_at": "2026-08-15T12:10:00Z",
         "plan_version": 1,
         "build_round": 1,
+        "implementation_base_sha": "b" * 40,
         "pr_number": 1400,
         "head_sha": "b" * 40,
         "ci_head_sha": "b" * 40,

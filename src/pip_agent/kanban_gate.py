@@ -61,6 +61,26 @@ def _metadata(show: dict[str, Any], contract: str) -> dict[str, Any]:
     task = show["task"]
     if raw.get("task_id") != task.get("id"):
         raise GateError("task result is bound to a different task")
+    durable_model_seen = False
+    for source_name, source in (("task", task), ("run", runs[-1])):
+        observed_model = source.get("model")
+        observed_provider = source.get("provider")
+        if observed_model is None and observed_provider is None:
+            continue
+        durable_model_seen = True
+        if not isinstance(observed_model, str) or not observed_model:
+            raise GateError(f"durable {source_name} model metadata is malformed")
+        allowed_actual = {observed_model, observed_model.rsplit("/", 1)[-1]}
+        if observed_provider is not None:
+            if not isinstance(observed_provider, str) or not observed_provider:
+                raise GateError(f"durable {source_name} provider metadata is malformed")
+            allowed_actual.add(f"{observed_provider}/{observed_model}")
+        if raw.get("actual_model") not in allowed_actual:
+            raise GateError(
+                f"task result model conflicts with durable {source_name} metadata"
+            )
+    if not durable_model_seen:
+        raise GateError("durable task/run model metadata is missing")
     return raw
 
 
@@ -345,6 +365,7 @@ def advance_gates(
     board: str,
     runner: Runner,
     before_activate: Callable[[], None] | None = None,
+    implementation_base_validator: Callable[[str, str], None] | None = None,
     final_evidence_validator: Callable[[int, str], dict[str, Any]] | None = None,
     final_snapshot_validator: Callable[[int, str], None] | None = None,
 ) -> dict[str, Any]:
@@ -370,6 +391,18 @@ def advance_gates(
             "replan_task": replanning["replan"],
         }
     first_build = _builder_result(build, route, expected_round=1)
+    pending_first_review = any(
+        not _is_done(shows[f"gate:{key}"])
+        for key in ("review-general-1", "review-secperf-1")
+    )
+    if pending_first_review:
+        if before_activate is not None:
+            before_activate()
+        if implementation_base_validator is None:
+            raise GateError("live implementation-base verifier is unavailable")
+        implementation_base_validator(
+            first_build["implementation_base_sha"], first_build["head_sha"]
+        )
     for key in ("review-general-1", "review-secperf-1"):
         if _release_gate(board, shows[f"gate:{key}"], runner, before_activate):
             advanced.append(key)
@@ -442,6 +475,18 @@ def advance_gates(
         for resolution in resolutions.values()
     ):
         raise GateError("finding resolution is bound to a different remediation head")
+    pending_second_review = any(
+        not _is_done(shows[f"gate:{key}"])
+        for key in ("review-general-2", "review-secperf-2")
+    )
+    if pending_second_review:
+        if before_activate is not None:
+            before_activate()
+        if implementation_base_validator is None:
+            raise GateError("live implementation-base verifier is unavailable")
+        implementation_base_validator(
+            remediated["implementation_base_sha"], remediated["head_sha"]
+        )
     for key in ("review-general-2", "review-secperf-2"):
         if _release_gate(board, shows[f"gate:{key}"], runner, before_activate):
             advanced.append(key)

@@ -622,6 +622,7 @@ def _builder_payload(model: str = "cursor/cursor-grok-4.6-high") -> dict:
         "completed_at": "2026-08-15T12:10:00Z",
         "plan_version": 1,
         "build_round": 1,
+        "implementation_base_sha": "b" * 40,
         "pr_number": 1,
         "head_sha": head,
         "ci_head_sha": head,

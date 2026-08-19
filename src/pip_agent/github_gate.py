@@ -10,6 +10,7 @@ from typing import Any
 Runner = Callable[[list[str]], subprocess.CompletedProcess[str]]
 REPOSITORY = "marmot-protocol/mdk"
 EXPECTED_AUTHOR = "agent-p1p"
+_SHA40 = re.compile(r"[0-9a-f]{40}")
 
 
 class GitHubGateError(RuntimeError):
@@ -41,6 +42,40 @@ def _json(command: list[str], runner: Runner) -> Any:
         return json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
         raise GitHubGateError("GitHub response was not JSON") from exc
+
+
+def validate_live_implementation_base(
+    implementation_base_sha: str,
+    head_sha: str,
+    *,
+    runner: Runner = _default_runner,
+) -> None:
+    if (
+        not isinstance(implementation_base_sha, str)
+        or _SHA40.fullmatch(implementation_base_sha) is None
+        or not isinstance(head_sha, str)
+        or _SHA40.fullmatch(head_sha) is None
+    ):
+        raise GitHubGateError("implementation-base evidence is malformed")
+    for target, label in ((head_sha, "PR head"), ("master", "current master")):
+        payload = _json(
+            [
+                "gh",
+                "api",
+                f"repos/{REPOSITORY}/compare/{implementation_base_sha}...{target}",
+            ],
+            runner,
+        )
+        merge_base = (
+            payload.get("merge_base_commit") if isinstance(payload, dict) else None
+        )
+        if (
+            not isinstance(payload, dict)
+            or payload.get("status") not in {"ahead", "identical"}
+            or not isinstance(merge_base, dict)
+            or merge_base.get("sha") != implementation_base_sha
+        ):
+            raise GitHubGateError(f"implementation base is not an ancestor of {label}")
 
 
 def _assert_no_effective_changes_request(review_nodes: Any) -> None:

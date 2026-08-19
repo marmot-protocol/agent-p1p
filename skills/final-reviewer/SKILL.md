@@ -19,7 +19,7 @@ Holistically adjudicate the complete case using GPT-5.6-Sol at `xhigh` reasoning
 ## Workflow
 
 1. Re-read the original issue and authoritative clarifications.
-2. Inspect all plan versions and the active approved plan.
+2. Inspect all plan versions and the active authorized plan.
 3. Inspect the final diff and every build/remediation round.
 4. Inspect both review histories, CodeRabbit findings when present, and resolution evidence.
 5. Verify the join bundle binds mandatory approvals and green CI to the current exact head.

@@ -3,11 +3,13 @@ from __future__ import annotations
 import copy
 import json
 import subprocess
+from typing import Any
 
 import pytest
 
 from pip_agent import kanban_gate
-from pip_agent.kanban_gate import GateError, advance_gates
+from pip_agent.kanban_gate import GateError
+from pip_agent.kanban_gate import advance_gates as _advance_gates
 from pip_agent.offline_fixture import (
     DECISION_BODY_SHA,
     PLANNED_BASE_SHA,
@@ -17,6 +19,40 @@ from pip_agent.offline_fixture import (
     _final,
     _review,
 )
+
+
+def advance_gates(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    kwargs.setdefault("implementation_base_validator", lambda _base, _head: None)
+    runner = kwargs.get("runner")
+    if runner is not None:
+
+        def runner_with_durable_model(
+            command: list[str],
+        ) -> subprocess.CompletedProcess[str]:
+            completed = runner(command)
+            if "show" not in command or completed.returncode != 0:
+                return completed
+            payload = json.loads(completed.stdout)
+            runs = payload.get("runs", [])
+            if runs:
+                raw_metadata = runs[-1].get("metadata")
+                metadata = (
+                    json.loads(raw_metadata)
+                    if isinstance(raw_metadata, str)
+                    else raw_metadata
+                )
+                if isinstance(metadata, dict):
+                    payload["task"].setdefault("model", metadata.get("actual_model"))
+                    return subprocess.CompletedProcess(
+                        command,
+                        completed.returncode,
+                        json.dumps(payload),
+                        completed.stderr,
+                    )
+            return completed
+
+        kwargs["runner"] = runner_with_durable_model
+    return _advance_gates(*args, **kwargs)
 
 
 def _route() -> dict[str, object]:
@@ -196,6 +232,34 @@ def test_semantic_gate_rejects_self_consistent_but_unauthorized_model() -> None:
 
     with pytest.raises(GateError, match="unauthorized model"):
         advance_gates(_route(), _task_ids(), board="pip-mdk", runner=runner)
+
+
+def test_metadata_rejects_worker_model_conflicting_with_durable_run() -> None:
+    result = _results()["build"]
+    show = {
+        "task": {"id": "t-build", "status": "done", "model": "cursor/auto"},
+        "runs": [
+            {
+                "provider": "untrusted",
+                "model": "cursor/auto",
+                "metadata": result,
+            }
+        ],
+    }
+
+    with pytest.raises(GateError, match="durable task metadata"):
+        kanban_gate._metadata(show, "builder-result")
+
+
+def test_metadata_rejects_missing_durable_model_metadata() -> None:
+    result = _results()["build"]
+    show = {
+        "task": {"id": "t-build", "status": "done"},
+        "runs": [{"metadata": result}],
+    }
+
+    with pytest.raises(GateError, match="model metadata is missing"):
+        kanban_gate._metadata(show, "builder-result")
 
 
 def test_semantic_gate_rejects_unresolved_first_round_finding() -> None:
@@ -507,6 +571,12 @@ def test_builder_return_to_planning_creates_deterministic_replan(
     results = _results()
     results["build"]["outcome"] = "RETURN_TO_PLANNING"
     results["build"]["github_ci_green"] = False
+    results["build"]["evidence"] = {
+        "incompatibility": {
+            "reason": "required extension point was removed",
+            "observations": ["current tree has no ProjectionSink"],
+        }
+    }
     monkeypatch.setattr(
         kanban_gate,
         "_route_builder_replan",
@@ -544,6 +614,12 @@ def test_remediation_return_to_planning_creates_deterministic_replan(
     results = _results()
     results["remediate"]["outcome"] = "RETURN_TO_PLANNING"
     results["remediate"]["github_ci_green"] = False
+    results["remediate"]["evidence"] = {
+        "incompatibility": {
+            "reason": "required extension point was removed",
+            "observations": ["current tree has no ProjectionSink"],
+        }
+    }
     monkeypatch.setattr(
         kanban_gate,
         "_route_builder_replan",

@@ -114,13 +114,11 @@ def test_control_service_reconciles_only_live_fixed_github_evidence(
         policy,
         route_output,
         comment_fetcher=lambda: comments,
-        base_fetcher=lambda: decision_module.CANARY_PLANNED_BASE_SHA,
     )
     repeated = reconcile_once(
         policy,
         route_output,
         comment_fetcher=lambda: comments,
-        base_fetcher=lambda: decision_module.CANARY_PLANNED_BASE_SHA,
     )
 
     assert response["ok"] is True

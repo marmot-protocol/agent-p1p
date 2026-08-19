@@ -31,11 +31,15 @@ Hermes role profiles symlink both canonical skills. The two existing Cursor runn
 
 Hermes Pip profiles use the host account home for subprocesses, so role workers share the existing `agent-p1p` GitHub CLI authentication rather than maintaining copied credentials. One-issue intake stages the planner task as blocked, attaches the configured gateway-owned human-attention subscription, and only then unblocks it for dispatch. This prevents a fast terminal event from racing notification setup; workers never receive Telegram credentials.
 
-The exact `mdk#1240` canary has a separate decision reconciler. `pip-v2-decision.timer` reads the public issue every five minutes as `pip-v2-control`, staying below GitHub's unauthenticated REST budget while preserving headroom for activation checks. It verifies numeric GitHub identities, parses the latest versioned planner comment and its base SHA, accepts commands only from `erskingardner`, writes the decision into the protected case, and emits a group-readable evidence-bound route at `/run/pip-v2/decision-route.json`. A separate `pip-v2-route-consumer.timer` runs as the host caller and maps active routes into the existing Hermes Kanban board. Kanban idempotency keys prevent accidental duplicate tasks; there is no parallel route ledger, worktree manager, or subprocess scheduler.
+The exact `mdk#1240` canary has a separate decision reconciler. `pip-v2-decision.timer` reads the issue every five minutes with a systemd-delivered, repository-scoped read credential. It verifies numeric GitHub identities, parses the latest versioned planner comment and its outcome, writes the disposition into the protected case, and emits a group-readable evidence-bound route at `/run/pip-v2/decision-route.json`. A separate `pip-v2-route-consumer.timer` revalidates issue authorization and exact planner evidence immediately before activation, then maps active routes into the existing Hermes Kanban board. Kanban idempotency keys prevent accidental duplicate tasks; there is no parallel route ledger, worktree manager, or subprocess scheduler.
 
-- `Pip: approve exact scope` → advance the protected case to `BUILDING` and emit one seven-task builder/review/remediation/re-review/final-review DAG only when that planner version's exact base still equals GitHub `master`; stale evidence remains in `PLANNING` and emits one staged replan task instead;
+- planner outcome `PROCEED` → automatically advance the protected case to `BUILDING` and emit one seven-task builder/review/remediation/re-review/final-review DAG;
+- planner human-wait outcome → hold until an authoritative decision resolves the concrete ambiguity;
+- `Pip: approve exact scope` → advance a held plan to `BUILDING`;
 - `Pip: narrow scope — <one-line scope>` → return to planning with the supplied boundary;
 - `Pip: reject` → abandon the case and route no work.
+
+The plan's base SHA is an evidence snapshot, not an activation lock. The builder starts from current `master`, records its actual base, and adapts the plan to ordinary upstream movement. It returns to planning only for a concrete incompatibility that makes the authorized scope unsafe or unimplementable. Target-branch movement alone never requires replanning or another approval.
 
 For approval and rejection, the reconciler also accepts the complete-comment
 aliases `approve`, `approved`, `reject`, and `rejected`, optionally prefixed by
@@ -43,7 +47,7 @@ aliases `approve`, `approved`, `reject`, and `rejected`, optionally prefixed by
 unrecognized. Narrowing retains the canonical prefix because its scope text is
 an authorization boundary.
 
-A narrowing decision invalidates its planner version. A later approval cannot dispatch until a newer planner comment has been published and the human replies after that update. The final task verifies same-head CI and two independent same-head re-reviews, then notifies JG. It never merges.
+A narrowing decision invalidates its planner version. Dispatch resumes only after a newer planner comment binds the exact narrowing evidence; a `PROCEED` replan then dispatches automatically without redundant approval. The final task verifies same-head CI and two independent same-head re-reviews, then notifies JG. It never merges.
 
 No `@agent-p1p` mention is needed. Wrong actors are ignored; ambiguous text remains held; deletion or invalidation of accepted approval blocks an active build. The public control socket remains restricted to `ensure_canary` and `status`; only the network-enabled oneshot reconciler writes decision evidence.
 
