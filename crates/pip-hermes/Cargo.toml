@@ -1,0 +1,11 @@
+[package]
+name = "pip-hermes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+wait-timeout.workspace = true

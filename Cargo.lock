@@ -351,6 +351,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pip-hermes"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "wait-timeout",
+]
+
+[[package]]
 name = "pip-store"
 version = "0.1.0"
 dependencies = [
