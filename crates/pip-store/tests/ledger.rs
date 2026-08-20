@@ -2,7 +2,7 @@ use std::path::Path;
 
 use pip_store::{
     ApplyResult, EffectInput, EventInput, EvidenceInput, FaultPoint, FindingInput, NewCase,
-    PolicyInput, RunInput, Store, StoreError, TransitionInput,
+    PolicyInput, RunInput, Store, StoreError, TaskProjectionInput, TransitionInput,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -340,4 +340,64 @@ fn read_only_worker_handle_cannot_mutate_the_ledger() {
         reader.create_case(&new_case()),
         Err(StoreError::ReadOnly)
     ));
+}
+
+#[test]
+fn task_projection_and_outbox_delivery_commit_together_and_replay() {
+    let (_directory, mut store) = open();
+    store.create_case(&new_case()).unwrap();
+    let claimed = store.claim_effect("projector-a", 100, 30).unwrap().unwrap();
+    let projection = TaskProjectionInput {
+        projection_id: "repo:984321#1240@1:planner:1".into(),
+        effect_id: claimed.effect_id.clone(),
+        board: "pip-mdk".into(),
+        task_id: "task-1".into(),
+        desired: json!({"status": "blocked", "assignee": "planner"}),
+        observed: json!({"id": "task-1", "status": "blocked"}),
+    };
+    assert!(matches!(
+        store.complete_task_projection(
+            &projection,
+            "projector-a",
+            110,
+            Some(FaultPoint::AfterProjection),
+        ),
+        Err(StoreError::InjectedFault(FaultPoint::AfterProjection))
+    ));
+    assert_eq!(store.task_projection_count().unwrap(), 0);
+    assert!(
+        store
+            .claim_effect("projector-b", 120, 30)
+            .unwrap()
+            .is_none()
+    );
+
+    let reclaimed = store.claim_effect("projector-b", 131, 30).unwrap().unwrap();
+    assert_eq!(reclaimed.effect_id, claimed.effect_id);
+    assert_eq!(
+        store
+            .complete_task_projection(&projection, "projector-b", 132, None)
+            .unwrap(),
+        ApplyResult::Applied
+    );
+    assert_eq!(
+        store
+            .complete_task_projection(&projection, "projector-b", 133, None)
+            .unwrap(),
+        ApplyResult::Replayed
+    );
+    assert_eq!(store.task_projection_count().unwrap(), 1);
+    assert_eq!(
+        store
+            .task_projection(&projection.projection_id)
+            .unwrap()
+            .unwrap(),
+        projection
+    );
+    assert!(
+        store
+            .claim_effect("projector-c", 200, 30)
+            .unwrap()
+            .is_none()
+    );
 }

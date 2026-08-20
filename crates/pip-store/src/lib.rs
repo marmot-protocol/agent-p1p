@@ -203,6 +203,16 @@ pub struct PolicyInput {
     pub payload: Value,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TaskProjectionInput {
+    pub projection_id: String,
+    pub effect_id: String,
+    pub board: String,
+    pub task_id: String,
+    pub desired: Value,
+    pub observed: Value,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct NewCase {
     pub case_key: String,
@@ -679,6 +689,45 @@ impl Store {
         count(&self.connection, "findings")
     }
 
+    pub fn task_projection_count(&self) -> Result<u64> {
+        count(&self.connection, "task_projections")
+    }
+
+    pub fn task_projection(&self, projection_id: &str) -> Result<Option<TaskProjectionInput>> {
+        self.connection
+            .query_row(
+                "SELECT projection_id, effect_id, board, task_id, desired_json, observed_json
+                 FROM task_projections WHERE projection_id = ?1",
+                [projection_id],
+                |row| {
+                    let desired: String = row.get(4)?;
+                    let observed: String = row.get(5)?;
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        desired,
+                        observed,
+                    ))
+                },
+            )
+            .optional()?
+            .map(
+                |(projection_id, effect_id, board, task_id, desired, observed)| -> Result<TaskProjectionInput> {
+                    Ok(TaskProjectionInput {
+                        projection_id,
+                        effect_id,
+                        board,
+                        task_id,
+                        desired: serde_json::from_str(&desired)?,
+                        observed: serde_json::from_str(&observed)?,
+                    })
+                },
+            )
+            .transpose()
+    }
+
     pub fn claim_effect(
         &mut self,
         owner: &str,
@@ -752,6 +801,108 @@ impl Store {
             return Err(StoreError::LeaseLost(effect_id.to_owned()));
         }
         Ok(())
+    }
+
+    pub fn complete_task_projection(
+        &mut self,
+        input: &TaskProjectionInput,
+        owner: &str,
+        now: u64,
+        fault: Option<FaultPoint>,
+    ) -> Result<ApplyResult> {
+        self.ensure_writable()?;
+        if input.projection_id.trim().is_empty()
+            || input.effect_id.trim().is_empty()
+            || input.board.trim().is_empty()
+            || input.task_id.trim().is_empty()
+            || !input.desired.is_object()
+            || !input.observed.is_object()
+            || owner.trim().is_empty()
+        {
+            return Err(StoreError::InvalidInput(
+                "projection, effect, board, task, object evidence, and owner are required",
+            ));
+        }
+        let desired_json = serde_json::to_string(&input.desired)?;
+        let observed_json = serde_json::to_string(&input.observed)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing: Option<(String, String, String, String, String, String)> = transaction
+            .query_row(
+                "SELECT projection_id, effect_id, board, task_id, desired_json, observed_json
+                 FROM task_projections WHERE projection_id = ?1 OR effect_id = ?2",
+                params![input.projection_id, input.effect_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .optional()?;
+        if let Some(existing) = existing {
+            let exact = existing.0 == input.projection_id
+                && existing.1 == input.effect_id
+                && existing.2 == input.board
+                && existing.3 == input.task_id
+                && existing.4 == desired_json
+                && existing.5 == observed_json;
+            if !exact {
+                return Err(StoreError::IdempotencyConflict {
+                    id: input.projection_id.clone(),
+                });
+            }
+            let delivered: Option<i64> = transaction.query_row(
+                "SELECT delivered_at FROM outbox WHERE effect_id = ?1",
+                [&input.effect_id],
+                |row| row.get(0),
+            )?;
+            if delivered.is_some() {
+                transaction.commit()?;
+                return Ok(ApplyResult::Replayed);
+            }
+        } else {
+            let case_key: String = transaction
+                .query_row(
+                    "SELECT case_key FROM outbox
+                     WHERE effect_id = ?1 AND delivered_at IS NULL
+                       AND lease_owner = ?2 AND lease_until >= ?3",
+                    params![input.effect_id, owner, sql_u64(now)?],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .ok_or_else(|| StoreError::LeaseLost(input.effect_id.clone()))?;
+            transaction.execute(
+                "INSERT INTO task_projections(projection_id, case_key, effect_id, board, task_id, desired_json, observed_json, reconciled_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    input.projection_id,
+                    case_key,
+                    input.effect_id,
+                    input.board,
+                    input.task_id,
+                    desired_json,
+                    observed_json,
+                    sql_u64(now)?,
+                ],
+            )?;
+        }
+        inject(fault, FaultPoint::AfterProjection)?;
+        let updated = transaction.execute(
+            "UPDATE outbox SET delivered_at = ?1, lease_owner = NULL, lease_until = NULL
+             WHERE effect_id = ?2 AND lease_owner = ?3 AND lease_until >= ?1 AND delivered_at IS NULL",
+            params![sql_u64(now)?, input.effect_id, owner],
+        )?;
+        if updated != 1 {
+            return Err(StoreError::LeaseLost(input.effect_id.clone()));
+        }
+        transaction.commit()?;
+        Ok(ApplyResult::Applied)
     }
 
     pub fn backup_to(&self, destination: impl AsRef<Path>) -> Result<()> {
@@ -1084,6 +1235,7 @@ fn count(connection: &Connection, table: &str) -> Result<u64> {
         "outbox" => "SELECT COUNT(*) FROM outbox",
         "evidence" => "SELECT COUNT(*) FROM evidence",
         "findings" => "SELECT COUNT(*) FROM findings",
+        "task_projections" => "SELECT COUNT(*) FROM task_projections",
         _ => return Err(StoreError::InvalidInput("unknown count table")),
     };
     let value: i64 = connection.query_row(sql, [], |row| row.get(0))?;
