@@ -2,6 +2,13 @@
 
 #![forbid(unsafe_code)]
 
+mod write;
+
+pub use write::{
+    CommentSpec, GitHubWriter, MergeModePolicy, MergeSpec, MutationRequest, MutationResult,
+    MutationTransport,
+};
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::time::Duration;
@@ -100,6 +107,11 @@ pub enum GitHubError {
     InvalidIdentity,
     PaginationLimit,
     UnsafePaginationUrl,
+    InvalidMutation,
+    IdempotencyConflict,
+    DuplicateOwnership,
+    OwnershipConflict,
+    MutationDisabled,
     Transport(String),
 }
 
@@ -123,6 +135,17 @@ impl fmt::Display for GitHubError {
             Self::UnsafePaginationUrl => {
                 formatter.write_str("GitHub pagination attempted to change origin")
             }
+            Self::InvalidMutation => formatter.write_str("invalid GitHub mutation request"),
+            Self::IdempotencyConflict => {
+                formatter.write_str("GitHub idempotency marker conflicts with existing content")
+            }
+            Self::DuplicateOwnership => {
+                formatter.write_str("multiple GitHub objects claim the same Pip ownership")
+            }
+            Self::OwnershipConflict => {
+                formatter.write_str("GitHub object has a Pip marker from an unexpected actor")
+            }
+            Self::MutationDisabled => formatter.write_str("GitHub mutation is disabled by policy"),
             Self::Transport(error) => write!(formatter, "GitHub transport failed: {error}"),
         }
     }
