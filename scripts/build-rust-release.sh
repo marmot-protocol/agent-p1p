@@ -57,6 +57,7 @@ install -m 0555 target/release/pip-control "$release_root/bin/pip-control"
 cp -R skills "$release_root/share/pip-v2/skills"
 cp -R config/target "$release_root/share/pip-v2/config"
 cp -R migration/target-v1 "$release_root/share/pip-v2/contracts"
+cp -R packaging/systemd "$release_root/share/pip-v2/systemd"
 find "$release_root/share" -type d -exec chmod 0555 {} +
 find "$release_root/share" -type f -exec chmod 0444 {} +
 
