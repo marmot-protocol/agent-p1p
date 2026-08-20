@@ -13,16 +13,16 @@ exist. It is not evidence of live-host installation or a completed canary.
 
 | Boundary | Current implementation | Evidence boundary |
 |---|---|---|
-| Deterministic workflow | Exhaustive Rust states, events, effects, exact-head joins, bounded remediation, and shadow-only MDK disposition | Workspace tests and frozen fixtures |
-| Authoritative storage | SQLite schema v4, immutable events/evidence/runs/findings, current-case projection, durable outbox, leases, immutable direct attempts, transactional effect supersession, backup, migration, and crash injection | Workspace and disposable lifecycle tests |
-| Intake reads | Generic label discovery plus bounded issue title/body/comment and label-event snapshots using numeric repository/actor identity, policy validation, and one-case concurrency | Fixture tests plus a read-only live GitHub observation |
+| Deterministic workflow | Exhaustive Rust states, events, effects, exact-head joins, remediation/elapsed-time/repeated-finding/provider-failure bounds, durable escalation, and shadow-only MDK disposition | Workspace tests and frozen fixtures |
+| Authoritative storage | SQLite schema v5, immutable webhook deliveries/events/evidence/runs/findings, current-case projection, durable outbox, leases, immutable direct attempts, transactional effect supersession, backup, migration, and crash injection | Workspace and disposable lifecycle tests |
+| Intake reads | Signed `issues/labeled` webhook ingestion with delivery-ID/payload-digest replay protection and a live exact-issue re-read, plus bounded polling recovery using numeric repository/actor identity, policy validation, and concurrency limits | Adversarial fixture tests plus a read-only live GitHub observation; target ingress remains unconfigured |
 | Worker dispatch routing | Hermes-native roles receive controller-gated, idempotent board projections; direct roles become leased `RUN_DIRECT_WORKER` jobs and cross an immutable filesystem bridge to a separate worker identity; mixed reviews split one role to each path; both paths converge through the same result contract | Fake-runner, restart/recovery, mixed-review, systemd-boundary, and offline integration tests |
 | Worker contracts | Versioned planner, builder, two reviewer, and final-reviewer results bound to case, task, role, model, skills commit, plan, PR, and exact head | Contract fixtures and ingestion tests |
 | Worker evidence bundles | Every projected worker receives the complete ordered ledger history at the claimed state revision, including record digests and a reproducible root digest; final review includes the atomically committed GitHub preflight | Ledger, scheduling, dispatch-command, and exact-final-preflight tests |
 | CI reconciliation | Independent current and historical check/status evaluation on the ledger-bound PR head | Fixture and controller-cycle tests |
 | GitHub reads/writes | Bounded REST reads plus bounded GraphQL review-thread pagination; idempotent issue comments, controller-owned draft PRs, exact-head reviews, ready-for-review mutation, and guarded merge | Adapter and controller-cycle tests; MDK policy cannot enable the guarded path |
-| Release/install | Signed source-bound release cohort, artifact verification, content-addressed install, rollback, schema migration, isolated control/worker identities, hardened shadow timer, and inert active-runtime templates | Local tests and passing disposable-systemd clean install/reinstall/upgrade/rollback/restart gate |
-| Active controller | One `controller-cycle` command that ingests Hermes and isolated direct-worker results, reconciles CI and authorization, performs generic intake, handles takeover, publishes branches/plans/PRs/reviews/dispositions, verifies final preflight, and routes only freshly authorized effects | Local fixture and restart tests; live activation remains unauthorized |
+| Release/install | Signed source-bound release cohort, protected manual CI build/sign/upload workflow, exact action/image pins, artifact verification, content-addressed install, rollback, schema migration, isolated identities, hardened shadow timer, and inert active-runtime templates | Local tests and passing disposable-systemd clean install/reinstall/upgrade/rollback/restart gate; protected CI environment has not been provisioned or run |
+| Active controller | One `controller-cycle` command that ingests Hermes and isolated direct-worker results, reconciles CI and authorization, performs polling recovery intake, enforces all operational bounds, handles takeover, publishes branches/plans/PRs/reviews/dispositions, verifies final preflight, and routes only freshly authorized effects | Local fixture and restart tests; live activation remains unauthorized |
 | Final-review preflight | A durable observation effect joins the accepted plan/build/reviewer ledger, fresh issue/clarification and authorization evidence, exact numeric GitHub actor and role-stamped approvals, current head CI, clean draft-PR ownership/mergeability, and resolved review threads before final-review dispatch | State-machine, adapter, fixture, drift, and restart-safe lease tests |
 | Review publication | Two distinct controller-held reviewer credentials publish the joined role contracts on the exact head; remediation and final preflight remain blocked until both idempotent reviews exist | Policy, state-machine, mutation, outage/retry, and exact-role fixture tests |
 | Plan publication | Planner results first create a durable `PUBLISH_PLAN` effect; the controller publishes the immutable plan comment and only then applies the typed outcome that releases build, human disposition, or terminal recording | Contract, state-machine, mutation, and outage/retry tests |
@@ -33,6 +33,7 @@ exist. It is not evidence of live-host installation or a completed canary.
 | Runtime isolation | Hermes workers see Hermes state plus read-only worktrees but not the ledger, direct artifacts, or provider home; direct workers use `pip-v2-worker`, see immutable inbox/worktrees/artifacts/provider state, and cannot open the ledger, Hermes state, repository cache, or credentials | Unit-file contracts, queue convergence tests, and disposable-systemd identity/directory lifecycle |
 | Guarded merge | An explicitly guarded/autonomous policy selects the merge method; the controller revalidates the complete final gate, marks the draft ready, revalidates, emits a separate merge effect, merges with expected-head protection, and verifies the recorded merge commit | Restart-convergence, shadow-disablement, state-machine, GraphQL, and mutation tests |
 | Human disposition | `HOLD_FOR_HUMAN`, `ESCALATE`, and shadow-ready effects publish idempotent provenance-marked issue or draft-PR comments; local completion, block, abandonment, and takeover effects commit evidence without writing after lost authorization | Mutation fixtures and transactional effect/evidence tests |
+| Provider retry control | Direct-provider failures are immutable attempts counted by Pip; Hermes tasks receive the policy retry limit and a terminal `gave_up` circuit breaker is converted to a Pip operational-bound escalation | Direct queue, Hermes projection, terminal-run, and escalation tests; live outage/recovery drill remains required |
 
 ## What is deliberately inert
 
@@ -53,13 +54,20 @@ they are not claims that local adapter tests already proved production:
 1. Provision the canonical MDK checkout and provider/Hermes authentication
    under the installed service identities. Run `bootstrap-runtime` from the
    exact installed release and confirm the gateway observes the same root.
-2. Populate and verify the three numeric GitHub actor identities and separately
+2. Configure a trusted GitHub webhook ingress that preserves the raw payload and
+   `X-GitHub-Delivery`, `X-GitHub-Event`, and `X-Hub-Signature-256` values when
+   invoking `webhook-intake`. Provision its root-owned webhook secret. Polling
+   remains recovery, not the intended primary intake path.
+3. Populate and verify the three numeric GitHub actor identities and separately
    scoped credentials. Configure the actual required MDK CI contexts; the
    checked-in paused policy intentionally has none.
-3. Record live, non-dispatching Hermes/provider capability and outage/recovery
+4. Configure the protected `pip-release` GitHub environment and its signing
+   trust material, then run and independently verify the exact-head signed
+   release workflow. No signing secret belongs in this repository.
+5. Record live, non-dispatching Hermes/provider capability and outage/recovery
    evidence on the target host. Any upstream incompatibility must fail closed;
    it cannot trigger a model or personal-profile substitution.
-4. Obtain explicit authorization to enable the inert gateway/controller/direct
+6. Obtain explicit authorization to enable the inert gateway/controller/direct
    timers and run exactly one deliberately labeled MDK shadow case.
 
 ## Runtime topology decision

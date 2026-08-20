@@ -64,19 +64,24 @@ happens to resemble approval.
 4. Enforce global and repository pause/concurrency policy.
 5. Create the permanent case and intake event idempotently.
 6. Commit an outbox entry for one blocked planner projection.
-7. Create/verify the Hermes task and notification subscription.
+7. Create/verify the Hermes task projection.
 8. Revalidate authorization immediately before releasing the planner task.
 
-Failure before step 5 changes nothing. Failure after step 5 leaves a durable
-outbox item for reconciliation; it does not create a second case or task.
+Failure before a verified webhook delivery or polling observation changes
+nothing. A verified delivery is retained even if the GitHub re-read fails, so
+the same delivery can be retried without ambiguity. Failure after case creation
+leaves a durable outbox item for reconciliation; it does not create a second
+case or task.
 
 ## Planning sequence
 
 1. Observe a completed planner task and fetch its immutable result artifact.
 2. Verify case/task/profile/skill/model bindings and schema.
-3. Verify the GitHub plan comment and content digest independently.
-4. Commit the immutable planning run.
-5. Apply the typed outcome:
+3. Commit the immutable planning run as `PLAN_RECORDED` plus a durable
+   `PUBLISH_PLAN` effect.
+4. Publish or verify the provenance-marked GitHub plan comment and record its
+   content/actor evidence.
+5. Only after publication, apply the typed outcome:
    - `PROCEED` -> `READY_TO_BUILD`;
    - human ambiguity -> `WAITING_HUMAN`;
    - dependency -> `BLOCKED` plus dependency metadata;
@@ -131,8 +136,8 @@ still review the entire current diff independently; confirmation alone is not
 approval.
 
 Policy checks before another round include maximum rounds, elapsed time,
-repeated finding fingerprints, repeated provider failures, and incompatible
-reviewer verdicts. Exceeding a bound enters `ESCALATED`.
+repeated finding fingerprints, and repeated provider failures. Exceeding a
+bound enters `ESCALATED`.
 
 ## Final review sequence
 

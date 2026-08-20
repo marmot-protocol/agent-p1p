@@ -8,9 +8,10 @@ Hermes Kanban boards.
 ## Status
 
 The repository now contains the locally complete single-repository Rust shadow
-runtime: deterministic workflow and ledger, generic intake, exact worktrees,
-Hermes-native projections, an isolated direct-Cursor executor, controller-only
-Git publication, exact-head GitHub review/CI gates, managed Hermes bootstrap,
+runtime: deterministic workflow and ledger, signed webhook intake plus polling
+recovery, exact worktrees, Hermes-native projections, an isolated direct-Cursor
+executor, controller-only Git publication, exact-head GitHub review/CI gates,
+managed Hermes bootstrap,
 and a signed rollback-safe systemd release. The Python implementation remains
 only as a frozen reference until a Rust canary is authorized and proven.
 
@@ -52,6 +53,8 @@ The documentation distinguishes three things explicitly:
   reference-to-Rust migration with exit criteria.
 - [`docs/implementation-status.md`](docs/implementation-status.md) — current
   executable inventory, inert boundaries, and remaining cutover work.
+- [`docs/completion-audit.md`](docs/completion-audit.md) — requirement-by-
+  requirement coverage and the exact external inputs still needed.
 - [`docs/worker-result-contracts.md`](docs/worker-result-contracts.md) — exact
   versioned JSON returned by each worker role.
 

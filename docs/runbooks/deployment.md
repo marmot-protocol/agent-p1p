@@ -47,6 +47,14 @@ The manifest binds:
 Trusted CI derives `source_commit`; the installer does not accept a free-form
 operator assertion that can disagree with the artifact.
 
+The checked-in `.github/workflows/release.yml` is a manual, protected release
+workflow. It requires the `pip-release` environment and externally provisioned
+`PIP_RELEASE_SIGNING_KEY_BASE64` and `PIP_RELEASE_PUBLIC_KEY` secrets. It checks
+out the triggering SHA without persisted GitHub credentials, reruns the full
+Rust gates, builds and verifies the cohort, creates a deterministic tar
+envelope, and uploads it under the exact source SHA. Configuring those secrets
+or approving a run is a separate release-operator action.
+
 ## Pre-release gates
 
 All gates bind to the exact release commit:
@@ -239,6 +247,10 @@ merge:
   mode: shadow
   autonomous: false
   method: squash
+max_remediation_rounds: 3
+max_case_elapsed_seconds: 86400
+max_provider_failures: 3
+max_repeated_finding_fingerprint: 2
 ```
 
 After reviewed release installation, but before enabling any timer:
@@ -285,7 +297,27 @@ After reviewed release installation, but before enabling any timer:
    profile binding plus board visibility from the service-owned root.
 5. Configure all three numeric GitHub actor IDs and the actual required MDK CI
    contexts. Empty required contexts are not acceptable canary policy.
-6. Run non-dispatching GitHub, Hermes, and direct-provider health/recovery
+6. Provision `/etc/pip-v2/github-webhook.secret` as a root-owned `0600` file.
+   Configure a trusted TLS ingress or webhook relay to preserve the raw request
+   body and invoke the exact installed binary with the GitHub delivery headers:
+
+   ```bash
+   pip-control webhook-intake \
+     --policy /etc/pip-v2/repositories/mdk.json \
+     --database /var/lib/pip-v2/ledger.db \
+     --github-token /run/credentials/INGRESS/github.token \
+     --webhook-secret /run/credentials/INGRESS/github-webhook.secret \
+     --payload /run/pip-v2-webhooks/DELIVERY.raw \
+     --delivery-id X_GITHUB_DELIVERY \
+     --event X_GITHUB_EVENT \
+     --signature X_HUB_SIGNATURE_256
+   ```
+
+   The paths and header placeholders are ingress-specific; never substitute a
+   decoded/re-encoded payload. The command verifies HMAC before mutation,
+   records the delivery ID and payload digest, and re-reads the exact issue from
+   GitHub. The periodic controller remains the missed-delivery reconciler.
+7. Run non-dispatching GitHub, Hermes, and direct-provider health/recovery
    probes.
 
 Only after those checks and separate activation authorization:

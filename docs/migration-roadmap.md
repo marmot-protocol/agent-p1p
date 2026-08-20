@@ -158,11 +158,14 @@ Exit gate:
 
 ## Phase 7: Packaging and lifecycle
 
-**Implementation status:** The signed cohort, installer, isolated control and
+**Implementation status:** The signed cohort, protected manual CI release
+workflow, exact action/container pins, installer, isolated control and
 direct-worker identities, shadow unit, inert active-runtime templates, and
 disposable lifecycle are complete locally.
 Fresh install, reinstall, upgrade, rollback, and restart all preserve disabled
-active and shadow timers. CI and live-host evidence are separate gates.
+active and shadow timers. The protected signing environment is not provisioned,
+so the workflow has not produced an authorized release. CI and live-host
+evidence are separate gates.
 
 Deliverables:
 
@@ -183,9 +186,12 @@ Exit gate:
 ## Phase 8: Parity and non-dispatching live shadow
 
 **Implementation status:** Frozen transition and worker-contract parity is
-exhaustive, and repeated live GitHub reconciliation is stable with zero
-mutations. Live Hermes and provider recovery evidence is currently unavailable
-on the development workstation and remains an open exit-gate item.
+exhaustive, repeated live GitHub reconciliation is stable with zero mutations,
+and local adapter tests cover Hermes outage/recovery plus direct and Hermes
+circuit breakers. On 2026-08-20 the development workstation had Cursor and an
+authenticated personal `gh`, but no `hermes` executable. Service-identity,
+live-Hermes, and live-provider recovery evidence therefore remains an open
+exit-gate item.
 
 Deliverables:
 
@@ -202,9 +208,11 @@ Exit gate:
 
 ## Phase 9: One generic MDK shadow case
 
-**Implementation status:** Not started. Activation remains unauthorized and the
-runtime gaps listed in [`implementation-status.md`](implementation-status.md)
-must close first.
+**Implementation status:** No live case has started. The generic Rust path,
+signed-webhook adapter, polling recovery, runtime templates, and operational
+bounds exist locally, but activation remains unauthorized and the host-specific
+gaps listed in [`implementation-status.md`](implementation-status.md) must close
+first.
 
 Deliverables:
 
@@ -223,6 +231,12 @@ Exit gate:
 - JG accepts the shadow result quality and operational behavior.
 
 ## Phase 10: Controlled expansion
+
+**Implementation status:** Sequenced after Phase 9 by design. The shared ledger
+already enforces global active-case capacity across installed repository
+policies, but provider health aggregation, repository registry operations,
+cross-repository dependency routing, and multi-board reporting are not claimed
+complete before the single-repository canary is accepted.
 
 Expand one dimension at a time:
 

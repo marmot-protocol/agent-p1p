@@ -174,6 +174,12 @@ Primary intake comes from signed GitHub webhooks. A bounded periodic reconciler
 recovers missed deliveries. Delivery IDs and canonical event fingerprints are
 idempotency keys.
 
+The Rust `webhook-intake` boundary accepts the raw payload plus the three GitHub
+delivery headers, verifies HMAC before ledger mutation, records the immutable
+delivery identity and payload digest, and re-reads the named issue from GitHub
+before applying eligibility. The public TLS endpoint or trusted webhook relay
+is host infrastructure and must preserve those values byte-for-byte.
+
 An issue becomes eligible only when:
 
 - it is open and is not a pull request;
@@ -474,17 +480,27 @@ Trusted CI produces and signs the manifest. Installation verifies the signature
 and every digest before mutation. An operator-supplied source SHA alone is not
 provenance. See [`runbooks/deployment.md`](runbooks/deployment.md).
 
+The repository supplies a protected, manually dispatched release workflow. Its
+actions and lifecycle container are pinned by immutable digests, and a checked
+regression script rejects mutable action or container references. Provisioning
+the protected signing environment and approving a particular run remain
+release-operator actions.
+
 ## 17. Canary activation
 
 The generic MDK policy begins with:
 
 ```yaml
-intake_enabled: false
+intake:
+  enabled: false
+  paused: true
+  repository_active_limit: 1
+  global_active_limit: 1
 dispatch_enabled: false
-max_active_cases: 1
-merge_mode: shadow
-autonomous_merge: false
-merge_method: squash
+merge:
+  mode: shadow
+  autonomous: false
+  method: squash
 ```
 
 Activation requires a reviewed release and explicit operator action to enable
