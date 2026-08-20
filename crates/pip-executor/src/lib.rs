@@ -5,6 +5,7 @@
 mod cursor;
 mod process;
 mod provider;
+mod publication;
 
 pub use cursor::{CursorExecutionError, CursorExecutor, CursorTask};
 mod worktree;
@@ -14,6 +15,7 @@ pub use process::{
     sanitized_environment,
 };
 pub use provider::{CursorHealthProbe, HealthAssurance, ProviderHealth, ProviderProbeError};
+pub use publication::{GitPublicationSpec, GitPublisher, PublicationError, PublicationResult};
 
 pub use worktree::{
     AllocationError, AllocationResult, GitCommand, GitOutput, GitRunner, ProcessGitRunner,
