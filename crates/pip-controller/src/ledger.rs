@@ -240,6 +240,7 @@ fn effect_name(effect: Effect) -> &'static str {
         Effect::DispatchPlanner => "DISPATCH_PLANNER",
         Effect::PublishPlan => "PUBLISH_PLAN",
         Effect::DispatchBuilder => "DISPATCH_BUILDER",
+        Effect::PublishDraftPullRequest => "PUBLISH_DRAFT_PULL_REQUEST",
         Effect::ObserveCi => "OBSERVE_CI",
         Effect::DispatchReviewers => "DISPATCH_REVIEWERS",
         Effect::PublishReviews => "PUBLISH_REVIEWS",

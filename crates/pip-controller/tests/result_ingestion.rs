@@ -36,6 +36,8 @@ fn complete_worker_sequence_is_immutable_exact_head_and_shadow_held() {
             transition_count: 2
         }
     );
+    assert_eq!(case(&store).state, "BUILDING");
+    publish_build(&mut store, &results[1]);
     assert_eq!(case(&store).state, "WAITING_CI");
     accept_ci(&mut store);
     assert_eq!(case(&store).state, "REVIEWING");
@@ -122,6 +124,7 @@ fn two_reviews_join_to_request_changes_and_preserve_both_runs_and_findings() {
     ingest_worker_result(&mut store, &policy(), &binding(&results[0]), &results[0]).unwrap();
     publish_plan(&mut store, &results[0]);
     ingest_worker_result(&mut store, &policy(), &binding(&results[1]), &results[1]).unwrap();
+    publish_build(&mut store, &results[1]);
     accept_ci(&mut store);
 
     let value = serde_json::to_value(&results[2]).unwrap();
@@ -265,6 +268,50 @@ fn publish_plan(store: &mut Store, result: &WorkerResult) {
         next_pr_number: None,
         next_head_sha: None,
         event_payload: serde_json::to_value(planner).unwrap(),
+        run: None,
+        evidence: Vec::new(),
+        findings: Vec::new(),
+    };
+    LedgerController::apply(store, &policy(), &workflow).unwrap();
+}
+
+fn publish_build(store: &mut Store, result: &WorkerResult) {
+    let WorkerResult::Builder(build) = result else {
+        panic!("builder result required");
+    };
+    let current = case(store);
+    let workflow = WorkflowCommand {
+        case_id: case_id(),
+        event_id: EventId::from_str(&format!("event-draft-pr-published-{}", build.build_round))
+            .unwrap(),
+        observed_at: ObservedAt::new(11),
+        expected_state: CaseState::from_str(&current.state).unwrap(),
+        expected_state_revision: StateRevision::new(
+            NonZeroU64::new(current.state_revision).unwrap(),
+        ),
+        accepted_policy_revision: PolicyRevision::new(NonZeroU64::new(1).unwrap()),
+        remediation_round: current.remediation_round,
+        plan_version: Some(PlanVersion::new(NonZeroU32::new(1).unwrap())),
+        pr_number: current
+            .pr_number
+            .and_then(NonZeroU64::new)
+            .map(PullRequestNumber::new),
+        head_sha: current
+            .head_sha
+            .as_deref()
+            .map(GitSha::from_str)
+            .transpose()
+            .unwrap(),
+        event: Event::ReviewReady,
+        accepted_plan_version: None,
+        next_pr_number: Some(PullRequestNumber::new(NonZeroU64::new(77).unwrap())),
+        next_head_sha: build
+            .head_sha
+            .as_deref()
+            .map(GitSha::from_str)
+            .transpose()
+            .unwrap(),
+        event_payload: json!({"builder_result": build}),
         run: None,
         evidence: Vec::new(),
         findings: Vec::new(),

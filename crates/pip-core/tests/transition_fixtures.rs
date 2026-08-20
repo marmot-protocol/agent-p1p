@@ -122,6 +122,15 @@ fn accepted_work_emits_only_the_next_declared_effect() {
     .unwrap();
     assert_eq!(review.effects, []);
 
+    let recorded = transition(
+        CaseState::Building,
+        Event::BuildRecorded,
+        TransitionContext::default(),
+    )
+    .unwrap();
+    assert_eq!(recorded.next_state, CaseState::Building);
+    assert_eq!(recorded.effects, [Effect::PublishDraftPullRequest]);
+
     let final_review = transition(
         CaseState::Reviewing,
         Event::ReviewsApproved,

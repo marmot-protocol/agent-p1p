@@ -1,7 +1,7 @@
 ---
 name: builder-grok
 description: Use when implementing an approved Pip v2 plan with Grok.
-version: 0.4.0
+version: 0.5.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -18,7 +18,7 @@ The Hermes `cursor-fixer` profile is the v1-style task orchestrator. It delegate
 
 ## Workflow
 
-1. Read the Kanban task contract. Fetch the referenced planner comment from GitHub; verify its numeric author, URL, recorded SHA-256 digest, plan version, planned base SHA, and execution disposition. Treat that comment as the authorized plan artifact.
+1. Read the Kanban task contract and the controller-published planner comment for its exact case and plan version. Verify the controller provenance marker, planned base SHA, and execution disposition. Treat that comment and the bound plan artifacts as the authorized plan.
 2. Clone the exact repository into the scratch workspace and fetch current `master`. Record the actual implementation base. The planned base is context, not a checkout lock: adapt paths and mechanics to ordinary upstream movement. Return to planning only when a concrete upstream change makes the authorized scope unsafe, contradictory, or unimplementable; report that incompatibility precisely.
 3. Verify `composer-2.5` appears in `agent --list-models`.
 4. Invoke Cursor once in a fresh session:
@@ -32,8 +32,8 @@ The Hermes `cursor-fixer` profile is the v1-style task orchestrator. It delegate
 5. Reject any model identifier Cursor reports that differs from the requested model. Cursor does not provide independent provider-side routing attestation; record that limitation honestly.
 6. Implement only the authorized scope. Never change MLS/CGKA, keys, trust anchors, membership/admin authorization semantics, or push-payload context without JG authorization.
 7. Add regression coverage. Run repository-native formatting, lint, tests, and full-diff review. Do not bump versions. Update the existing Unreleased changelog when code changes.
-8. Create a signed `agent-p1p` commit on a Pip-owned `pip/*` branch. Open or update a draft PR.
-9. Independently verify the PR URL, exact head, and every CI attempt with `gh`; do not merely repeat Cursor's claims. Query check runs with `filter=all`. A failed attempt permanently disqualifies that PR even when a rerun passes. Do not complete until a fresh draft PR has no red attempt and current CI is green on its exact head.
+8. Create a signed `agent-p1p` commit and push only the assigned Pip-owned `pip/*` branch through the execution adapter's scoped push boundary. Do not open, edit, review, or merge a PR.
+9. Verify the local commit and pushed branch resolve to the same exact SHA. The controller creates or updates the draft PR and independently evaluates every GitHub CI attempt; do not claim a PR number or CI disposition.
 10. Return the Rust `builder` result contract from `docs/worker-result-contracts.md`. Record the actual implementation base under `evidence.implementation_base_sha`. `RETURN_TO_PLANNING` must include `evidence.incompatibility.reason` and nonempty concrete `evidence.incompatibility.observations`; branch movement by itself is not an incompatibility. After validating it, call
     `kanban_complete` with a concise summary and the complete object as
     `metadata`; Hermes must durably store the contract in the Kanban run
@@ -42,4 +42,4 @@ The Hermes `cursor-fixer` profile is the v1-style task orchestrator. It delegate
 
 ## Completion
 
-A build is review-ready only when local checks pass, exact-head GitHub CI is green, the draft PR exists, and no visible model mismatch occurred. Provider-side Cursor routing is requested and recorded, not cryptographically attested.
+A build result is ready for controller publication only when local checks pass, the assigned branch contains the exact reported commit, and no visible model mismatch occurred. Draft-PR identity and GitHub CI are later controller gates. Provider-side Cursor routing is requested and recorded, not cryptographically attested.

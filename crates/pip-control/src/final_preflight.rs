@@ -319,7 +319,6 @@ fn validate_ledger_join(
             WorkerResult::Builder(result)
                 if result.outcome == BuilderOutcome::ReviewReady
                     && result.plan_version == case.plan_version
-                    && result.pr_number == Some(pr_number)
                     && result.head_sha.as_deref() == Some(head_sha) =>
             {
                 builder = true;

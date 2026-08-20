@@ -68,6 +68,10 @@
       "rationale": "A model result cannot release builder or disposition work until the controller publishes and records the immutable plan comment."
     },
     {
+      "target_name": "builder result waits for controller draft PR",
+      "rationale": "A builder commit cannot release CI observation until the controller creates or updates the case-owned draft PR."
+    },
+    {
       "target_name": "builder dispatch becomes active",
       "rationale": "Separates recorded dispatch intent from observed worker activation."
     },

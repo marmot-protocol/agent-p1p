@@ -7,6 +7,7 @@ mod ci;
 mod cli;
 mod dispatch;
 mod disposition;
+mod draft_pr;
 mod final_preflight;
 mod install;
 mod intake;
@@ -30,6 +31,10 @@ pub use dispatch::{
 };
 pub use disposition::{
     DispositionCycle, DispositionError, DispositionWriter, consume_disposition_once,
+};
+pub use draft_pr::{
+    DraftPullRequestCycle, DraftPullRequestError, DraftPullRequestWriter,
+    publish_draft_pull_request_once,
 };
 pub use final_preflight::{
     FinalPreflightCycle, FinalPreflightError, FinalPreflightSource, reconcile_final_preflight_once,

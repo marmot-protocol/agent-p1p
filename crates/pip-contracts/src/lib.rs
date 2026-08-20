@@ -172,13 +172,7 @@ pub struct BuilderResult {
     pub plan_version: u32,
     pub build_round: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pr_number: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub head_sha: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ci_head_sha: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub required_ci_green: Option<bool>,
     pub local_checks: Vec<String>,
     pub finding_resolutions: Vec<FindingResolution>,
 }
@@ -357,11 +351,7 @@ impl WorkerResult {
         let common = self.common();
         let (plan_version, pr_number, head_sha) = match self {
             Self::Planner(result) => (result.plan_version, None, None),
-            Self::Builder(result) => (
-                result.plan_version,
-                result.pr_number,
-                result.head_sha.as_deref(),
-            ),
+            Self::Builder(result) => (result.plan_version, None, result.head_sha.as_deref()),
             Self::Review(result) => (
                 result.plan_version,
                 Some(result.pr_number),
@@ -441,21 +431,13 @@ impl BuilderResult {
             }
         }
         if self.outcome == BuilderOutcome::ReviewReady {
-            let (Some(pr_number), Some(head), Some(ci_head), Some(true)) = (
-                self.pr_number,
-                self.head_sha.as_deref(),
-                self.ci_head_sha.as_deref(),
-                self.required_ci_green,
-            ) else {
+            let Some(head) = self.head_sha.as_deref() else {
                 return Err(ContractError::InvalidOutcomeEvidence);
             };
-            if pr_number == 0 || !is_hex(head, 40) || !is_hex(ci_head, 40) {
+            if !is_hex(head, 40) {
                 return Err(ContractError::InvalidOutcomeEvidence);
             }
-            if head != ci_head {
-                return Err(ContractError::CiHeadMismatch);
-            }
-        } else if self.required_ci_green == Some(true) {
+        } else if self.head_sha.is_some() {
             return Err(ContractError::InvalidOutcomeEvidence);
         }
         Ok(())

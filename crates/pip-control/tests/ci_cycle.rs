@@ -139,6 +139,7 @@ fn waiting_ci_store(path: std::path::PathBuf) -> Store {
         &results[1],
     )
     .unwrap();
+    publish_build(&mut store, &results[1]);
     let mut now = 10;
     while let Some(effect) = store.claim_effect("fixture", now, 10).unwrap() {
         store
@@ -176,6 +177,41 @@ fn accept_plan(store: &mut Store, result: &WorkerResult) {
                 effects: vec![EffectInput {
                     effect_id: "effect-builder".into(),
                     effect_type: "DISPATCH_BUILDER".into(),
+                    payload: json!({"case_key":"repo:984321#1240@1"}),
+                }],
+            },
+            None,
+        )
+        .unwrap();
+}
+
+fn publish_build(store: &mut Store, result: &WorkerResult) {
+    let WorkerResult::Builder(build) = result else {
+        panic!("builder result required");
+    };
+    let case = store.case("repo:984321#1240@1").unwrap().unwrap();
+    store
+        .apply_transition(
+            &TransitionInput {
+                case_key: case.case_key,
+                expected_revision: case.state_revision,
+                next_state: "WAITING_CI".into(),
+                remediation_round: case.remediation_round,
+                plan_version: case.plan_version,
+                pr_number: Some(77),
+                head_sha: build.head_sha.clone(),
+                observed_at: 4,
+                event: EventInput {
+                    event_id: format!("event-draft-pr-published-{}", build.build_round),
+                    event_type: "REVIEW_READY".into(),
+                    payload: json!({"builder_result": build}),
+                },
+                run: None,
+                evidence: Vec::new(),
+                findings: Vec::new(),
+                effects: vec![EffectInput {
+                    effect_id: format!("effect-ci-{}", build.build_round),
+                    effect_type: "OBSERVE_CI".into(),
                     payload: json!({"case_key":"repo:984321#1240@1"}),
                 }],
             },

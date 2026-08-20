@@ -182,7 +182,7 @@ hold according to policy.
 | Role | Target responsibility | Write authority |
 |---|---|---|
 | `planner` | Validate issue, root cause, scope, dependencies, and test plan. | Versioned plan artifacts and a bound result contract only. |
-| `builder` | Manage the assigned worktree, implement the active plan, test, commit, push, and create/update a draft PR. | Assigned Pip branch and draft PR. |
+| `builder` | Manage the assigned worktree, implement the active plan, test, commit, and push the assigned branch. | Assigned Pip branch only; no PR mutation. |
 | `reviewer-general` | Correctness, integration, errors, concurrency, tests, maintenance. | Review evidence/comments only. |
 | `reviewer-secperf` | Security, privacy, authorization, abuse, resource bounds, performance. | Review evidence/comments only. |
 | `final-reviewer` | Reconstruct the complete case and determine the next disposition. | Final evidence/comment only. |
@@ -256,8 +256,15 @@ worktree path, active plan, and expected base context. The builder:
 5. inspects the full diff;
 6. creates signed Pip-attributed commits;
 7. pushes only the assigned Pip branch;
-8. opens or updates the case's draft PR; and
-9. reports the exact head and CI evidence.
+8. reports the exact pushed head; and
+9. leaves draft-PR creation and CI disposition to the controller.
+
+The builder result first records `BUILD_RECORDED` and cannot release CI
+observation. The controller creates or updates one draft PR using a stable
+case ownership marker, verifies the repository, branch, author, base, and exact
+head returned by GitHub, then applies `REVIEW_READY` with the PR/head binding.
+Remediation reuses the same marker and PR number while advancing only the
+assigned branch head.
 
 The engine independently reads GitHub before accepting those claims. Clean
 default-branch movement does not force a rebase. A conflict, branch-protection

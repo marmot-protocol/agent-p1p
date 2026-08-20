@@ -62,14 +62,15 @@ Additional fields:
 - `outcome`: `REVIEW_READY`, `RETURN_TO_PLANNING`, `BLOCKED`, `ABANDON`, or
   `BLOCKED_UNEXPECTED_MODEL`;
 - positive `plan_version` and `build_round`;
-- nullable `pr_number`, `head_sha`, `ci_head_sha`, and `required_ci_green`;
+- nullable `head_sha`;
 - `local_checks`; and
 - `finding_resolutions` with exact finding and resolution-head bindings.
 
-`REVIEW_READY` requires a positive PR number, lowercase 40-hex head, matching
-CI head, and `required_ci_green: true`. That worker claim does not release
-reviewers; the controller independently reads the complete GitHub attempt
-history on the ledger head.
+`REVIEW_READY` requires the lowercase 40-hex commit the builder pushed to its
+assigned branch. The worker contract has no PR or CI authority fields. The
+controller creates or updates the case-owned draft PR, binds its numeric
+identity and exact head in the ledger, and independently reads the complete
+GitHub CI attempt history before releasing reviewers.
 
 ## Reviewers
 

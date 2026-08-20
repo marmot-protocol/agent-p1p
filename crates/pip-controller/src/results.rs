@@ -199,15 +199,15 @@ fn map_event(
         {
             Ok(mapped(
                 match result.outcome {
-                    BuilderOutcome::ReviewReady => Event::ReviewReady,
+                    BuilderOutcome::ReviewReady => Event::BuildRecorded,
                     BuilderOutcome::ReturnToPlanning => Event::ReturnToPlanning,
                     BuilderOutcome::Blocked => Event::Blocked,
                     BuilderOutcome::Abandon => Event::Abandon,
                     BuilderOutcome::BlockedUnexpectedModel => Event::BlockedUnexpectedModel,
                 },
                 None,
-                result.pr_number,
-                result.head_sha.clone(),
+                None,
+                None,
             ))
         }
         WorkerResult::Review(result) if case.state == "REVIEWING" => {

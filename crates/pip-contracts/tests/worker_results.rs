@@ -28,11 +28,14 @@ fn model_substitution_fails_closed() {
 }
 
 #[test]
-fn exact_head_and_ci_claims_must_agree() {
+fn review_ready_builder_requires_an_exact_commit_head() {
     let mut value = fixture()["results"][1].clone();
-    value["ci_head_sha"] = json!("cccccccccccccccccccccccccccccccccccccccc");
+    value["head_sha"] = json!("not-a-sha");
     let result: WorkerResult = serde_json::from_value(value).unwrap();
-    assert_eq!(result.validate(), Err(ContractError::CiHeadMismatch));
+    assert_eq!(
+        result.validate(),
+        Err(ContractError::InvalidOutcomeEvidence)
+    );
 }
 
 #[test]

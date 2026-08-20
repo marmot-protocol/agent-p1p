@@ -38,10 +38,7 @@
       "evidence": {"fixture": true},
       "plan_version": 1,
       "build_round": 1,
-      "pr_number": 77,
       "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "ci_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "required_ci_green": true,
       "local_checks": ["cargo test --workspace"],
       "finding_resolutions": []
     },

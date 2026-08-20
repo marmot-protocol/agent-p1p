@@ -101,15 +101,12 @@ fn adapt(name: &str, source: &Value) -> Result<WorkerResult, String> {
                 "outcome",
                 "plan_version",
                 "build_round",
-                "pr_number",
                 "head_sha",
-                "ci_head_sha",
                 "local_checks",
                 "finding_resolutions",
             ] {
                 copy(source, fields, field, field)?;
             }
-            copy(source, fields, "github_ci_green", "required_ci_green")?;
         }
         "general_review" | "secperf_review" => {
             for field in [

@@ -44,6 +44,7 @@ pub enum Event {
     HumanApprovedStaleBase,
     HumanClarified,
     BuilderDispatched,
+    BuildRecorded,
     ReviewReady,
     ReturnToPlanning,
     Blocked,
@@ -69,7 +70,7 @@ pub enum Event {
 }
 
 impl Event {
-    pub const ALL: [Self; 36] = [
+    pub const ALL: [Self; 37] = [
         Self::PlanRecorded,
         Self::Proceed,
         Self::WaitingForIssueCreator,
@@ -84,6 +85,7 @@ impl Event {
         Self::HumanApprovedStaleBase,
         Self::HumanClarified,
         Self::BuilderDispatched,
+        Self::BuildRecorded,
         Self::ReviewReady,
         Self::ReturnToPlanning,
         Self::Blocked,
@@ -190,6 +192,7 @@ string_enum!(Event, "event", {
     "HUMAN_APPROVED_STALE_BASE" => HumanApprovedStaleBase,
     "HUMAN_CLARIFIED" => HumanClarified,
     "BUILDER_DISPATCHED" => BuilderDispatched,
+    "BUILD_RECORDED" => BuildRecorded,
     "REVIEW_READY" => ReviewReady,
     "RETURN_TO_PLANNING" => ReturnToPlanning,
     "BLOCKED" => Blocked,
@@ -243,6 +246,7 @@ pub enum Effect {
     DispatchPlanner,
     PublishPlan,
     DispatchBuilder,
+    PublishDraftPullRequest,
     ObserveCi,
     DispatchReviewers,
     PublishReviews,
@@ -343,6 +347,9 @@ pub fn transition(
             decision(State::Planning, &[Fx::DispatchPlanner])
         }
         (State::ReadyToBuild, Ev::BuilderDispatched) => decision(State::Building, &[]),
+        (State::Building | State::Remediating, Ev::BuildRecorded) => {
+            decision(state, &[Fx::PublishDraftPullRequest])
+        }
         (State::Building | State::Remediating, Ev::ReviewReady) => {
             decision(State::WaitingCi, &[Fx::ObserveCi])
         }

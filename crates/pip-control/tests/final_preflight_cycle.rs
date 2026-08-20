@@ -71,7 +71,7 @@ fn exact_published_reviews_clean_ci_and_resolved_threads_release_final_review() 
         .claim_effect_matching("dispatcher", 200, 30, &["DISPATCH_FINAL_REVIEWER"])
         .unwrap()
         .unwrap();
-    assert_eq!(effect.state_revision, 10);
+    assert_eq!(effect.state_revision, 11);
 }
 
 #[test]
@@ -215,6 +215,7 @@ fn final_review_store(
         &results[1],
     )
     .unwrap();
+    publish_build(&mut store, &results[1]);
     assert!(matches!(
         reconcile_ci_once(source, policy, &mut store, 100).unwrap(),
         CiCycle::Transitioned { .. }
@@ -278,6 +279,7 @@ fn remediated_final_review_store(
         &results[1],
     )
     .unwrap();
+    publish_build(&mut store, &results[1]);
     reconcile_ci_once(source, policy, &mut store, 100).unwrap();
 
     let mut changed = serde_json::to_value(&results[2]).unwrap();
@@ -299,7 +301,6 @@ fn remediated_final_review_store(
     builder["task_id"] = json!("builder-2");
     builder["build_round"] = json!(2);
     builder["head_sha"] = json!("c".repeat(40));
-    builder["ci_head_sha"] = json!("c".repeat(40));
     builder["finding_resolutions"] = json!([{
         "finding_id": "GENERAL-R1-001",
         "resolution_commit": "c".repeat(40),
@@ -315,6 +316,7 @@ fn remediated_final_review_store(
         &builder,
     )
     .unwrap();
+    publish_build(&mut store, &builder);
 
     source.evidence.pull_request.head_sha = "c".repeat(40);
     source.evidence.check_runs[0].head_sha = "c".repeat(40);
@@ -375,6 +377,41 @@ fn accept_plan(store: &mut Store, result: &WorkerResult) {
                 effects: vec![EffectInput {
                     effect_id: "effect-builder".into(),
                     effect_type: "DISPATCH_BUILDER".into(),
+                    payload: json!({"case_key":"repo:984321#1240@1"}),
+                }],
+            },
+            None,
+        )
+        .unwrap();
+}
+
+fn publish_build(store: &mut Store, result: &WorkerResult) {
+    let WorkerResult::Builder(build) = result else {
+        panic!("builder result required");
+    };
+    let case = store.case("repo:984321#1240@1").unwrap().unwrap();
+    store
+        .apply_transition(
+            &TransitionInput {
+                case_key: case.case_key,
+                expected_revision: case.state_revision,
+                next_state: "WAITING_CI".into(),
+                remediation_round: case.remediation_round,
+                plan_version: case.plan_version,
+                pr_number: Some(77),
+                head_sha: build.head_sha.clone(),
+                observed_at: 4 + u64::from(build.build_round),
+                event: EventInput {
+                    event_id: format!("event-draft-pr-published-{}", build.build_round),
+                    event_type: "REVIEW_READY".into(),
+                    payload: json!({"builder_result": build}),
+                },
+                run: None,
+                evidence: Vec::new(),
+                findings: Vec::new(),
+                effects: vec![EffectInput {
+                    effect_id: format!("effect-ci-{}", build.build_round),
+                    effect_type: "OBSERVE_CI".into(),
                     payload: json!({"case_key":"repo:984321#1240@1"}),
                 }],
             },
