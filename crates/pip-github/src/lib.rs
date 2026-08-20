@@ -14,7 +14,7 @@ use std::fmt;
 use std::time::Duration;
 
 use hmac::{Hmac, KeyInit, Mac};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -185,7 +185,7 @@ pub struct IntakeSnapshot {
     pub label_events: Vec<LabelEvent>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CheckStatus {
     Queued,
@@ -196,7 +196,7 @@ pub enum CheckStatus {
     Pending,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CheckConclusion {
     ActionRequired,
@@ -210,7 +210,7 @@ pub enum CheckConclusion {
     TimedOut,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct CheckRunSnapshot {
     pub id: u64,
     pub app_id: u64,
@@ -222,7 +222,7 @@ pub struct CheckRunSnapshot {
     pub completed_at: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CommitStatusState {
     Error,
@@ -231,7 +231,7 @@ pub enum CommitStatusState {
     Success,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct CommitStatusSnapshot {
     pub id: u64,
     pub creator_id: u64,
@@ -241,7 +241,7 @@ pub struct CommitStatusSnapshot {
     pub updated_at: String,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ReviewState {
     Approved,
@@ -251,7 +251,7 @@ pub enum ReviewState {
     Pending,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ReviewSnapshot {
     pub id: u64,
     pub actor_id: u64,
@@ -262,7 +262,7 @@ pub struct ReviewSnapshot {
     pub body: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PullRequestSnapshot {
     pub id: u64,
     pub number: u64,
@@ -280,13 +280,146 @@ pub struct PullRequestSnapshot {
     pub base_sha: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PullRequestEvidence {
     pub pull_request: PullRequestSnapshot,
     pub check_runs: Vec<CheckRunSnapshot>,
     pub commit_status_state: CommitStatusState,
     pub commit_statuses: Vec<CommitStatusSnapshot>,
     pub reviews: Vec<ReviewSnapshot>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum CiVerdict {
+    Accepted,
+    Pending,
+    Failed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct CiEvaluation {
+    pub verdict: CiVerdict,
+    pub blockers: Vec<String>,
+}
+
+#[must_use]
+pub fn evaluate_ci(
+    evidence: &PullRequestEvidence,
+    expected_head_sha: &str,
+    required_contexts: &[String],
+) -> CiEvaluation {
+    let mut failed = Vec::new();
+    let mut pending = Vec::new();
+    if evidence.pull_request.head_sha != expected_head_sha {
+        push_unique(&mut failed, "PR_HEAD_MISMATCH".into());
+    }
+    if !evidence.pull_request.open || evidence.pull_request.merged {
+        push_unique(&mut failed, "PR_NOT_OPEN".into());
+    }
+    let historical_failure = evidence.check_runs.iter().any(|check| {
+        matches!(
+            check.conclusion,
+            Some(
+                CheckConclusion::ActionRequired
+                    | CheckConclusion::Cancelled
+                    | CheckConclusion::Failure
+                    | CheckConclusion::StartupFailure
+                    | CheckConclusion::Stale
+                    | CheckConclusion::TimedOut
+            )
+        )
+    }) || evidence.commit_statuses.iter().any(|status| {
+        matches!(
+            status.state,
+            CommitStatusState::Error | CommitStatusState::Failure
+        )
+    });
+    if historical_failure {
+        push_unique(&mut failed, "HISTORICAL_FAILED_ATTEMPT".into());
+    }
+    match evidence.commit_status_state {
+        CommitStatusState::Error | CommitStatusState::Failure => {
+            push_unique(&mut failed, "COMBINED_STATUS_FAILURE".into());
+        }
+        CommitStatusState::Pending if !evidence.commit_statuses.is_empty() => {
+            push_unique(&mut pending, "CI_PENDING".into());
+        }
+        CommitStatusState::Pending | CommitStatusState::Success => {}
+    }
+
+    if required_contexts.is_empty()
+        && evidence.check_runs.is_empty()
+        && evidence.commit_statuses.is_empty()
+    {
+        push_unique(&mut pending, "CI_HOLLOW".into());
+    }
+    for required in required_contexts {
+        let checks = evidence
+            .check_runs
+            .iter()
+            .filter(|check| &check.name == required)
+            .collect::<Vec<_>>();
+        let statuses = evidence
+            .commit_statuses
+            .iter()
+            .filter(|status| &status.context == required)
+            .collect::<Vec<_>>();
+        if checks.is_empty() && statuses.is_empty() {
+            push_unique(&mut pending, format!("MISSING_REQUIRED_CONTEXT:{required}"));
+            continue;
+        }
+        let in_progress = checks
+            .iter()
+            .any(|check| check.status != CheckStatus::Completed)
+            || statuses
+                .iter()
+                .any(|status| status.state == CommitStatusState::Pending);
+        if in_progress {
+            push_unique(&mut pending, "CI_PENDING".into());
+        }
+        let green = checks.iter().any(|check| {
+            check.status == CheckStatus::Completed
+                && check.conclusion == Some(CheckConclusion::Success)
+        }) || statuses
+            .iter()
+            .any(|status| status.state == CommitStatusState::Success);
+        if !green && !in_progress {
+            push_unique(
+                &mut failed,
+                format!("REQUIRED_CONTEXT_NOT_GREEN:{required}"),
+            );
+        }
+    }
+    if evidence
+        .check_runs
+        .iter()
+        .any(|check| check.head_sha != expected_head_sha)
+    {
+        push_unique(&mut failed, "CHECK_HEAD_MISMATCH".into());
+    }
+    if !failed.is_empty() {
+        CiEvaluation {
+            verdict: CiVerdict::Failed,
+            blockers: failed,
+        }
+    } else if !pending.is_empty() {
+        CiEvaluation {
+            verdict: CiVerdict::Pending,
+            blockers: pending,
+        }
+    } else {
+        CiEvaluation {
+            verdict: CiVerdict::Accepted,
+            blockers: Vec::new(),
+        }
+    }
+}
+
+fn push_unique(values: &mut Vec<String>, value: String) {
+    if !values.contains(&value) {
+        values.push(value);
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+mod ci;
 mod cli;
 mod dispatch;
 mod install;
@@ -11,6 +12,7 @@ mod release;
 mod results;
 mod shadow;
 
+pub use ci::{CiCycle, CiCycleError, PullRequestSource, reconcile_ci_once};
 pub use cli::{CliError, run_cli};
 pub use dispatch::{DispatchCycleError, DispatchCycleResult, dispatch_once, dispatch_once_with};
 pub use install::{
