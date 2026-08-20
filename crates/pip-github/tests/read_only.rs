@@ -24,6 +24,11 @@ impl ReadTransport for FakeTransport {
         self.requests.borrow_mut().push(request);
         self.responses.borrow_mut().pop_front().unwrap()
     }
+
+    fn post(&self, request: ReadRequest) -> Result<ReadResponse, GitHubError> {
+        self.requests.borrow_mut().push(request);
+        self.responses.borrow_mut().pop_front().unwrap()
+    }
 }
 
 fn response(body: &str) -> ReadResponse {
@@ -272,6 +277,113 @@ fn pull_request_evidence_rejects_wrong_repository_head_and_duplicate_attempts() 
     assert!(matches!(
         reader(transport).read_pull_request("owner", "repo", 222, 77),
         Err(GitHubError::InvalidIdentity)
+    ));
+}
+
+#[test]
+fn review_threads_are_read_through_bounded_graphql_pagination() {
+    let transport = FakeTransport::default();
+    transport.push(response(
+        r#"{"data":{"repository":{"databaseId":984321,"pullRequest":{"number":77,"reviewThreads":{"nodes":[{"id":"PRRT_1","isResolved":false,"isOutdated":false,"path":"src/lib.rs"}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"}}}}}}"#,
+    ));
+    transport.push(response(
+        r#"{"data":{"repository":{"databaseId":984321,"pullRequest":{"number":77,"reviewThreads":{"nodes":[{"id":"PRRT_2","isResolved":true,"isOutdated":false,"path":"src/main.rs"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}"#,
+    ));
+
+    let threads = reader(transport.clone())
+        .read_review_threads("marmot-protocol", "mdk", 984_321, 77)
+        .unwrap();
+    assert_eq!(threads.len(), 2);
+    assert_eq!(threads[0].id, "PRRT_1");
+    assert!(!threads[0].is_resolved);
+    assert!(threads[1].is_resolved);
+    let requests = transport.requests.borrow();
+    assert_eq!(requests.len(), 2);
+    assert!(requests.iter().all(|request| {
+        request.method == "POST"
+            && request.url == "https://api.github.test/graphql"
+            && request.headers.get("authorization").map(String::as_str)
+                == Some("Bearer fixture-token")
+    }));
+    let second: serde_json::Value = serde_json::from_slice(&requests[1].body).unwrap();
+    assert_eq!(second["variables"]["after"], "cursor-1");
+}
+
+#[test]
+fn review_thread_pagination_requires_a_cursor_and_stays_bounded() {
+    let transport = FakeTransport::default();
+    transport.push(response(
+        r#"{"data":{"repository":{"databaseId":984321,"pullRequest":{"number":77,"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":null}}}}}}"#,
+    ));
+    assert!(matches!(
+        reader(transport).read_review_threads("marmot-protocol", "mdk", 984_321, 77),
+        Err(GitHubError::InvalidIdentity)
+    ));
+
+    let transport = FakeTransport::default();
+    for page in 1..=3 {
+        transport.push(response(&format!(
+            r#"{{"data":{{"repository":{{"databaseId":984321,"pullRequest":{{"number":77,"reviewThreads":{{"nodes":[],"pageInfo":{{"hasNextPage":true,"endCursor":"cursor-{page}"}}}}}}}}}}}}"#
+        )));
+    }
+    assert!(matches!(
+        reader(transport).read_review_threads("marmot-protocol", "mdk", 984_321, 77),
+        Err(GitHubError::PaginationLimit)
+    ));
+}
+
+#[test]
+fn review_threads_reject_graphql_errors_identity_drift_and_duplicates() {
+    let transport = FakeTransport::default();
+    transport.push(response(
+        r#"{"errors":[{"message":"forbidden"}],"data":null}"#,
+    ));
+    assert!(matches!(
+        reader(transport).read_review_threads("marmot-protocol", "mdk", 984_321, 77),
+        Err(GitHubError::InvalidIdentity)
+    ));
+
+    let transport = FakeTransport::default();
+    transport.push(response(
+        r#"{"data":{"repository":{"databaseId":1,"pullRequest":{"number":77,"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}"#,
+    ));
+    assert!(matches!(
+        reader(transport).read_review_threads("marmot-protocol", "mdk", 984_321, 77),
+        Err(GitHubError::InvalidIdentity)
+    ));
+
+    let transport = FakeTransport::default();
+    transport.push(response(
+        r#"{"data":{"repository":{"databaseId":984321,"pullRequest":{"number":77,"reviewThreads":{"nodes":[{"id":"PRRT_1","isResolved":false,"isOutdated":false,"path":"src/lib.rs"},{"id":"PRRT_1","isResolved":true,"isOutdated":false,"path":"src/lib.rs"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}"#,
+    ));
+    assert!(matches!(
+        reader(transport).read_review_threads("marmot-protocol", "mdk", 984_321, 77),
+        Err(GitHubError::InvalidIdentity)
+    ));
+}
+
+#[test]
+fn review_thread_graphql_response_obeys_transport_bounds() {
+    let transport = FakeTransport::default();
+    transport.push(ReadResponse {
+        status: 200,
+        headers: BTreeMap::new(),
+        body: vec![b'x'; 4097],
+    });
+    assert!(matches!(
+        reader(transport).read_review_threads("marmot-protocol", "mdk", 984_321, 77),
+        Err(GitHubError::ResponseTooLarge)
+    ));
+
+    let transport = FakeTransport::default();
+    transport.push(ReadResponse {
+        status: 502,
+        headers: BTreeMap::new(),
+        body: b"{}".to_vec(),
+    });
+    assert!(matches!(
+        reader(transport).read_review_threads("marmot-protocol", "mdk", 984_321, 77),
+        Err(GitHubError::HttpStatus(502))
     ));
 }
 

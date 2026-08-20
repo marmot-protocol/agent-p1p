@@ -25,6 +25,7 @@ pub struct ReadRequest {
     pub method: &'static str,
     pub url: String,
     pub headers: BTreeMap<String, String>,
+    pub body: Vec<u8>,
     pub max_bytes: usize,
 }
 
@@ -37,6 +38,12 @@ pub struct ReadResponse {
 
 pub trait ReadTransport {
     fn get(&self, request: ReadRequest) -> Result<ReadResponse, GitHubError>;
+
+    fn post(&self, _request: ReadRequest) -> Result<ReadResponse, GitHubError> {
+        Err(GitHubError::Transport(
+            "read transport does not support POST".into(),
+        ))
+    }
 }
 
 #[derive(Clone)]
@@ -69,6 +76,44 @@ impl ReadTransport for UreqTransport {
         }
         let mut response = call
             .call()
+            .map_err(|error| GitHubError::Transport(error.to_string()))?;
+        let status = response.status().as_u16();
+        let headers = response
+            .headers()
+            .iter()
+            .filter_map(|(name, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|value| (name.as_str().to_ascii_lowercase(), value.to_owned()))
+            })
+            .collect();
+        let body_limit = u64::try_from(request.max_bytes.saturating_add(1)).unwrap_or(u64::MAX);
+        let body = response
+            .body_mut()
+            .with_config()
+            .limit(body_limit)
+            .read_to_vec()
+            .map_err(|error| GitHubError::Transport(error.to_string()))?;
+        Ok(ReadResponse {
+            status,
+            headers,
+            body,
+        })
+    }
+
+    fn post(&self, request: ReadRequest) -> Result<ReadResponse, GitHubError> {
+        if request.method != "POST" {
+            return Err(GitHubError::Transport(
+                "read transport POST received another method".into(),
+            ));
+        }
+        let mut call = self.agent.post(&request.url);
+        for (name, value) in &request.headers {
+            call = call.header(name, value);
+        }
+        let mut response = call
+            .send(&request.body)
             .map_err(|error| GitHubError::Transport(error.to_string()))?;
         let status = response.status().as_u16();
         let headers = response
@@ -289,6 +334,14 @@ pub struct PullRequestEvidence {
     pub reviews: Vec<ReviewSnapshot>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ReviewThreadSnapshot {
+    pub id: String,
+    pub is_resolved: bool,
+    pub is_outdated: bool,
+    pub path: String,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CiVerdict {
@@ -420,6 +473,10 @@ fn push_unique(values: &mut Vec<String>, value: String) {
     if !values.contains(&value) {
         values.push(value);
     }
+}
+
+fn json_bytes(value: &Value) -> Result<Vec<u8>, GitHubError> {
+    serde_json::to_vec(value).map_err(|error| GitHubError::MalformedJson(error.to_string()))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -570,6 +627,58 @@ struct IssueCommentDto {
     body: String,
     created_at: String,
     updated_at: String,
+}
+
+#[derive(Deserialize)]
+struct GraphqlEnvelope {
+    data: Option<GraphqlData>,
+    #[serde(default)]
+    errors: Vec<Value>,
+}
+
+#[derive(Deserialize)]
+struct GraphqlData {
+    repository: Option<GraphqlRepository>,
+}
+
+#[derive(Deserialize)]
+struct GraphqlRepository {
+    #[serde(rename = "databaseId")]
+    database_id: u64,
+    #[serde(rename = "pullRequest")]
+    pull_request: Option<GraphqlPullRequest>,
+}
+
+#[derive(Deserialize)]
+struct GraphqlPullRequest {
+    number: u64,
+    #[serde(rename = "reviewThreads")]
+    review_threads: GraphqlReviewThreads,
+}
+
+#[derive(Deserialize)]
+struct GraphqlReviewThreads {
+    nodes: Vec<GraphqlReviewThread>,
+    #[serde(rename = "pageInfo")]
+    page_info: GraphqlPageInfo,
+}
+
+#[derive(Deserialize)]
+struct GraphqlReviewThread {
+    id: String,
+    #[serde(rename = "isResolved")]
+    is_resolved: bool,
+    #[serde(rename = "isOutdated")]
+    is_outdated: bool,
+    path: String,
+}
+
+#[derive(Deserialize)]
+struct GraphqlPageInfo {
+    #[serde(rename = "hasNextPage")]
+    has_next_page: bool,
+    #[serde(rename = "endCursor")]
+    end_cursor: Option<String>,
 }
 
 pub struct GitHubReader<T> {
@@ -906,6 +1015,82 @@ impl<T: ReadTransport> GitHubReader<T> {
         })
     }
 
+    pub fn read_review_threads(
+        &self,
+        owner: &str,
+        repository: &str,
+        repository_id: u64,
+        pull_request_number: u64,
+    ) -> Result<Vec<ReviewThreadSnapshot>, GitHubError> {
+        if !valid_segment(owner) || !valid_segment(repository) {
+            return Err(GitHubError::InvalidRepository);
+        }
+        if repository_id == 0 || pull_request_number == 0 {
+            return Err(GitHubError::InvalidIdentity);
+        }
+        const QUERY: &str = "query PipReviewThreads($owner:String!,$repository:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repository){databaseId pullRequest(number:$number){number reviewThreads(first:100,after:$after){nodes{id isResolved isOutdated path} pageInfo{hasNextPage endCursor}}}}}";
+        let number =
+            i64::try_from(pull_request_number).map_err(|_| GitHubError::InvalidIdentity)?;
+        let mut after: Option<String> = None;
+        let mut ids = BTreeSet::new();
+        let mut threads = Vec::new();
+        for page in 0..self.max_pages {
+            let body = json_bytes(&serde_json::json!({
+                "query": QUERY,
+                "variables": {
+                    "owner": owner,
+                    "repository": repository,
+                    "number": number,
+                    "after": after,
+                }
+            }))?;
+            let response = self.graphql(body)?;
+            let envelope: GraphqlEnvelope = serde_json::from_slice(&response.body)
+                .map_err(|error| GitHubError::MalformedJson(error.to_string()))?;
+            if !envelope.errors.is_empty() {
+                return Err(GitHubError::InvalidIdentity);
+            }
+            let repository = envelope
+                .data
+                .and_then(|data| data.repository)
+                .ok_or(GitHubError::InvalidIdentity)?;
+            let pull = repository
+                .pull_request
+                .ok_or(GitHubError::InvalidIdentity)?;
+            if repository.database_id != repository_id || pull.number != pull_request_number {
+                return Err(GitHubError::InvalidIdentity);
+            }
+            for thread in pull.review_threads.nodes {
+                if thread.id.trim().is_empty()
+                    || thread.path.trim().is_empty()
+                    || !ids.insert(thread.id.clone())
+                {
+                    return Err(GitHubError::InvalidIdentity);
+                }
+                threads.push(ReviewThreadSnapshot {
+                    id: thread.id,
+                    is_resolved: thread.is_resolved,
+                    is_outdated: thread.is_outdated,
+                    path: thread.path,
+                });
+            }
+            if !pull.review_threads.page_info.has_next_page {
+                return Ok(threads);
+            }
+            if page + 1 == self.max_pages {
+                return Err(GitHubError::PaginationLimit);
+            }
+            after = Some(
+                pull.review_threads
+                    .page_info
+                    .end_cursor
+                    .filter(|cursor| !cursor.trim().is_empty())
+                    .ok_or(GitHubError::InvalidIdentity)?,
+            );
+        }
+        Err(GitHubError::PaginationLimit)
+    }
+
     fn request(&self, path: &str) -> Result<ReadResponse, GitHubError> {
         if !path.starts_with('/') {
             return Err(GitHubError::UnsafePaginationUrl);
@@ -919,6 +1104,30 @@ impl<T: ReadTransport> GitHubReader<T> {
                 ("user-agent".into(), "pip-control-plane".into()),
                 ("x-github-api-version".into(), "2022-11-28".into()),
             ]),
+            body: Vec::new(),
+            max_bytes: self.max_response_bytes,
+        })?;
+        if !(200..300).contains(&response.status) {
+            return Err(GitHubError::HttpStatus(response.status));
+        }
+        if response.body.len() > self.max_response_bytes {
+            return Err(GitHubError::ResponseTooLarge);
+        }
+        Ok(response)
+    }
+
+    fn graphql(&self, body: Vec<u8>) -> Result<ReadResponse, GitHubError> {
+        let response = self.transport.post(ReadRequest {
+            method: "POST",
+            url: format!("{}/graphql", self.base_url),
+            headers: BTreeMap::from([
+                ("accept".into(), "application/vnd.github+json".into()),
+                ("authorization".into(), format!("Bearer {}", self.token)),
+                ("content-type".into(), "application/json".into()),
+                ("user-agent".into(), "pip-control-plane".into()),
+                ("x-github-api-version".into(), "2022-11-28".into()),
+            ]),
+            body,
             max_bytes: self.max_response_bytes,
         })?;
         if !(200..300).contains(&response.status) {
