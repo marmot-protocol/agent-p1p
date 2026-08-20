@@ -26,12 +26,9 @@ fn staged_active_controller_template_uses_a_dedicated_shared_hermes_root() {
     assert!(service.contains("User=pip-v2-control"));
     assert!(service.contains("Environment=HERMES_HOME=/var/lib/pip-v2/hermes"));
     assert!(service.contains("Environment=HERMES_KANBAN_HOME=/var/lib/pip-v2/hermes"));
-    assert!(service.contains("Environment=HOME=/var/lib/pip-v2/provider-home"));
     assert!(service.contains("controller-cycle"));
     assert!(service.contains("--policy /etc/pip-v2/repositories/%i.json"));
     assert!(service.contains("--skills-commit-file /opt/pip-v2/current/SOURCE.COMMIT"));
-    assert!(service.contains("--cursor cursor-agent"));
-    assert!(service.contains("--skills-root /opt/pip-v2/current/share/pip-v2/skills"));
     assert!(service.contains("LoadCredential=github.token:/etc/pip-v2/github.token"));
     assert!(service.contains(
         "LoadCredential=github-reviewer-general.token:/etc/pip-v2/github-reviewer-general.token"
@@ -42,5 +39,21 @@ fn staged_active_controller_template_uses_a_dedicated_shared_hermes_root() {
     assert!(service.contains("--github-reviewer-general-token %d/github-reviewer-general.token"));
     assert!(service.contains("--github-reviewer-secperf-token %d/github-reviewer-secperf.token"));
     assert!(!service.contains("/home/jeff"));
+    assert!(timer.contains("OnUnitActiveSec=15s"));
+}
+
+#[test]
+fn direct_worker_template_has_provider_state_but_no_controller_credentials() {
+    let service = include_str!("../../../packaging/systemd/pip-v2-direct-worker@.service");
+    let timer = include_str!("../../../packaging/systemd/pip-v2-direct-worker@.timer");
+
+    assert!(service.contains("User=pip-v2-control"));
+    assert!(service.contains("Environment=HOME=/var/lib/pip-v2/provider-home"));
+    assert!(service.contains("direct-worker-cycle"));
+    assert!(service.contains("--cursor cursor-agent"));
+    assert!(service.contains("--skills-root /opt/pip-v2/current/share/pip-v2/skills"));
+    assert!(!service.contains("LoadCredential="));
+    assert!(!service.contains("github.token"));
+    assert!(!service.contains("--hermes"));
     assert!(timer.contains("OnUnitActiveSec=15s"));
 }

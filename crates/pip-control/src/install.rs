@@ -196,6 +196,8 @@ fn install_release_inner(
     let timer_target = layout.unit_root.join("pip-v2-shadow-reconcile.timer");
     let controller_service_target = layout.unit_root.join("pip-v2-controller@.service");
     let controller_timer_target = layout.unit_root.join("pip-v2-controller@.timer");
+    let direct_service_target = layout.unit_root.join("pip-v2-direct-worker@.service");
+    let direct_timer_target = layout.unit_root.join("pip-v2-direct-worker@.timer");
     let ledger_target = layout.state_root.join("ledger.db");
     let current = layout.install_root.join("current");
     let service_bytes = read_regular(
@@ -214,6 +216,14 @@ fn install_release_inner(
         &source_root.join("share/pip-v2/systemd/pip-v2-controller@.timer"),
         1024 * 1024,
     )?;
+    let direct_service_bytes = read_regular(
+        &source_root.join("share/pip-v2/systemd/pip-v2-direct-worker@.service"),
+        1024 * 1024,
+    )?;
+    let direct_timer_bytes = read_regular(
+        &source_root.join("share/pip-v2/systemd/pip-v2-direct-worker@.timer"),
+        1024 * 1024,
+    )?;
 
     if release_dir.exists() {
         verify_release(&release_dir, &manifest_bytes, signature, public_key)
@@ -226,6 +236,8 @@ fn install_release_inner(
             && exact_file(&timer_target, &timer_bytes)
             && exact_file(&controller_service_target, &controller_service_bytes)
             && exact_file(&controller_timer_target, &controller_timer_bytes)
+            && exact_file(&direct_service_target, &direct_service_bytes)
+            && exact_file(&direct_timer_target, &direct_timer_bytes)
             && ledger_target.is_file()
         {
             return Ok(InstallOutcome {
@@ -244,6 +256,8 @@ fn install_release_inner(
             &timer_target,
             &controller_service_target,
             &controller_timer_target,
+            &direct_service_target,
+            &direct_timer_target,
             &ledger_target,
         ])
         .collect::<Vec<_>>();
@@ -275,6 +289,8 @@ fn install_release_inner(
         write_atomic(&timer_target, &timer_bytes, 0o444)?;
         write_atomic(&controller_service_target, &controller_service_bytes, 0o444)?;
         write_atomic(&controller_timer_target, &controller_timer_bytes, 0o444)?;
+        write_atomic(&direct_service_target, &direct_service_bytes, 0o444)?;
+        write_atomic(&direct_timer_target, &direct_timer_bytes, 0o444)?;
         inject(fault, InstallFault::AfterUnits)?;
         Store::open(&ledger_target).map_err(|error| InstallError::Ledger(error.to_string()))?;
         fs::set_permissions(&ledger_target, fs::Permissions::from_mode(0o600)).map_err(fs_error)?;

@@ -1,0 +1,43 @@
+[Unit]
+Description=Pip v2 credential-free direct worker cycle for %i
+Documentation=https://github.com/marmot-protocol/agent-p1p
+After=network-online.target
+Wants=network-online.target
+ConditionPathIsDirectory=/var/lib/pip-v2/provider-home
+
+[Service]
+Type=oneshot
+User=pip-v2-control
+Group=pip-v2-control
+Environment=HOME=/var/lib/pip-v2/provider-home
+Environment=XDG_CONFIG_HOME=/var/lib/pip-v2/provider-home/config
+Environment=XDG_DATA_HOME=/var/lib/pip-v2/provider-home/data
+Environment=XDG_STATE_HOME=/var/lib/pip-v2/provider-home/state
+Environment=XDG_CACHE_HOME=/var/lib/pip-v2/provider-home/cache
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/var/lib/pip-v2
+ExecStart=/opt/pip-v2/current/bin/pip-control direct-worker-cycle --policy /etc/pip-v2/repositories/%i.json --database /var/lib/pip-v2/ledger.db --cursor cursor-agent --git git --skills-root /opt/pip-v2/current/share/pip-v2/skills --owner pip-v2-direct-worker-%i
+UMask=0077
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/pip-v2
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+StandardOutput=journal
+StandardError=journal

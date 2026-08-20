@@ -80,6 +80,7 @@ pub fn run_cli(arguments: impl IntoIterator<Item = String>) -> Result<Value, Cli
         "derive-public-key" => derive_public_key(&arguments[1..]),
         "shadow-reconcile" => shadow_reconcile(&arguments[1..]),
         "controller-cycle" => controller_cycle(&arguments[1..]),
+        "direct-worker-cycle" => direct_worker_cycle(&arguments[1..]),
         "install-release" => install(&arguments[1..]),
         _ => Err(CliError::InvalidArgument(command.into())),
     }
@@ -98,14 +99,7 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
             "--owner",
             "--skills-commit-file",
         ],
-        &[
-            "--now",
-            "--lease-seconds",
-            "--global-paused",
-            "--cursor",
-            "--git",
-            "--skills-root",
-        ],
+        &["--now", "--lease-seconds", "--global-paused"],
     )?;
     let policy_bytes = read_bounded(Path::new(required(&options, "--policy")?), 1024 * 1024)?;
     let policy = crate::load_repository_policy(&policy_bytes)
@@ -233,46 +227,21 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     let authorization = crate::reconcile_active_authorization(&reader, &policy, &mut store, now)
         .map_err(|error| CliError::Reconciliation(error.to_string()))?;
-    let (result, direct_worker, ci) = if authorization.is_authorized() {
+    let (result, ci) = if authorization.is_authorized() {
         let result =
             crate::ingest_completed_once(&mut store, &policy, required(&options, "--hermes")?)
                 .map_err(|error| CliError::Reconciliation(error.to_string()))?;
-        let runtime = crate::CursorDirectRuntime::new(
-            BoundedProcessRunner,
-            required(&options, "--cursor")?,
-            required(&options, "--git")?,
-            &policy.workspace,
-            &policy.artifacts,
-            required(&options, "--skills-root")?,
-            sanitized_environment(),
-            4 * 1024 * 1024,
-        )
-        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
-        let direct = crate::run_direct_worker_once_with(
-            &mut store,
-            &policy,
-            &runtime,
-            crate::DirectWorkerCycleContext {
-                owner: required(&options, "--owner")?,
-                now,
-                lease_seconds,
-                authorization_valid: true,
-            },
-        )
-        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
         let ci = crate::reconcile_ci_once(&reader, &policy, &mut store, now)
             .map_err(|error| CliError::Reconciliation(error.to_string()))?;
         (
             serde_json::to_value(result)
-                .map_err(|error| CliError::Reconciliation(error.to_string()))?,
-            serde_json::to_value(direct)
                 .map_err(|error| CliError::Reconciliation(error.to_string()))?,
             serde_json::to_value(ci)
                 .map_err(|error| CliError::Reconciliation(error.to_string()))?,
         )
     } else {
         let blocked = json!({"result": "authorization_blocked"});
-        (blocked.clone(), blocked.clone(), blocked)
+        (blocked.clone(), blocked)
     };
     let draft_pull_request = crate::publish_draft_pull_request_once(
         &writer,
@@ -356,7 +325,6 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         "repository": policy.repository.full_name(),
         "policy_revision": policy.revision,
         "worker_result": result,
-        "direct_worker": direct_worker,
         "ci": ci,
         "intake": intake,
         "takeover": takeover,
@@ -368,6 +336,83 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         "merge": merge,
         "disposition": disposition,
         "dispatch": dispatch,
+    }))
+}
+
+fn direct_worker_cycle(arguments: &[String]) -> Result<Value, CliError> {
+    let options = options(
+        arguments,
+        &[
+            "--policy",
+            "--database",
+            "--cursor",
+            "--git",
+            "--skills-root",
+            "--owner",
+        ],
+        &["--now", "--lease-seconds"],
+    )?;
+    let policy_bytes = read_bounded(Path::new(required(&options, "--policy")?), 1024 * 1024)?;
+    let policy = crate::load_repository_policy(&policy_bytes)
+        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    if policy.intake.paused || !policy.dispatch_enabled {
+        return Ok(json!({
+            "ok": true,
+            "result": "disabled",
+            "repository": policy.repository.full_name(),
+            "policy_revision": policy.revision,
+        }));
+    }
+    let now = options
+        .get("--now")
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|_| CliError::InvalidArgument("--now".into()))
+        })
+        .transpose()?
+        .map_or_else(current_time, Ok)?;
+    let lease_seconds = options
+        .get("--lease-seconds")
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .ok()
+                .filter(|value| *value > 0)
+                .ok_or_else(|| CliError::InvalidArgument("--lease-seconds".into()))
+        })
+        .transpose()?
+        .unwrap_or(60);
+    let runtime = crate::CursorDirectRuntime::new(
+        BoundedProcessRunner,
+        required(&options, "--cursor")?,
+        required(&options, "--git")?,
+        &policy.workspace,
+        &policy.artifacts,
+        required(&options, "--skills-root")?,
+        sanitized_environment(),
+        4 * 1024 * 1024,
+    )
+    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let mut store = Store::open(required(&options, "--database")?)
+        .map_err(|error| CliError::Ledger(error.to_string()))?;
+    let result = crate::run_direct_worker_once_with(
+        &mut store,
+        &policy,
+        &runtime,
+        crate::DirectWorkerCycleContext {
+            owner: required(&options, "--owner")?,
+            now,
+            lease_seconds,
+            authorization_valid: true,
+        },
+    )
+    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    Ok(json!({
+        "ok": true,
+        "repository": policy.repository.full_name(),
+        "policy_revision": policy.revision,
+        "direct_worker": result,
     }))
 }
 

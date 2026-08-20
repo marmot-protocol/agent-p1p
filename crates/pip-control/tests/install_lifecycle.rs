@@ -277,6 +277,16 @@ fn cohort(parent: &Path, name: &str, binary: &[u8], source: &str, key: &str) -> 
         include_bytes!("../../../packaging/systemd/pip-v2-controller@.timer"),
     )
     .unwrap();
+    fs::write(
+        root.join("share/pip-v2/systemd/pip-v2-direct-worker@.service"),
+        include_bytes!("../../../packaging/systemd/pip-v2-direct-worker@.service"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("share/pip-v2/systemd/pip-v2-direct-worker@.timer"),
+        include_bytes!("../../../packaging/systemd/pip-v2-direct-worker@.timer"),
+    )
+    .unwrap();
     for entry in walk_files(&root) {
         let mode = if entry.ends_with("bin/pip-control") {
             0o555
