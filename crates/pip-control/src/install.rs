@@ -3,8 +3,9 @@
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt, symlink};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt, chown, symlink};
 use std::path::{Path, PathBuf};
+use std::process::{Command, ExitStatus};
 
 use pip_store::Store;
 use sha2::{Digest, Sha256};
@@ -51,13 +52,22 @@ pub struct InstallOutcome {
     pub source_commit: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HostInstallOptions {
+    pub systemctl: PathBuf,
+    pub state_uid: u32,
+    pub state_gid: u32,
+}
+
 #[derive(Debug)]
 pub enum InstallError {
     InvalidLayout,
     InvalidCohort(String),
+    ExpectedDigest(&'static str),
     ExistingConflict(PathBuf),
     Filesystem(String),
     Ledger(String),
+    HostLifecycle(String),
     Injected(InstallFault),
     Rollback(String),
 }
@@ -67,6 +77,12 @@ impl fmt::Display for InstallError {
         match self {
             Self::InvalidLayout => formatter.write_str("invalid installation layout"),
             Self::InvalidCohort(error) => write!(formatter, "invalid release cohort: {error}"),
+            Self::ExpectedDigest(name) => {
+                write!(
+                    formatter,
+                    "verified release {name} does not match the pinned digest"
+                )
+            }
             Self::ExistingConflict(path) => {
                 write!(
                     formatter,
@@ -76,6 +92,7 @@ impl fmt::Display for InstallError {
             }
             Self::Filesystem(error) => write!(formatter, "installation filesystem error: {error}"),
             Self::Ledger(error) => write!(formatter, "ledger initialization failed: {error}"),
+            Self::HostLifecycle(error) => write!(formatter, "host lifecycle failed: {error}"),
             Self::Injected(point) => write!(formatter, "injected installation failure: {point:?}"),
             Self::Rollback(error) => write!(formatter, "installation rollback failed: {error}"),
         }
@@ -90,6 +107,66 @@ pub fn install_release(
     layout: &InstallLayout,
     fault: Option<InstallFault>,
 ) -> Result<InstallOutcome, InstallError> {
+    let mut lifecycle = NoopLifecycle;
+    install_release_inner(
+        cohort,
+        public_key,
+        layout,
+        fault,
+        None,
+        None,
+        &mut lifecycle,
+    )
+}
+
+pub fn install_release_pinned(
+    cohort: impl AsRef<Path>,
+    public_key: &str,
+    layout: &InstallLayout,
+    expected_manifest_sha256: &str,
+    expected_binary_sha256: &str,
+) -> Result<InstallOutcome, InstallError> {
+    let mut lifecycle = NoopLifecycle;
+    install_release_inner(
+        cohort,
+        public_key,
+        layout,
+        None,
+        Some(expected_manifest_sha256),
+        Some(expected_binary_sha256),
+        &mut lifecycle,
+    )
+}
+
+pub fn install_host_release(
+    cohort: impl AsRef<Path>,
+    public_key: &str,
+    layout: &InstallLayout,
+    expected_manifest_sha256: &str,
+    expected_binary_sha256: &str,
+    options: &HostInstallOptions,
+) -> Result<InstallOutcome, InstallError> {
+    let mut lifecycle = SystemdLifecycle::new(options.clone(), layout.state_root.join("ledger.db"));
+    install_release_inner(
+        cohort,
+        public_key,
+        layout,
+        None,
+        Some(expected_manifest_sha256),
+        Some(expected_binary_sha256),
+        &mut lifecycle,
+    )
+}
+
+fn install_release_inner(
+    cohort: impl AsRef<Path>,
+    public_key: &str,
+    layout: &InstallLayout,
+    fault: Option<InstallFault>,
+    expected_manifest_sha256: Option<&str>,
+    expected_binary_sha256: Option<&str>,
+    lifecycle: &mut impl InstallLifecycle,
+) -> Result<InstallOutcome, InstallError> {
     validate_layout(layout)?;
     let cohort = real_directory(cohort.as_ref())?;
     let source_root = real_directory(&cohort.join("root"))?;
@@ -99,6 +176,12 @@ pub fn install_release(
         .map_err(|error| InstallError::InvalidCohort(error.to_string()))?;
     let verified = verify_release(&source_root, &manifest_bytes, signature, public_key)
         .map_err(|error| InstallError::InvalidCohort(error.to_string()))?;
+    if expected_manifest_sha256.is_some_and(|expected| expected != verified.manifest_sha256()) {
+        return Err(InstallError::ExpectedDigest("manifest SHA-256"));
+    }
+    if expected_binary_sha256.is_some_and(|expected| expected != verified.binary_sha256()) {
+        return Err(InstallError::ExpectedDigest("binary SHA-256"));
+    }
     let manifest: ReleaseManifest = serde_json::from_slice(&manifest_bytes)
         .map_err(|error| InstallError::InvalidCohort(error.to_string()))?;
     let policies = cohort_policies(&source_root, &manifest, layout)?;
@@ -144,6 +227,12 @@ pub fn install_release(
         .collect::<Vec<_>>();
     let snapshot = Snapshot::capture(&current, snapshot_paths)?;
     let release_preexisting = release_dir.exists();
+    if let Err(error) = lifecycle.before_mutation() {
+        return match lifecycle.rollback() {
+            Ok(()) => Err(error),
+            Err(rollback) => Err(InstallError::Rollback(format!("{error}; {rollback}"))),
+        };
+    }
     let result = (|| {
         if !release_preexisting {
             install_release_tree(
@@ -168,14 +257,20 @@ pub fn install_release(
         inject(fault, InstallFault::AfterLedger)?;
         replace_symlink(&current, &release_dir)?;
         inject(fault, InstallFault::AfterCurrent)?;
+        lifecycle.commit()?;
         Ok(())
     })();
     if let Err(error) = result {
-        if let Err(rollback) = snapshot.restore(&current) {
+        let filesystem_rollback = snapshot.restore(&current);
+        if !release_preexisting
+            && release_dir.exists()
+            && let Err(rollback) = fs::remove_dir_all(&release_dir).map_err(fs_error)
+        {
             return Err(InstallError::Rollback(format!("{error}; {rollback}")));
         }
-        if !release_preexisting && release_dir.exists() {
-            fs::remove_dir_all(&release_dir).map_err(fs_error)?;
+        let lifecycle_rollback = lifecycle.rollback();
+        if let Err(rollback) = filesystem_rollback.and(lifecycle_rollback) {
+            return Err(InstallError::Rollback(format!("{error}; {rollback}")));
         }
         return Err(error);
     }
@@ -184,6 +279,163 @@ pub fn install_release(
         release_id,
         source_commit: verified.source_commit().into(),
     })
+}
+
+trait InstallLifecycle {
+    fn before_mutation(&mut self) -> Result<(), InstallError>;
+    fn commit(&mut self) -> Result<(), InstallError>;
+    fn rollback(&mut self) -> Result<(), InstallError>;
+}
+
+struct NoopLifecycle;
+
+impl InstallLifecycle for NoopLifecycle {
+    fn before_mutation(&mut self) -> Result<(), InstallError> {
+        Ok(())
+    }
+
+    fn commit(&mut self) -> Result<(), InstallError> {
+        Ok(())
+    }
+
+    fn rollback(&mut self) -> Result<(), InstallError> {
+        Ok(())
+    }
+}
+
+struct SystemdLifecycle {
+    options: HostInstallOptions,
+    ledger: PathBuf,
+    prior_enabled: Option<bool>,
+    prior_active: Option<bool>,
+}
+
+impl SystemdLifecycle {
+    const TIMER: &'static str = "pip-v2-shadow-reconcile.timer";
+
+    fn new(options: HostInstallOptions, ledger: PathBuf) -> Self {
+        Self {
+            options,
+            ledger,
+            prior_enabled: None,
+            prior_active: None,
+        }
+    }
+
+    fn query(&self, command: &str, truthy: &[&str], falsy: &[&str]) -> Result<bool, InstallError> {
+        let output = Command::new(&self.options.systemctl)
+            .args([command, Self::TIMER])
+            .output()
+            .map_err(|error| InstallError::HostLifecycle(error.to_string()))?;
+        let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        if truthy.contains(&value.as_str()) {
+            return Ok(true);
+        }
+        if falsy.contains(&value.as_str()) {
+            return Ok(false);
+        }
+        Err(InstallError::HostLifecycle(format!(
+            "systemctl {command} returned status {} and state {value:?}",
+            status_label(output.status)
+        )))
+    }
+
+    fn run(&self, command: &str) -> Result<(), InstallError> {
+        let output = Command::new(&self.options.systemctl)
+            .args([command, Self::TIMER])
+            .output()
+            .map_err(|error| InstallError::HostLifecycle(error.to_string()))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(InstallError::HostLifecycle(format!(
+                "systemctl {command} failed with status {}: {}",
+                status_label(output.status),
+                String::from_utf8_lossy(&output.stderr).trim()
+            )))
+        }
+    }
+
+    fn daemon_reload(&self) -> Result<(), InstallError> {
+        let output = Command::new(&self.options.systemctl)
+            .arg("daemon-reload")
+            .output()
+            .map_err(|error| InstallError::HostLifecycle(error.to_string()))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(InstallError::HostLifecycle(format!(
+                "systemctl daemon-reload failed with status {}: {}",
+                status_label(output.status),
+                String::from_utf8_lossy(&output.stderr).trim()
+            )))
+        }
+    }
+
+    fn restore_state(&self) -> Result<(), InstallError> {
+        match (self.prior_enabled, self.prior_active) {
+            (Some(enabled), Some(active)) => {
+                self.run(if enabled { "enable" } else { "disable" })?;
+                self.run(if active { "start" } else { "stop" })
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+impl InstallLifecycle for SystemdLifecycle {
+    fn before_mutation(&mut self) -> Result<(), InstallError> {
+        self.prior_enabled = Some(self.query(
+            "is-enabled",
+            &["enabled", "enabled-runtime"],
+            &[
+                "disabled",
+                "static",
+                "indirect",
+                "masked",
+                "generated",
+                "transient",
+                "linked",
+                "linked-runtime",
+                "alias",
+                "not-found",
+            ],
+        )?);
+        self.prior_active = Some(self.query(
+            "is-active",
+            &["active"],
+            &["inactive", "failed", "deactivating", "unknown"],
+        )?);
+        if self.prior_active == Some(true) {
+            self.run("stop")?;
+        }
+        Ok(())
+    }
+
+    fn commit(&mut self) -> Result<(), InstallError> {
+        chown(
+            &self.ledger,
+            Some(self.options.state_uid),
+            Some(self.options.state_gid),
+        )
+        .map_err(|error| InstallError::HostLifecycle(error.to_string()))?;
+        self.daemon_reload()?;
+        self.restore_state()
+    }
+
+    fn rollback(&mut self) -> Result<(), InstallError> {
+        if self.prior_enabled.is_none() || self.prior_active.is_none() {
+            return Ok(());
+        }
+        self.daemon_reload()?;
+        self.restore_state()
+    }
+}
+
+fn status_label(status: ExitStatus) -> String {
+    status
+        .code()
+        .map_or_else(|| "signal".to_owned(), |code| code.to_string())
 }
 
 struct CohortPolicy {
@@ -311,6 +563,8 @@ struct FileSnapshot {
     path: PathBuf,
     bytes: Option<Vec<u8>>,
     mode: Option<u32>,
+    uid: Option<u32>,
+    gid: Option<u32>,
 }
 
 struct Snapshot {
@@ -340,12 +594,16 @@ impl Snapshot {
                     path: path.clone(),
                     bytes: Some(bytes),
                     mode: Some(metadata.permissions().mode() & 0o7777),
+                    uid: Some(metadata.uid()),
+                    gid: Some(metadata.gid()),
                 });
             } else {
                 snapshots.push(FileSnapshot {
                     path: path.clone(),
                     bytes: None,
                     mode: None,
+                    uid: None,
+                    gid: None,
                 });
             }
         }
@@ -360,9 +618,12 @@ impl Snapshot {
             if file.path.file_name().and_then(|name| name.to_str()) == Some("ledger.db") {
                 remove_sqlite_sidecars(&file.path)?;
             }
-            match (&file.bytes, file.mode) {
-                (Some(bytes), Some(mode)) => write_atomic(&file.path, bytes, mode)?,
-                (None, None) => remove_if_file(&file.path)?,
+            match (&file.bytes, file.mode, file.uid, file.gid) {
+                (Some(bytes), Some(mode), Some(uid), Some(gid)) => {
+                    write_atomic(&file.path, bytes, mode)?;
+                    chown(&file.path, Some(uid), Some(gid)).map_err(fs_error)?;
+                }
+                (None, None, None, None) => remove_if_file(&file.path)?,
                 _ => return Err(InstallError::InvalidLayout),
             }
         }

@@ -81,6 +81,7 @@ fn verify_release_command_emits_machine_readable_provenance() {
     let manifest_path = directory.path().join("release-manifest.json");
     let signature_path = directory.path().join("release-manifest.sig");
     let public_key_path = directory.path().join("release-public.key");
+    let manifest_sha256 = digest(&manifest);
     fs::write(&manifest_path, manifest).unwrap();
     fs::write(&signature_path, signature).unwrap();
     fs::write(&public_key_path, public_key).unwrap();
@@ -108,6 +109,33 @@ fn verify_release_command_emits_machine_readable_provenance() {
     assert_eq!(value["ok"], true);
     assert_eq!(value["source_commit"], "a".repeat(40));
     assert_eq!(value["artifact_count"], 1);
+    assert_eq!(value["manifest_sha256"], manifest_sha256);
+    assert_eq!(value["binary_sha256"], digest(b"fixture binary\n"));
+}
+
+#[test]
+fn privileged_install_command_requires_verified_digests_and_host_identity() {
+    let error = pip_control::run_cli(
+        [
+            "install-release",
+            "--cohort",
+            "/cohort",
+            "--public-key",
+            "/key",
+            "--install-root",
+            "/opt/pip-v2",
+            "--config-root",
+            "/etc/pip-v2",
+            "--unit-root",
+            "/etc/systemd/system",
+            "--state-root",
+            "/var/lib/pip-v2",
+        ]
+        .into_iter()
+        .map(str::to_owned),
+    )
+    .unwrap_err();
+    assert!(matches!(error, pip_control::CliError::Usage(_)));
 }
 
 fn digest(bytes: &[u8]) -> String {

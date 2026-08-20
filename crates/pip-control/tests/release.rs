@@ -31,6 +31,16 @@ fn signed_source_bound_release_verifies_every_regular_artifact() {
             .join("bin/pip-control")
     );
     assert_eq!(verified.artifact_count(), 2);
+    assert_eq!(
+        verified.manifest_sha256(),
+        hex_digest(&Sha256::digest(&fixture.manifest))
+    );
+    let manifest: ReleaseManifest = serde_json::from_slice(&fixture.manifest).unwrap();
+    assert_eq!(verified.binary_sha256(), manifest.binary_sha256);
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[test]

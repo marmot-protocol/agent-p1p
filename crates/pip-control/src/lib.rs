@@ -10,7 +10,8 @@ mod shadow;
 
 pub use cli::{CliError, run_cli};
 pub use install::{
-    InstallError, InstallFault, InstallLayout, InstallOutcome, InstallResult, install_release,
+    HostInstallOptions, InstallError, InstallFault, InstallLayout, InstallOutcome, InstallResult,
+    install_host_release, install_release, install_release_pinned,
 };
 pub use policy::{
     IntakeConfiguration, MergeConfiguration, PolicyError, RepositoryIdentity, RepositoryPolicy,

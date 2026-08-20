@@ -1,12 +1,13 @@
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use pip_control::{
-    InstallFault, InstallLayout, InstallResult, ReleaseMetadata, create_release_manifest,
-    install_release, sign_manifest, verifying_key,
+    HostInstallOptions, InstallFault, InstallLayout, InstallResult, ReleaseManifest,
+    ReleaseMetadata, create_release_manifest, install_host_release, install_release,
+    install_release_pinned, sign_manifest, verifying_key,
 };
 use pip_store::Store;
 
@@ -113,6 +114,108 @@ fn every_injected_upgrade_failure_restores_the_previous_release_and_ledger() {
     }
 }
 
+#[test]
+fn pinned_install_rejects_a_digest_not_obtained_from_signed_verification() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let layout = layout(sandbox.path());
+    prepare_layout(&layout);
+    let key = STANDARD.encode([31_u8; 32]);
+    let public = verifying_key(&key).unwrap();
+    let release = cohort(sandbox.path(), "v1", b"binary-v1\n", "a", &key);
+    let manifest: ReleaseManifest =
+        serde_json::from_slice(&fs::read(release.join("release-manifest.json")).unwrap()).unwrap();
+
+    assert!(
+        install_release_pinned(
+            &release,
+            &public,
+            &layout,
+            &"0".repeat(64),
+            &manifest.binary_sha256,
+        )
+        .is_err()
+    );
+    assert!(!layout.install_root.join("current").exists());
+}
+
+#[test]
+fn failed_host_finalization_restores_files_and_prior_timer_state() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let layout = layout(sandbox.path());
+    prepare_layout(&layout);
+    let key = STANDARD.encode([37_u8; 32]);
+    let public = verifying_key(&key).unwrap();
+    let v1 = cohort(sandbox.path(), "v1", b"binary-v1\n", "a", &key);
+    let v2 = cohort(sandbox.path(), "v2", b"binary-v2\n", "b", &key);
+    install_release(&v1, &public, &layout, None).unwrap();
+    let systemctl = fake_systemctl(sandbox.path(), true, true, true);
+    let owner = fs::metadata(&layout.state_root).unwrap();
+    let (manifest_sha256, binary_sha256) = cohort_digests(&v2);
+
+    assert!(
+        install_host_release(
+            &v2,
+            &public,
+            &layout,
+            &manifest_sha256,
+            &binary_sha256,
+            &HostInstallOptions {
+                systemctl,
+                state_uid: owner.uid(),
+                state_gid: owner.gid(),
+            },
+        )
+        .is_err()
+    );
+    assert_eq!(current_source(&layout), "a".repeat(40));
+    assert_eq!(
+        fs::read_to_string(sandbox.path().join("enabled")).unwrap(),
+        "1"
+    );
+    assert_eq!(
+        fs::read_to_string(sandbox.path().join("active")).unwrap(),
+        "1"
+    );
+}
+
+#[test]
+fn successful_host_install_preserves_a_fresh_disabled_timer() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let layout = layout(sandbox.path());
+    prepare_layout(&layout);
+    let key = STANDARD.encode([41_u8; 32]);
+    let public = verifying_key(&key).unwrap();
+    let release = cohort(sandbox.path(), "v1", b"binary-v1\n", "a", &key);
+    let systemctl = fake_systemctl(sandbox.path(), false, false, false);
+    let owner = fs::metadata(&layout.state_root).unwrap();
+    let (manifest_sha256, binary_sha256) = cohort_digests(&release);
+
+    let outcome = install_host_release(
+        &release,
+        &public,
+        &layout,
+        &manifest_sha256,
+        &binary_sha256,
+        &HostInstallOptions {
+            systemctl,
+            state_uid: owner.uid(),
+            state_gid: owner.gid(),
+        },
+    )
+    .unwrap();
+    assert_eq!(outcome.result, InstallResult::Installed);
+    assert_eq!(
+        fs::read_to_string(sandbox.path().join("enabled")).unwrap(),
+        "0"
+    );
+    assert_eq!(
+        fs::read_to_string(sandbox.path().join("active")).unwrap(),
+        "0"
+    );
+    let ledger = fs::metadata(layout.state_root.join("ledger.db")).unwrap();
+    assert_eq!((ledger.uid(), ledger.gid()), (owner.uid(), owner.gid()));
+}
+
 fn layout(root: &Path) -> InstallLayout {
     InstallLayout {
         install_root: root.join("opt/pip-v2"),
@@ -208,4 +311,51 @@ fn current_source(layout: &InstallLayout) -> String {
     let current = fs::read_link(layout.install_root.join("current")).unwrap();
     let descriptor = fs::read_to_string(current.join("SOURCE.COMMIT")).unwrap();
     descriptor.trim().into()
+}
+
+fn cohort_digests(cohort: &Path) -> (String, String) {
+    use sha2::{Digest, Sha256};
+    let bytes = fs::read(cohort.join("release-manifest.json")).unwrap();
+    let manifest: ReleaseManifest = serde_json::from_slice(&bytes).unwrap();
+    let digest = Sha256::digest(bytes);
+    (
+        digest.iter().map(|byte| format!("{byte:02x}")).collect(),
+        manifest.binary_sha256,
+    )
+}
+
+fn fake_systemctl(root: &Path, enabled: bool, active: bool, fail_reload_once: bool) -> PathBuf {
+    let script = root.join("systemctl");
+    fs::write(root.join("enabled"), if enabled { "1" } else { "0" }).unwrap();
+    fs::write(root.join("active"), if active { "1" } else { "0" }).unwrap();
+    fs::write(root.join("reloads"), "0").unwrap();
+    let body = format!(
+        r#"#!/bin/sh
+root={root:?}
+case "$1" in
+  is-enabled)
+    if [ "$(cat "$root/enabled")" = 1 ]; then echo enabled; else echo disabled; exit 1; fi
+    ;;
+  is-active)
+    if [ "$(cat "$root/active")" = 1 ]; then echo active; else echo inactive; exit 3; fi
+    ;;
+  stop) printf 0 >"$root/active" ;;
+  start) printf 1 >"$root/active" ;;
+  disable) printf 0 >"$root/enabled" ;;
+  enable) printf 1 >"$root/enabled" ;;
+  daemon-reload)
+    count=$(cat "$root/reloads")
+    count=$((count + 1))
+    printf %s "$count" >"$root/reloads"
+    if [ {fail} = 1 ] && [ "$count" = 1 ]; then exit 1; fi
+    ;;
+  *) exit 2 ;;
+esac
+"#,
+        root = root,
+        fail = u8::from(fail_reload_once)
+    );
+    fs::write(&script, body).unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    script
 }

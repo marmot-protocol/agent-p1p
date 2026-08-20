@@ -26,6 +26,7 @@ pub enum CliError {
     InputTooLarge(PathBuf),
     Filesystem(String),
     Ledger(String),
+    Install(String),
     Reconciliation(String),
     Release(ReleaseError),
     Clock,
@@ -48,6 +49,7 @@ impl fmt::Display for CliError {
             ),
             Self::Filesystem(error) => write!(formatter, "input filesystem error: {error}"),
             Self::Ledger(error) => write!(formatter, "ledger status failed: {error}"),
+            Self::Install(error) => write!(formatter, "installation failed: {error}"),
             Self::Reconciliation(error) => {
                 write!(formatter, "shadow reconciliation failed: {error}")
             }
@@ -75,7 +77,83 @@ pub fn run_cli(arguments: impl IntoIterator<Item = String>) -> Result<Value, Cli
         "verify-release" => verify(&arguments[1..]),
         "seal-release" => seal(&arguments[1..]),
         "shadow-reconcile" => shadow_reconcile(&arguments[1..]),
+        "install-release" => install(&arguments[1..]),
         _ => Err(CliError::InvalidArgument(command.into())),
+    }
+}
+
+fn install(arguments: &[String]) -> Result<Value, CliError> {
+    let options = options(
+        arguments,
+        &[
+            "--cohort",
+            "--public-key",
+            "--install-root",
+            "--config-root",
+            "--unit-root",
+            "--state-root",
+            "--manifest-sha256",
+            "--binary-sha256",
+            "--systemctl",
+            "--state-uid",
+            "--state-gid",
+        ],
+        &[],
+    )?;
+    let public_key = read_bounded(Path::new(required(&options, "--public-key")?), 1024)?;
+    let public_key = std::str::from_utf8(&public_key)
+        .map_err(|_| CliError::InvalidArgument("--public-key".into()))?
+        .trim();
+    let state_uid = required(&options, "--state-uid")?
+        .parse::<u32>()
+        .map_err(|_| CliError::InvalidArgument("--state-uid".into()))?;
+    let state_gid = required(&options, "--state-gid")?
+        .parse::<u32>()
+        .map_err(|_| CliError::InvalidArgument("--state-gid".into()))?;
+    let manifest_sha256 = sha256_option(&options, "--manifest-sha256")?;
+    let binary_sha256 = sha256_option(&options, "--binary-sha256")?;
+    let outcome = crate::install_host_release(
+        required(&options, "--cohort")?,
+        public_key,
+        &crate::InstallLayout {
+            install_root: required(&options, "--install-root")?.into(),
+            config_root: required(&options, "--config-root")?.into(),
+            unit_root: required(&options, "--unit-root")?.into(),
+            state_root: required(&options, "--state-root")?.into(),
+        },
+        manifest_sha256,
+        binary_sha256,
+        &crate::HostInstallOptions {
+            systemctl: required(&options, "--systemctl")?.into(),
+            state_uid,
+            state_gid,
+        },
+    )
+    .map_err(|error| CliError::Install(error.to_string()))?;
+    Ok(json!({
+        "ok": true,
+        "result": match outcome.result {
+            crate::InstallResult::Installed => "installed",
+            crate::InstallResult::Existing => "existing",
+        },
+        "release_id": outcome.release_id,
+        "source_commit": outcome.source_commit,
+    }))
+}
+
+fn sha256_option<'a>(
+    options: &'a BTreeMap<String, String>,
+    name: &str,
+) -> Result<&'a str, CliError> {
+    let value = required(options, name)?;
+    if value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        Ok(value)
+    } else {
+        Err(CliError::InvalidArgument(name.into()))
     }
 }
 
@@ -224,6 +302,8 @@ fn verify(arguments: &[String]) -> Result<Value, CliError> {
         "ok": true,
         "source_commit": verified.source_commit(),
         "binary_path": verified.binary_path(),
+        "binary_sha256": verified.binary_sha256(),
+        "manifest_sha256": verified.manifest_sha256(),
         "artifact_count": verified.artifact_count(),
     }))
 }

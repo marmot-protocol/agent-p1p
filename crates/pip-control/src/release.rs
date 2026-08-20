@@ -60,6 +60,8 @@ pub struct ReleaseMetadata {
 pub struct VerifiedRelease {
     source_commit: String,
     binary_path: PathBuf,
+    binary_sha256: String,
+    manifest_sha256: String,
     artifact_count: usize,
 }
 
@@ -72,6 +74,16 @@ impl VerifiedRelease {
     #[must_use]
     pub fn binary_path(&self) -> &Path {
         &self.binary_path
+    }
+
+    #[must_use]
+    pub fn binary_sha256(&self) -> &str {
+        &self.binary_sha256
+    }
+
+    #[must_use]
+    pub fn manifest_sha256(&self) -> &str {
+        &self.manifest_sha256
     }
 
     #[must_use]
@@ -284,6 +296,8 @@ pub fn verify_release(
     Ok(VerifiedRelease {
         source_commit: manifest.source_commit,
         binary_path: root.join(manifest.binary_path),
+        binary_sha256: manifest.binary_sha256,
+        manifest_sha256: hex_digest(&Sha256::digest(manifest_bytes)),
         artifact_count: manifest.artifacts.len(),
     })
 }
