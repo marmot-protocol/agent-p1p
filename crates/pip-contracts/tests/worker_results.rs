@@ -1,4 +1,4 @@
-use pip_contracts::{ContractError, WorkerResult};
+use pip_contracts::{ContractError, WorkerBinding, WorkerResult, WorkerRole};
 use serde_json::{Value, json};
 
 fn fixture() -> Value {
@@ -58,4 +58,48 @@ fn unknown_fields_are_rejected_by_deserialization() {
     let mut value = fixture()["results"][0].clone();
     value["surprise"] = json!(true);
     assert!(serde_json::from_value::<WorkerResult>(value).is_err());
+}
+
+#[test]
+fn immutable_worker_binding_covers_case_task_role_plan_model_pr_and_head() {
+    let value = fixture()["results"][3].clone();
+    let result: WorkerResult = serde_json::from_value(value).unwrap();
+    let binding = WorkerBinding {
+        case: pip_contracts::CaseIdentity {
+            repository_id: 984_321,
+            issue_number: 1240,
+            workflow_version: 1,
+        },
+        task_id: "review-secperf-1".into(),
+        role: WorkerRole::ReviewerSecperf,
+        requested_model: "cursor/claude-opus-4-8-thinking-high".into(),
+        plan_version: 1,
+        pr_number: Some(77),
+        expected_head_sha: Some("b".repeat(40)),
+    };
+    result.validate_binding(&binding).unwrap();
+
+    for changed in [
+        WorkerBinding {
+            task_id: "wrong".into(),
+            ..binding.clone()
+        },
+        WorkerBinding {
+            requested_model: "cursor/auto".into(),
+            ..binding.clone()
+        },
+        WorkerBinding {
+            pr_number: Some(78),
+            ..binding.clone()
+        },
+        WorkerBinding {
+            expected_head_sha: Some("c".repeat(40)),
+            ..binding.clone()
+        },
+    ] {
+        assert_eq!(
+            result.validate_binding(&changed),
+            Err(ContractError::BindingMismatch)
+        );
+    }
 }

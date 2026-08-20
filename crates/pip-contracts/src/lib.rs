@@ -24,6 +24,7 @@ pub enum ContractError {
     CiHeadMismatch,
     ApprovalHasBlockingFindings,
     ApprovalHasOpenConfirmation,
+    BindingMismatch,
 }
 
 impl fmt::Display for ContractError {
@@ -42,6 +43,7 @@ impl fmt::Display for ContractError {
             Self::CiHeadMismatch => "CI head does not match the reported PR head",
             Self::ApprovalHasBlockingFindings => "approval retains blocking findings",
             Self::ApprovalHasOpenConfirmation => "approval retains an open finding confirmation",
+            Self::BindingMismatch => "worker result does not match its immutable task binding",
         })
     }
 }
@@ -64,6 +66,20 @@ pub struct CaseIdentity {
     pub repository_id: u64,
     pub issue_number: u64,
     pub workflow_version: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerBinding {
+    pub case: CaseIdentity,
+    pub task_id: String,
+    pub role: WorkerRole,
+    pub requested_model: String,
+    pub plan_version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_number: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_head_sha: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -324,6 +340,56 @@ impl WorkerResult {
             Self::Builder(result) => result.validate(),
             Self::Review(result) => result.validate(),
             Self::Final(result) => result.validate(),
+        }
+    }
+
+    #[must_use]
+    pub fn common(&self) -> &CommonResult {
+        match self {
+            Self::Planner(result) => &result.common,
+            Self::Builder(result) => &result.common,
+            Self::Review(result) => &result.common,
+            Self::Final(result) => &result.common,
+        }
+    }
+
+    pub fn validate_binding(&self, binding: &WorkerBinding) -> Result<(), ContractError> {
+        self.validate()?;
+        let common = self.common();
+        let (plan_version, pr_number, head_sha) = match self {
+            Self::Planner(result) => (result.plan_version, None, None),
+            Self::Builder(result) => (
+                result.plan_version,
+                result.pr_number,
+                result.head_sha.as_deref(),
+            ),
+            Self::Review(result) => (
+                result.plan_version,
+                Some(result.pr_number),
+                Some(result.reviewed_head_sha.as_str()),
+            ),
+            Self::Final(result) => (
+                result.plan_version,
+                Some(result.pr_number),
+                Some(result.reviewed_head_sha.as_str()),
+            ),
+        };
+        let matches = common.case == binding.case
+            && common.task_id == binding.task_id
+            && common.role == binding.role
+            && common.requested_model == binding.requested_model
+            && plan_version == binding.plan_version
+            && binding
+                .pr_number
+                .is_none_or(|expected| pr_number == Some(expected))
+            && binding
+                .expected_head_sha
+                .as_deref()
+                .is_none_or(|expected| head_sha == Some(expected));
+        if matches {
+            Ok(())
+        } else {
+            Err(ContractError::BindingMismatch)
         }
     }
 }
