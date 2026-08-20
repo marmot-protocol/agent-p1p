@@ -2,6 +2,10 @@
 
 #![forbid(unsafe_code)]
 
+mod projection;
+
+pub use projection::{HermesProjector, ProjectionError, ProjectionResult, TaskCreateSpec};
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::io::Read;
