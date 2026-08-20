@@ -24,6 +24,7 @@ use sha2::{Digest, Sha256};
 use crate::{PolicyError, RepositoryPolicy};
 
 const RUN_EFFECT: &str = "RUN_DIRECT_WORKER";
+const LEASE_RECOVERY_MARGIN_SECONDS: u64 = 120;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "result", rename_all = "snake_case")]
@@ -70,6 +71,26 @@ pub trait DirectWorkerRuntime {
         task: &DirectTaskSpec,
         attempt_id: u64,
     ) -> Result<WorkerResult, DirectWorkerRuntimeError>;
+}
+
+pub fn recommended_direct_lease_seconds(
+    policy: &RepositoryPolicy,
+) -> Result<u64, DirectWorkerRuntimeError> {
+    let max_runtime = policy
+        .workflow_policy()
+        .map_err(|error| runtime_error(error.to_string()))?
+        .roles()
+        .iter()
+        .filter(|role| role.execution == ExecutionKind::Direct)
+        .map(|role| parse_runtime(&role.max_runtime))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .max()
+        .ok_or_else(|| runtime_error("policy has no direct worker roles"))?;
+    max_runtime
+        .as_secs()
+        .checked_add(LEASE_RECOVERY_MARGIN_SECONDS)
+        .ok_or_else(|| runtime_error("direct worker lease overflow"))
 }
 
 pub struct CursorDirectRuntime<R> {

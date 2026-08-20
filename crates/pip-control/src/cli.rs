@@ -382,7 +382,10 @@ fn direct_worker_cycle(arguments: &[String]) -> Result<Value, CliError> {
                 .ok_or_else(|| CliError::InvalidArgument("--lease-seconds".into()))
         })
         .transpose()?
-        .unwrap_or(60);
+        .unwrap_or(
+            crate::recommended_direct_lease_seconds(&policy)
+                .map_err(|error| CliError::Reconciliation(error.to_string()))?,
+        );
     let runtime = crate::CursorDirectRuntime::new(
         BoundedProcessRunner,
         required(&options, "--cursor")?,

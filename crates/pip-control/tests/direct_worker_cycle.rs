@@ -4,8 +4,16 @@ use std::rc::Rc;
 use pip_contracts::{WorkerResult, WorkerRole};
 use pip_control::{
     DirectWorkerCycle, DirectWorkerCycleContext, DirectWorkerError, DirectWorkerRuntime,
-    DirectWorkerRuntimeError, run_direct_worker_once_with,
+    DirectWorkerRuntimeError, recommended_direct_lease_seconds, run_direct_worker_once_with,
 };
+
+#[test]
+fn direct_job_lease_covers_the_longest_policy_runtime_plus_recovery_margin() {
+    assert_eq!(
+        recommended_direct_lease_seconds(&active_policy()).unwrap(),
+        2_820
+    );
+}
 use pip_controller::DirectTaskSpec;
 use pip_store::{EffectInput, EventInput, NewCase, PolicyInput, Store, TransitionInput};
 use serde_json::{Value, json};

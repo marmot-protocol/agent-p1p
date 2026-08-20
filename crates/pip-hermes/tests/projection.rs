@@ -40,7 +40,7 @@ fn spec() -> TaskCreateSpec {
         skills: vec!["workflow-contract".into(), "planner".into()],
         provider: "openai-codex".into(),
         model: "gpt-5.6-sol".into(),
-        max_runtime: "30m".into(),
+        max_runtime: "PT30M".into(),
         priority: 10,
         parent_task_ids: Vec::new(),
     }
@@ -96,6 +96,13 @@ fn missing_projection_creates_one_blocked_idempotent_task() {
             .windows(2)
             .any(|pair| pair == ["--initial-status", "blocked"])
     );
+    assert!(
+        command
+            .args
+            .windows(2)
+            .any(|pair| pair == ["--max-runtime", "30m"])
+    );
+    assert!(!command.args.iter().any(|arg| arg == "PT30M"));
     assert!(!command.args.iter().any(|arg| arg == "complete"));
 }
 

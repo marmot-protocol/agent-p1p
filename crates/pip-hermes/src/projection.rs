@@ -123,6 +123,7 @@ impl<R: CommandRunner> HermesProjector<R> {
     }
 
     fn create(&self, spec: &TaskCreateSpec) -> Result<ProjectionResult, ProjectionError> {
+        let max_runtime = hermes_runtime(&spec.max_runtime).ok_or(ProjectionError::InvalidSpec)?;
         let mut body = spec
             .body
             .as_object()
@@ -158,7 +159,7 @@ impl<R: CommandRunner> HermesProjector<R> {
             "--created-by".into(),
             CONTROLLER_IDENTITY.into(),
             "--max-runtime".into(),
-            spec.max_runtime.clone(),
+            max_runtime,
             "--max-retries".into(),
             "1".into(),
             "--priority".into(),
@@ -221,7 +222,7 @@ fn validate_spec(spec: &TaskCreateSpec) -> Result<(), ProjectionError> {
         && valid_id(&spec.provider)
         && spec.provider != "cursor"
         && valid_id(&spec.model)
-        && valid_id(&spec.max_runtime)
+        && hermes_runtime(&spec.max_runtime).is_some()
         && spec.parent_task_ids.iter().all(|parent| valid_id(parent));
     if !valid {
         return Err(ProjectionError::InvalidSpec);
@@ -232,6 +233,16 @@ fn validate_spec(spec: &TaskCreateSpec) -> Result<(), ProjectionError> {
         return Err(ProjectionError::InvalidSpec);
     }
     Ok(())
+}
+
+fn hermes_runtime(value: &str) -> Option<String> {
+    let minutes = value
+        .strip_prefix("PT")?
+        .strip_suffix('M')?
+        .parse::<u64>()
+        .ok()?
+        .checked_add(0)?;
+    (1..=240).contains(&minutes).then(|| format!("{minutes}m"))
 }
 
 fn valid_workspace(value: &str) -> bool {

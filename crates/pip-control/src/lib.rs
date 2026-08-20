@@ -30,7 +30,8 @@ pub use ci::{CiCycle, CiCycleError, PullRequestSource, reconcile_ci_once};
 pub use cli::{CliError, run_cli};
 pub use direct_worker::{
     CursorDirectRuntime, DirectWorkerCycle, DirectWorkerCycleContext, DirectWorkerError,
-    DirectWorkerRuntime, DirectWorkerRuntimeError, run_direct_worker_once_with,
+    DirectWorkerRuntime, DirectWorkerRuntimeError, recommended_direct_lease_seconds,
+    run_direct_worker_once_with,
 };
 pub use dispatch::{
     DispatchCycleContext, DispatchCycleError, DispatchCycleResult, dispatch_once,
