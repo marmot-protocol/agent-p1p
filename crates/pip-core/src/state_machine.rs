@@ -255,6 +255,7 @@ pub enum Effect {
     HoldForHuman,
     NotifyShadowReady,
     BeginMerge,
+    ExecuteMerge,
     RecordCompletion,
     RecordAbandonment,
     RecordBlock,
@@ -413,7 +414,7 @@ pub fn transition(
             decision(State::Completed, &[Fx::RecordCompletion])
         }
         (State::ReadyToMerge, Ev::MergeStarted) if context.merge_mode == MergeMode::Guarded => {
-            decision(State::Merging, &[])
+            decision(State::Merging, &[Fx::ExecuteMerge])
         }
         (State::Merging, Ev::MergeVerified) if context.merge_mode == MergeMode::Guarded => {
             decision(State::Completed, &[Fx::RecordCompletion])

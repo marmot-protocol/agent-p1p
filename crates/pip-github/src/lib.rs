@@ -6,7 +6,7 @@ mod write;
 
 pub use write::{
     CommentSpec, GitHubWriter, MergeModePolicy, MergeSpec, MutationRequest, MutationResult,
-    MutationTransport, PullRequestSpec, ReviewEvent, ReviewMutationSpec,
+    MutationTransport, PullRequestReadySpec, PullRequestSpec, ReviewEvent, ReviewMutationSpec,
 };
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -314,6 +314,7 @@ pub struct PullRequestSnapshot {
     pub open: bool,
     pub draft: bool,
     pub merged: bool,
+    pub merge_commit_sha: Option<String>,
     pub mergeable: Option<bool>,
     pub mergeable_state: String,
     pub author_id: u64,
@@ -560,6 +561,7 @@ struct PullRequestDto {
     state: String,
     draft: bool,
     merged: bool,
+    merge_commit_sha: Option<String>,
     mergeable: Option<bool>,
     mergeable_state: String,
     user: UserDto,
@@ -958,6 +960,7 @@ impl<T: ReadTransport> GitHubReader<T> {
                 open: pull.state == "open",
                 draft: pull.draft,
                 merged: pull.merged,
+                merge_commit_sha: pull.merge_commit_sha,
                 mergeable: pull.mergeable,
                 mergeable_state: pull.mergeable_state,
                 author_id: pull.user.id,

@@ -249,6 +249,7 @@ fn effect_name(effect: Effect) -> &'static str {
         Effect::HoldForHuman => "HOLD_FOR_HUMAN",
         Effect::NotifyShadowReady => "NOTIFY_SHADOW_READY",
         Effect::BeginMerge => "BEGIN_MERGE",
+        Effect::ExecuteMerge => "EXECUTE_MERGE",
         Effect::RecordCompletion => "RECORD_COMPLETION",
         Effect::RecordAbandonment => "RECORD_ABANDONMENT",
         Effect::RecordBlock => "RECORD_BLOCK",

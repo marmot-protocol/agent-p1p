@@ -19,6 +19,7 @@ fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
     );
     assert!(policy.merge.is_shadow());
     assert!(!policy.merge.autonomous);
+    assert_eq!(policy.merge.method, "squash");
     assert_eq!(policy.workflow_policy().unwrap().roles().len(), 5);
     assert_eq!(policy.intake_policy(false).trusted_actor_ids.len(), 3);
     let raw: serde_json::Value = serde_json::from_slice(bytes).unwrap();
@@ -63,6 +64,13 @@ fn policy_rejects_unknown_fields_model_fallback_and_shadow_merge_authority() {
 
     let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
     value["merge"]["autonomous"] = serde_json::json!(true);
+    assert!(matches!(
+        load_repository_policy(&serde_json::to_vec(&value).unwrap()),
+        Err(PolicyError::Invalid)
+    ));
+
+    let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+    value["merge"]["method"] = serde_json::json!("auto");
     assert!(matches!(
         load_repository_policy(&serde_json::to_vec(&value).unwrap()),
         Err(PolicyError::Invalid)

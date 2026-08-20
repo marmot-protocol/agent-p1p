@@ -11,6 +11,7 @@ mod draft_pr;
 mod final_preflight;
 mod install;
 mod intake;
+mod merge;
 mod plans;
 mod policy;
 mod release;
@@ -44,6 +45,7 @@ pub use install::{
     install_host_release, install_release, install_release_pinned,
 };
 pub use intake::{ActiveIntakeError, ActiveIntakeReport, IntakeCandidateResult, reconcile_intake};
+pub use merge::{MergeCycle, MergeCycleError, MergeSource, MergeWriter, reconcile_merge_once};
 pub use plans::{PlanPublicationCycle, PlanPublicationError, PlanWriter, publish_plan_once};
 pub use policy::{
     GitHubConfiguration, IntakeConfiguration, MergeConfiguration, PolicyError, RepositoryIdentity,

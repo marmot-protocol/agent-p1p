@@ -114,6 +114,19 @@ pub struct PullRequestSpec {
     pub base_branch: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PullRequestReadySpec {
+    pub owner: String,
+    pub repository: String,
+    pub repository_id: u64,
+    pub pull_request_number: u64,
+    pub expected_actor_id: u64,
+    pub expected_head_branch: String,
+    pub expected_head_sha: String,
+    pub expected_base_branch: String,
+    pub client_mutation_id: String,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReviewEvent {
     Approve,
@@ -200,6 +213,8 @@ struct PullRequestBaseDto {
 #[derive(Deserialize)]
 struct PullRequestDto {
     id: u64,
+    #[serde(default)]
+    node_id: String,
     number: u64,
     state: String,
     draft: bool,
@@ -209,6 +224,32 @@ struct PullRequestDto {
     user: UserDto,
     head: PullRequestHeadDto,
     base: PullRequestBaseDto,
+}
+
+#[derive(Deserialize)]
+struct ReadyGraphQlResponse {
+    data: Option<ReadyGraphQlData>,
+    #[serde(default)]
+    errors: Vec<Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReadyGraphQlData {
+    mark_pull_request_ready_for_review: ReadyGraphQlPayload,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReadyGraphQlPayload {
+    pull_request: ReadyGraphQlPullRequest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReadyGraphQlPullRequest {
+    id: String,
+    is_draft: bool,
 }
 
 #[derive(Deserialize)]
@@ -399,6 +440,54 @@ impl<T: MutationTransport> GitHubWriter<T> {
             marker_with_digest(&spec.effect_id, &digest),
             spec.body
         ))
+    }
+
+    pub fn mark_pull_request_ready(
+        &self,
+        spec: &PullRequestReadySpec,
+    ) -> Result<MutationResult, GitHubError> {
+        validate_ready_spec(spec)?;
+        let root = format!(
+            "/repos/{}/{}/pulls/{}",
+            spec.owner, spec.repository, spec.pull_request_number
+        );
+        let before: PullRequestDto = self.mutate_json("GET", &root, &json!({}))?;
+        validate_ready_identity(&before, spec)?;
+        if !before.draft {
+            return Ok(MutationResult::Existing(before.number));
+        }
+        if before.node_id.trim().is_empty() {
+            return Err(GitHubError::InvalidIdentity);
+        }
+        let response: ReadyGraphQlResponse = self.mutate_json(
+            "POST",
+            "/graphql",
+            &json!({
+                "query": "mutation MarkPipPullRequestReady($input: MarkPullRequestReadyForReviewInput!) { markPullRequestReadyForReview(input: $input) { pullRequest { id isDraft } } }",
+                "variables": {"input": {
+                    "pullRequestId": before.node_id,
+                    "clientMutationId": spec.client_mutation_id,
+                }},
+            }),
+        )?;
+        if !response.errors.is_empty() {
+            return Err(GitHubError::InvalidMutation);
+        }
+        let updated = response.data.ok_or(GitHubError::InvalidIdentity)?;
+        if updated.mark_pull_request_ready_for_review.pull_request.id != before.node_id
+            || updated
+                .mark_pull_request_ready_for_review
+                .pull_request
+                .is_draft
+        {
+            return Err(GitHubError::InvalidIdentity);
+        }
+        let after: PullRequestDto = self.mutate_json("GET", &root, &json!({}))?;
+        validate_ready_identity(&after, spec)?;
+        if after.draft {
+            return Err(GitHubError::InvalidIdentity);
+        }
+        Ok(MutationResult::Updated(after.number))
     }
 
     pub fn ensure_pull_request_review(
@@ -617,6 +706,42 @@ fn validate_pull_request(spec: &PullRequestSpec) -> Result<(), GitHubError> {
         return Err(GitHubError::InvalidMutation);
     }
     Ok(())
+}
+
+fn validate_ready_spec(spec: &PullRequestReadySpec) -> Result<(), GitHubError> {
+    if !valid_segment(&spec.owner)
+        || !valid_segment(&spec.repository)
+        || spec.repository_id == 0
+        || spec.pull_request_number == 0
+        || spec.expected_actor_id == 0
+        || !valid_git_ref(&spec.expected_head_branch)
+        || !valid_sha(&spec.expected_head_sha)
+        || !valid_git_ref(&spec.expected_base_branch)
+        || !valid_effect_id(&spec.client_mutation_id)
+    {
+        return Err(GitHubError::InvalidMutation);
+    }
+    Ok(())
+}
+
+fn validate_ready_identity(
+    pull_request: &PullRequestDto,
+    spec: &PullRequestReadySpec,
+) -> Result<(), GitHubError> {
+    let valid = pull_request.id != 0
+        && pull_request.number == spec.pull_request_number
+        && pull_request.state == "open"
+        && pull_request.user.id == spec.expected_actor_id
+        && pull_request.head.r#ref == spec.expected_head_branch
+        && pull_request.head.sha == spec.expected_head_sha
+        && pull_request.head.repo.as_ref().map(|repo| repo.id) == Some(spec.repository_id)
+        && pull_request.base.r#ref == spec.expected_base_branch
+        && !pull_request.html_url.trim().is_empty();
+    if valid {
+        Ok(())
+    } else {
+        Err(GitHubError::OwnershipConflict)
+    }
 }
 
 fn validate_pull_request_identity(

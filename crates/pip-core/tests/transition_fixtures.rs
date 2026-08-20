@@ -206,6 +206,21 @@ fn default_shadow_policy_cannot_emit_a_merge_effect() {
 }
 
 #[test]
+fn guarded_merge_preparation_releases_only_the_deterministic_transaction() {
+    let prepared = transition(
+        CaseState::ReadyToMerge,
+        Event::MergeStarted,
+        TransitionContext {
+            merge_mode: MergeMode::Guarded,
+            ..TransitionContext::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(prepared.next_state, CaseState::Merging);
+    assert_eq!(prepared.effects, [Effect::ExecuteMerge]);
+}
+
+#[test]
 fn authorization_removal_abandons_every_nonterminal_state_without_new_work() {
     for state in [
         CaseState::Planning,

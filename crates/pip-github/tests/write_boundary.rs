@@ -4,8 +4,8 @@ use std::rc::Rc;
 
 use pip_github::{
     CommentSpec, GitHubError, GitHubWriter, MergeModePolicy, MergeSpec, MutationRequest,
-    MutationResult, MutationTransport, PullRequestSpec, ReadResponse, ReviewEvent,
-    ReviewMutationSpec,
+    MutationResult, MutationTransport, PullRequestReadySpec, PullRequestSpec, ReadResponse,
+    ReviewEvent, ReviewMutationSpec,
 };
 
 #[derive(Clone, Default)]
@@ -156,6 +156,60 @@ fn shadow_or_disabled_policy_cannot_send_a_merge_request() {
         Err(GitHubError::MutationDisabled)
     ));
     assert!(transport.requests.borrow().is_empty());
+}
+
+#[test]
+fn owned_exact_head_draft_is_marked_ready_through_graphql_once() {
+    let transport = FakeTransport::default();
+    let draft = serde_json::json!({
+        "id": 9001,
+        "node_id": "PR_kwDOFixture",
+        "number": 77,
+        "state": "open",
+        "draft": true,
+        "title": "Fix issue 1240",
+        "body": "owned",
+        "html_url": "https://github.test/pr/77",
+        "user": {"id": 1001},
+        "head": {"ref": "pip/v2/repo-984321/issue-1240/workflow-1", "sha": "b".repeat(40), "repo": {"id": 984321}},
+        "base": {"ref": "main"}
+    });
+    let mut ready = draft.clone();
+    ready["draft"] = serde_json::json!(false);
+    transport.push(200, &draft.to_string());
+    transport.push(
+        200,
+        r#"{"data":{"markPullRequestReadyForReview":{"pullRequest":{"id":"PR_kwDOFixture","isDraft":false}}}}"#,
+    );
+    transport.push(200, &ready.to_string());
+
+    assert_eq!(
+        writer(transport.clone())
+            .mark_pull_request_ready(&PullRequestReadySpec {
+                owner: "marmot-protocol".into(),
+                repository: "mdk".into(),
+                repository_id: 984_321,
+                pull_request_number: 77,
+                expected_actor_id: 1001,
+                expected_head_branch: "pip/v2/repo-984321/issue-1240/workflow-1".into(),
+                expected_head_sha: "b".repeat(40),
+                expected_base_branch: "main".into(),
+                client_mutation_id: "repo:984321#1240@1:ready".into(),
+            })
+            .unwrap(),
+        MutationResult::Updated(77)
+    );
+    let requests = transport.requests.borrow();
+    assert_eq!(
+        [requests[0].method, requests[1].method, requests[2].method],
+        ["GET", "POST", "GET"]
+    );
+    assert!(requests[1].url.ends_with("/graphql"));
+    let body: serde_json::Value = serde_json::from_slice(&requests[1].body).unwrap();
+    assert_eq!(
+        body["variables"]["input"]["pullRequestId"],
+        "PR_kwDOFixture"
+    );
 }
 
 fn pull_request() -> PullRequestSpec {

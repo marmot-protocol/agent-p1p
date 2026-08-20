@@ -28,7 +28,8 @@
   "dispatch_enabled": false,
   "merge": {
     "mode": "shadow",
-    "autonomous": false
+    "autonomous": false,
+    "method": "squash"
   },
   "max_remediation_rounds": 3,
   "required_ci_contexts": [],

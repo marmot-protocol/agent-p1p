@@ -121,26 +121,6 @@ pub fn reconcile_final_preflight_once<S: FinalPreflightSource>(
     lease_seconds: u64,
     authorization_valid: bool,
 ) -> Result<FinalPreflightCycle, FinalPreflightError> {
-    let expected_actor = policy
-        .github
-        .automation_actor_id
-        .ok_or(FinalPreflightError::MissingAutomationActor)?;
-    let review_actors = [
-        (
-            "reviewer-general",
-            policy
-                .github
-                .reviewer_general_actor_id
-                .ok_or(FinalPreflightError::MissingAutomationActor)?,
-        ),
-        (
-            "reviewer-secperf",
-            policy
-                .github
-                .reviewer_secperf_actor_id
-                .ok_or(FinalPreflightError::MissingAutomationActor)?,
-        ),
-    ];
     if !authorization_valid {
         return Ok(FinalPreflightCycle::AuthorizationBlocked);
     }
@@ -191,26 +171,14 @@ pub fn reconcile_final_preflight_once<S: FinalPreflightSource>(
             return Err(error.into());
         }
     };
-    let mut blockers = Vec::new();
-    if let Err(error) =
-        validate_pull_request(&case, policy, expected_actor, &evidence, &mut blockers)
+    let blockers = match final_gate_blockers(store, &case, policy, &evidence, &threads, Some(true))
     {
-        store.release_effect(&claimed.effect_id, owner)?;
-        return Err(error);
-    }
-    if let Err(error) = validate_ledger_join(store, &case, &mut blockers) {
-        store.release_effect(&claimed.effect_id, owner)?;
-        return Err(error);
-    }
-    validate_published_reviews(&review_actors, head_sha, &evidence, &mut blockers);
-    for thread in &threads {
-        if !thread.is_resolved {
-            push_unique(
-                &mut blockers,
-                format!("UNRESOLVED_REVIEW_THREAD:{}", thread.id),
-            );
+        Ok(blockers) => blockers,
+        Err(error) => {
+            store.release_effect(&claimed.effect_id, owner)?;
+            return Err(error);
         }
-    }
+    };
     if !blockers.is_empty() {
         store.release_effect(&claimed.effect_id, owner)?;
         return Ok(FinalPreflightCycle::Pending {
@@ -221,8 +189,11 @@ pub fn reconcile_final_preflight_once<S: FinalPreflightSource>(
     let github_payload = json!({
         "pull_request": evidence,
         "review_threads": threads,
-        "automation_actor_id": expected_actor,
-        "review_actor_ids": review_actors.into_iter().collect::<BTreeMap<_, _>>(),
+        "automation_actor_id": policy.github.automation_actor_id,
+        "review_actor_ids": BTreeMap::from([
+            ("reviewer-general", policy.github.reviewer_general_actor_id),
+            ("reviewer-secperf", policy.github.reviewer_secperf_actor_id),
+        ]),
         "required_role_stamps": REVIEW_ROLES.map(|(_, role)| role),
     });
     let command = workflow(
@@ -252,6 +223,7 @@ fn validate_pull_request(
     expected_actor: u64,
     evidence: &PullRequestEvidence,
     blockers: &mut Vec<String>,
+    expected_draft: Option<bool>,
 ) -> Result<(), FinalPreflightError> {
     let pull = &evidence.pull_request;
     let pr_number = case.pr_number.ok_or(FinalPreflightError::InvalidCase)?;
@@ -273,7 +245,7 @@ fn validate_pull_request(
     {
         push_unique(blockers, "PULL_REQUEST_IDENTITY_DRIFT".into());
     }
-    if !pull.open || !pull.draft || pull.merged {
+    if !pull.open || pull.merged || expected_draft.is_some_and(|draft| pull.draft != draft) {
         push_unique(blockers, "PULL_REQUEST_DISPOSITION_DRIFT".into());
     }
     if pull.mergeable != Some(true) || pull.mergeable_state != "clean" {
@@ -289,6 +261,60 @@ fn validate_pull_request(
         }
     }
     Ok(())
+}
+
+pub(crate) fn final_gate_blockers(
+    store: &Store,
+    case: &StoredCase,
+    policy: &RepositoryPolicy,
+    evidence: &PullRequestEvidence,
+    threads: &[ReviewThreadSnapshot],
+    expected_draft: Option<bool>,
+) -> Result<Vec<String>, FinalPreflightError> {
+    let expected_actor = policy
+        .github
+        .automation_actor_id
+        .ok_or(FinalPreflightError::MissingAutomationActor)?;
+    let review_actors = [
+        (
+            "reviewer-general",
+            policy
+                .github
+                .reviewer_general_actor_id
+                .ok_or(FinalPreflightError::MissingAutomationActor)?,
+        ),
+        (
+            "reviewer-secperf",
+            policy
+                .github
+                .reviewer_secperf_actor_id
+                .ok_or(FinalPreflightError::MissingAutomationActor)?,
+        ),
+    ];
+    let mut blockers = Vec::new();
+    validate_pull_request(
+        case,
+        policy,
+        expected_actor,
+        evidence,
+        &mut blockers,
+        expected_draft,
+    )?;
+    validate_ledger_join(store, case, &mut blockers)?;
+    let head = case
+        .head_sha
+        .as_deref()
+        .ok_or(FinalPreflightError::InvalidCase)?;
+    validate_published_reviews(&review_actors, head, evidence, &mut blockers);
+    for thread in threads {
+        if !thread.is_resolved {
+            push_unique(
+                &mut blockers,
+                format!("UNRESOLVED_REVIEW_THREAD:{}", thread.id),
+            );
+        }
+    }
+    Ok(blockers)
 }
 
 fn validate_ledger_join(

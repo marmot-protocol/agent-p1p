@@ -144,12 +144,16 @@ CI evidence for the prior head.
 2. Re-fetch every exact-head, authorization, ownership, CI, review, thread, and
    mergeability condition.
 3. Abort to the appropriate state on any mismatch.
-4. Invoke GitHub merge with the expected head SHA.
-5. Fetch and verify merged state and merge commit.
-6. Commit the merge evidence and enter `COMPLETED`.
+4. Mark the controller-owned draft ready through GitHub GraphQL and re-run the
+   complete gate against the non-draft PR.
+5. Commit `MERGE_STARTED` and a separate durable `EXECUTE_MERGE` effect.
+6. Invoke the policy-selected GitHub merge with the expected head SHA.
+7. Fetch and verify merged state and merge commit.
+8. Commit the merge evidence and enter `COMPLETED`.
 
-The transaction does not retry an ambiguous merge response until reconciliation
-proves whether GitHub performed it.
+After an ambiguous response or restart, reconciliation first observes whether
+the PR is already ready or merged, then resumes without duplicating the logical
+transaction.
 
 ## Pause, authorization removal, and takeover
 

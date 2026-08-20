@@ -115,8 +115,9 @@ outcome until the controller publishes the immutable plan comment, and
 human-held issue/PR disposition comments and local terminal effects are
 consumed transactionally. Builder results are also held until the controller
 creates or updates the stable case-owned draft PR. The scoped branch-push
-execution boundary and guarded-merge effect remain open, so the phase exit
-gate is not met.
+execution boundary remains open. Guarded merge is implemented behind explicit
+guarded/autonomous policy and is unreachable under MDK shadow policy, so the
+phase exit gate is not yet met.
 
 Deliverables:
 

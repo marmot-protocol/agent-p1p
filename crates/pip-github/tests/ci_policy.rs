@@ -103,6 +103,7 @@ fn evidence(
             open: true,
             draft: true,
             merged: false,
+            merge_commit_sha: None,
             mergeable: Some(true),
             mergeable_state: "clean".into(),
             author_id: 10,

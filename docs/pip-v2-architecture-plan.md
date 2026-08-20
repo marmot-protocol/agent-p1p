@@ -365,8 +365,15 @@ Immediately before merge it re-fetches and verifies:
 - clean mergeability; and
 - final-review evidence bound to the same SHA.
 
-Any change aborts. Success records the merge commit and verifies GitHub reports
-the PR merged. MDK remains shadow-only until JG explicitly changes its policy.
+Any change aborts. Because case PRs remain drafts throughout automated review,
+the guarded transaction first uses GitHub's
+`markPullRequestReadyForReview` mutation with the exact PR node identity, then
+re-runs every gate against the non-draft PR. A separate durable
+`EXECUTE_MERGE` effect performs the policy-selected merge method with GitHub's
+expected-head SHA guard. Success records the merge commit and verifies GitHub
+reports the PR merged. Restart after either external mutation converges by
+observing the ready or merged PR; it does not issue a second logical
+transaction. MDK remains shadow-only until JG explicitly changes its policy.
 
 ## 14. Global control plane
 
@@ -424,6 +431,7 @@ dispatch_enabled: false
 max_active_cases: 1
 merge_mode: shadow
 autonomous_merge: false
+merge_method: squash
 ```
 
 Activation requires a reviewed release and explicit operator action to enable

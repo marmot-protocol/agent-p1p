@@ -227,6 +227,7 @@ github:
 max_active_cases: 1
 merge_mode: shadow
 autonomous_merge: false
+merge_method: squash
 ```
 
 After reviewed release installation and non-dispatching reconciliation:

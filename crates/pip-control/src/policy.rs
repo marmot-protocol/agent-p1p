@@ -57,6 +57,7 @@ enum MergeModeConfiguration {
 pub struct MergeConfiguration {
     mode: MergeModeConfiguration,
     pub autonomous: bool,
+    pub method: String,
 }
 
 impl MergeConfiguration {
@@ -247,6 +248,7 @@ fn validate_policy(policy: &RepositoryPolicy) -> Result<(), PolicyError> {
         && policy.intake.repository_active_limit > 0
         && policy.intake.global_active_limit > 0
         && !(policy.merge.is_shadow() && policy.merge.autonomous)
+        && matches!(policy.merge.method.as_str(), "merge" | "squash" | "rebase")
         && policy.max_remediation_rounds > 0
         && ci.len() == policy.required_ci_contexts.len()
         && ci.iter().all(|context| valid_text(context, 256));
