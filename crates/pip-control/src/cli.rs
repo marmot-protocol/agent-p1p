@@ -78,8 +78,132 @@ pub fn run_cli(arguments: impl IntoIterator<Item = String>) -> Result<Value, Cli
         "seal-release" => seal(&arguments[1..]),
         "derive-public-key" => derive_public_key(&arguments[1..]),
         "shadow-reconcile" => shadow_reconcile(&arguments[1..]),
+        "controller-cycle" => controller_cycle(&arguments[1..]),
         "install-release" => install(&arguments[1..]),
         _ => Err(CliError::InvalidArgument(command.into())),
+    }
+}
+
+fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
+    let options = options(
+        arguments,
+        &[
+            "--policy",
+            "--database",
+            "--github-token",
+            "--hermes",
+            "--owner",
+            "--skills-commit-file",
+        ],
+        &["--now", "--lease-seconds", "--global-paused"],
+    )?;
+    let policy_bytes = read_bounded(Path::new(required(&options, "--policy")?), 1024 * 1024)?;
+    let policy = crate::load_repository_policy(&policy_bytes)
+        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let global_paused = options
+        .get("--global-paused")
+        .map(|value| parse_bool(value, "--global-paused"))
+        .transpose()?
+        .unwrap_or(false);
+    if global_paused || policy.intake.paused || !policy.dispatch_enabled {
+        return Ok(json!({
+            "ok": true,
+            "result": "disabled",
+            "repository": policy.repository.full_name(),
+            "policy_revision": policy.revision,
+        }));
+    }
+    let token = read_secret(Path::new(required(&options, "--github-token")?), 1024)?;
+    let token = std::str::from_utf8(&token)
+        .map_err(|_| CliError::InvalidArgument("--github-token".into()))?
+        .trim();
+    if token.is_empty() {
+        return Err(CliError::InvalidArgument("--github-token".into()));
+    }
+    let skills_commit = read_bounded(Path::new(required(&options, "--skills-commit-file")?), 128)?;
+    let skills_commit = std::str::from_utf8(&skills_commit)
+        .map_err(|_| CliError::InvalidArgument("--skills-commit-file".into()))?
+        .trim();
+    if skills_commit.len() != 40
+        || !skills_commit
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(CliError::InvalidArgument("--skills-commit-file".into()));
+    }
+    let now = options
+        .get("--now")
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|_| CliError::InvalidArgument("--now".into()))
+        })
+        .transpose()?
+        .map_or_else(current_time, Ok)?;
+    let lease_seconds = options
+        .get("--lease-seconds")
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .ok()
+                .filter(|value| *value > 0)
+                .ok_or_else(|| CliError::InvalidArgument("--lease-seconds".into()))
+        })
+        .transpose()?
+        .unwrap_or(60);
+    let reader = GitHubReader::new(
+        UreqTransport::new(Duration::from_secs(20)),
+        "https://api.github.com",
+        token,
+        4 * 1024 * 1024,
+        10,
+    )
+    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let mut store = Store::open(required(&options, "--database")?)
+        .map_err(|error| CliError::Ledger(error.to_string()))?;
+    let result = crate::ingest_completed_once(&mut store, &policy, required(&options, "--hermes")?)
+        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let ci = crate::reconcile_ci_once(&reader, &policy, &mut store, now)
+        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let intake = if policy.intake.enabled {
+        serde_json::to_value(
+            crate::reconcile_intake(&reader, &policy, &mut store, now, global_paused)
+                .map_err(|error| CliError::Reconciliation(error.to_string()))?,
+        )
+        .map_err(|error| CliError::Reconciliation(error.to_string()))?
+    } else {
+        json!({"result": "disabled"})
+    };
+    let dispatch = crate::dispatch_once(
+        &mut store,
+        &policy,
+        crate::DispatchCycleContext {
+            skills_repository_commit: skills_commit,
+            hermes_program: required(&options, "--hermes")?,
+            owner: required(&options, "--owner")?,
+            now,
+            lease_seconds,
+        },
+    )
+    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    Ok(json!({
+        "ok": true,
+        "result": "active",
+        "observed_at": now,
+        "repository": policy.repository.full_name(),
+        "policy_revision": policy.revision,
+        "worker_result": result,
+        "ci": ci,
+        "intake": intake,
+        "dispatch": dispatch,
+    }))
+}
+
+fn parse_bool(value: &str, name: &str) -> Result<bool, CliError> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(CliError::InvalidArgument(name.into())),
     }
 }
 

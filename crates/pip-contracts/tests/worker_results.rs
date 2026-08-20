@@ -73,6 +73,7 @@ fn immutable_worker_binding_covers_case_task_role_plan_model_pr_and_head() {
         task_id: "review-secperf-1".into(),
         role: WorkerRole::ReviewerSecperf,
         requested_model: "cursor/claude-opus-4-8-thinking-high".into(),
+        skills_repository_commit: "a".repeat(40),
         plan_version: 1,
         pr_number: Some(77),
         expected_head_sha: Some("b".repeat(40)),
@@ -86,6 +87,10 @@ fn immutable_worker_binding_covers_case_task_role_plan_model_pr_and_head() {
         },
         WorkerBinding {
             requested_model: "cursor/auto".into(),
+            ..binding.clone()
+        },
+        WorkerBinding {
+            skills_repository_commit: "c".repeat(40),
             ..binding.clone()
         },
         WorkerBinding {

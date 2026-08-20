@@ -1,7 +1,7 @@
 ---
 name: final-reviewer
 description: Use for holistic final adjudication of a Pip v2 case.
-version: 0.1.0
+version: 0.2.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -24,7 +24,7 @@ Holistically adjudicate the complete case using GPT-5.6-Sol at `xhigh` reasoning
 4. Inspect both review histories, CodeRabbit findings when present, and resolution evidence.
 5. Verify the join bundle binds mandatory approvals and green CI to the current exact head. Independently query all check-run attempts with `filter=all`; any historical red attempt permanently blocks that PR. Permit a skipped check only when it is the exact conditional `Publish wn-agent release` job.
 6. Decide whether the work solves the right root problem with sufficient evidence.
-7. Return `HUMAN_REVIEW_REQUIRED`, `RETURN_TO_BUILD`, `RETURN_TO_REVIEW`, `RETURN_TO_PLANNING`, `WAIT_FOR_ISSUE_CREATOR`, `BLOCKED`, `ABANDON`, or `BLOCKED_UNEXPECTED_MODEL`.
+7. Return `READY`, `RETURN_TO_BUILD`, `RETURN_TO_REVIEW`, `RETURN_TO_PLANNING`, `WAIT_FOR_ISSUE_CREATOR`, `BLOCKED`, `ABANDON`, or `BLOCKED_UNEXPECTED_MODEL`.
 
 ## Merge separation
 
@@ -32,10 +32,12 @@ Do not invoke merge, notify a human, or claim merge or notification authority. M
 
 ## Completion
 
-Post a final role-stamped rationale inside a validating `final-result` tied to
-the exact reviewed head. After validating it, call `kanban_complete` with a
+Post a final role-stamped rationale inside the Rust `final-reviewer` contract
+from `docs/worker-result-contracts.md`, tied to the exact reviewed head. After
+validating it, call `kanban_complete` with a
 concise summary and the complete object as `metadata`; Hermes must durably
 store the contract in the Kanban run metadata. Then return the same JSON object
-as the entire final response without prose or a code fence. Use
-`HUMAN_REVIEW_REQUIRED` when every gate passes. Do not send, subscribe, stage,
+as the entire final response without prose or a code fence. Use `READY` when
+every gate passes; deterministic shadow policy maps it to a human-held
+`SHADOW_READY` disposition. Do not send, subscribe, stage,
 or otherwise trigger a human notification. Never merge.

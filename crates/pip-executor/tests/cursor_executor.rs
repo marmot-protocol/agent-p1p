@@ -80,6 +80,7 @@ fn task(role: WorkerRole, model: &str, index: usize) -> CursorTask {
             task_id: value["task_id"].as_str().unwrap().into(),
             role,
             requested_model: format!("cursor/{model}"),
+            skills_repository_commit: "a".repeat(40),
             plan_version: 1,
             pr_number: value.get("pr_number").and_then(Value::as_u64),
             expected_head_sha: value

@@ -1,0 +1,108 @@
+# Rust worker result contracts
+
+**Status:** Canonical for workflow version 2 and contract version 1
+
+The Rust controller accepts a completed worker result only from the latest
+successful durable Hermes run for a controller-owned task projection. The
+stored projection, not the worker result, supplies the immutable assignment.
+The controller rejects task, role, profile, case, plan, PR, head, model, or
+skills-commit drift before writing a run or advancing a case.
+
+The executable definitions are in `crates/pip-contracts/src/lib.rs`. Valid
+examples for every role are frozen in
+`migration/target-v1/worker-results.json`. This document is the worker-facing
+field guide; it does not replace executable validation.
+
+## Common fields
+
+Every result is one JSON object with exactly these common fields plus the
+role-specific fields below:
+
+| Field | Contract |
+|---|---|
+| `contract_version` | Integer `1`. |
+| `workflow_version` | Positive integer equal to `case.workflow_version`. |
+| `case` | Object containing positive `repository_id`, `issue_number`, and `workflow_version`. |
+| `task_id` | Exact Hermes task ID from the immutable task input. |
+| `role` | `planner`, `builder`, `reviewer-general`, `reviewer-secperf`, or `final-reviewer`. |
+| `requested_model` | Exact `provider/model` value from the task binding. |
+| `actual_model` | Model identity observed by the worker. A mismatch requires `BLOCKED_UNEXPECTED_MODEL`. |
+| `skills_repository_commit` | Exact lowercase 40-hex commit from the task binding. |
+| `started_at_unix` | Nonnegative Unix timestamp in seconds. |
+| `completed_at_unix` | Unix timestamp in seconds, not earlier than start. |
+| `evidence` | JSON object containing attributable evidence and durable artifact paths. |
+
+Unknown top-level fields are rejected. Return timestamps as integers, not ISO
+strings. Put supplemental diagnostics, artifact paths, confidence, and tool
+limitations under `evidence`; do not invent top-level fields.
+
+## Planner
+
+Additional fields:
+
+- `outcome`: `PROCEED`, `ALREADY_FIXED`, `NOT_REPRODUCIBLE`, `DUPLICATE`,
+  `ROOT_CAUSE_DIFFERENT_SCOPE`, `CROSS_REPO_DEPENDENCY`,
+  `WAITING_FOR_ISSUE_CREATOR`, `NEEDS_HUMAN_SCOPE_DECISION`, `ABANDON`,
+  `BLOCKED`, or `BLOCKED_UNEXPECTED_MODEL`;
+- positive `plan_version`;
+- lowercase 40-hex `planned_base_sha`;
+- `root_cause`, `authorized_scope`, `sensitive_scope`, `dependencies`,
+  `open_decisions`, and `plan_artifact`;
+- positive numeric `issue_comment_id`; and
+- lowercase 64-hex `issue_comment_body_sha256`.
+
+`PROCEED` requires empty sensitive scope, dependencies, and open decisions.
+
+## Builder
+
+Additional fields:
+
+- `outcome`: `REVIEW_READY`, `RETURN_TO_PLANNING`, `BLOCKED`, `ABANDON`, or
+  `BLOCKED_UNEXPECTED_MODEL`;
+- positive `plan_version` and `build_round`;
+- nullable `pr_number`, `head_sha`, `ci_head_sha`, and `required_ci_green`;
+- `local_checks`; and
+- `finding_resolutions` with exact finding and resolution-head bindings.
+
+`REVIEW_READY` requires a positive PR number, lowercase 40-hex head, matching
+CI head, and `required_ci_green: true`. That worker claim does not release
+reviewers; the controller independently reads the complete GitHub attempt
+history on the ledger head.
+
+## Reviewers
+
+Additional fields:
+
+- `outcome`: `APPROVE`, `REQUEST_CHANGES`, `BLOCKED`, or
+  `BLOCKED_UNEXPECTED_MODEL`;
+- positive `plan_version`, `review_round`, and `pr_number`;
+- lowercase 40-hex `reviewed_head_sha`;
+- `blocking_findings`, `suggestions`, and `finding_confirmations`.
+
+An approval cannot contain a blocking finding or an open confirmation. The
+first independent result is retained without advancing the case. The second
+same-head, same-round result releases the deterministic aggregate verdict.
+
+## Final reviewer
+
+Additional fields:
+
+- `outcome`: `READY`, `RETURN_TO_BUILD`, `RETURN_TO_REVIEW`,
+  `RETURN_TO_PLANNING`, `WAIT_FOR_ISSUE_CREATOR`, `BLOCKED`, `ABANDON`, or
+  `BLOCKED_UNEXPECTED_MODEL`;
+- positive `plan_version`, `final_review_round`, and `pr_number`;
+- lowercase 40-hex `reviewed_head_sha`;
+- `residual_uncertainties`; and
+- nonempty `decision_rationale`.
+
+`READY` is a recommendation, not merge authority. In MDK shadow policy the
+pure state machine maps it to `SHADOW_READY`, where disposition remains held
+for a human.
+
+## Hermes completion envelope
+
+After validating the result locally, call `kanban_complete` once with a concise
+summary and the complete contract object as run `metadata`. Return the same
+object as the entire final response, without prose or a code fence. Hermes may
+store its own run envelope fields outside `metadata`; do not add those fields
+to the contract object.

@@ -95,6 +95,7 @@ fn context() -> DispatchContext {
         remediation_round: 2,
         pr_number: Some(PullRequestNumber::new(NonZeroU64::new(77).unwrap())),
         head_sha: Some(GitSha::from_str(&"b".repeat(40)).unwrap()),
+        skills_repository_commit: GitSha::from_str(&"a".repeat(40)).unwrap(),
     }
 }
 
@@ -121,6 +122,7 @@ fn planner_and_builder_dispatches_are_blocked_behind_controller_gates() {
     assert_eq!(worker.body["state_revision"], 8);
     assert_eq!(worker.body["plan_version"], 1);
     assert_eq!(worker.body["requested_model"], "openai-codex/gpt-5.6-sol");
+    assert_eq!(worker.body["skills_repository_commit"], "a".repeat(40));
 
     let builder = schedule_effect(
         "effect-builder-r2",
@@ -248,7 +250,8 @@ fn claimed_outbox_dispatch_is_bound_to_the_current_case_revision() {
         lease_until: 200,
     };
 
-    let dispatches = schedule_claimed_dispatch(&effect, &case, &policy()).unwrap();
+    let skills_commit = GitSha::from_str(&"a".repeat(40)).unwrap();
+    let dispatches = schedule_claimed_dispatch(&effect, &case, &policy(), skills_commit).unwrap();
     assert_eq!(dispatches.len(), 2);
     assert_eq!(dispatches[0].role, WorkerRole::ReviewerGeneral);
     assert_eq!(dispatches[1].role, WorkerRole::ReviewerSecperf);
@@ -256,7 +259,7 @@ fn claimed_outbox_dispatch_is_bound_to_the_current_case_revision() {
     let mut stale = effect;
     stale.state_revision = 7;
     assert_eq!(
-        schedule_claimed_dispatch(&stale, &case, &policy()),
+        schedule_claimed_dispatch(&stale, &case, &policy(), skills_commit),
         Err(DispatchError::StaleEffect)
     );
 }

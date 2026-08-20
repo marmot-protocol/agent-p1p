@@ -1,7 +1,7 @@
 ---
 name: builder-grok
 description: Use when implementing an approved Pip v2 plan with Grok.
-version: 0.3.0
+version: 0.4.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -34,11 +34,11 @@ The Hermes `cursor-fixer` profile is the v1-style task orchestrator. It delegate
 7. Add regression coverage. Run repository-native formatting, lint, tests, and full-diff review. Do not bump versions. Update the existing Unreleased changelog when code changes.
 8. Create a signed `agent-p1p` commit on a Pip-owned `pip/*` branch. Open or update a draft PR.
 9. Independently verify the PR URL, exact head, and every CI attempt with `gh`; do not merely repeat Cursor's claims. Query check runs with `filter=all`. A failed attempt permanently disqualifies that PR even when a rerun passes. Do not complete until a fresh draft PR has no red attempt and current CI is green on its exact head.
-10. Return a schema-valid `builder-result` with `implementation_base_sha` set to the actual starting head. `RETURN_TO_PLANNING` must include `evidence.incompatibility.reason` and nonempty concrete `evidence.incompatibility.observations`; branch movement by itself is not an incompatibility. After validating it, call
+10. Return the Rust `builder` result contract from `docs/worker-result-contracts.md`. Record the actual implementation base under `evidence.implementation_base_sha`. `RETURN_TO_PLANNING` must include `evidence.incompatibility.reason` and nonempty concrete `evidence.incompatibility.observations`; branch movement by itself is not an incompatibility. After validating it, call
     `kanban_complete` with a concise summary and the complete object as
     `metadata`; Hermes must durably store the contract in the Kanban run
     metadata. Then return the same object as the entire final response without
-    prose or a code fence. Include durable artifact paths. Never merge.
+    prose or a code fence. Put durable artifact paths under `evidence`. Never merge.
 
 ## Completion
 

@@ -75,6 +75,7 @@ pub struct WorkerBinding {
     pub task_id: String,
     pub role: WorkerRole,
     pub requested_model: String,
+    pub skills_repository_commit: String,
     pub plan_version: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_number: Option<u64>,
@@ -378,6 +379,7 @@ impl WorkerResult {
             && common.task_id == binding.task_id
             && common.role == binding.role
             && common.requested_model == binding.requested_model
+            && common.skills_repository_commit == binding.skills_repository_commit
             && plan_version == binding.plan_version
             && binding
                 .pr_number

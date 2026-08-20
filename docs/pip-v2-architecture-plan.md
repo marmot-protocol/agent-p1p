@@ -437,3 +437,8 @@ Pip v2 is ready to expand beyond the MDK canary when:
 - the full MDK case completes in shadow mode and agrees acceptably with JG;
 - the legacy Python service is stopped and recoverably retained; and
 - autonomous merge remains disabled unless separately authorized.
+
+Current implementation status and known gaps are tracked separately in
+[`implementation-status.md`](implementation-status.md). That inventory cannot
+weaken this target architecture or convert local adapter coverage into live
+runtime evidence.

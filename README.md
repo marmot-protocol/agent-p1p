@@ -8,11 +8,12 @@ Hermes Kanban boards.
 ## Status
 
 The repository is migrating from a Python single-issue prototype to the target
-Rust control plane. Phases 0 through 7 of the migration roadmap are implemented
-locally: the deterministic core, immutable ledger/outbox, bounded adapters,
-worker projection/execution, GitHub write boundary, signed release cohort, and
-transactional systemd lifecycle are present. Phase 8 read-only shadow work is
-in progress. No live MDK intake or dispatch has been authorized.
+Rust control plane. Phases 0 through 5 and the Phase 7 non-dispatching release
+lifecycle are implemented locally. Phase 6 is partial: the GitHub write
+adapters are tested, but several durable write and takeover paths are not yet
+wired into the active controller. Phase 8 has live read-only GitHub evidence,
+but not live Hermes/provider evidence. No live MDK intake or dispatch has been
+authorized.
 
 The Python implementation is useful as a safety prototype and behavioral
 reference, but it is not the target runtime and must not be installed from the
@@ -45,6 +46,10 @@ The documentation distinguishes three things explicitly:
   provenance, install, rollback, and canary-activation contract.
 - [`docs/migration-roadmap.md`](docs/migration-roadmap.md) — incremental Python
   reference-to-Rust migration with exit criteria.
+- [`docs/implementation-status.md`](docs/implementation-status.md) — current
+  executable inventory, inert boundaries, and remaining cutover work.
+- [`docs/worker-result-contracts.md`](docs/worker-result-contracts.md) — exact
+  versioned JSON returned by each worker role.
 
 ## Target roles
 

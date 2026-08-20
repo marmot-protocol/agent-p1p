@@ -127,6 +127,7 @@ fn project_planner(store: &mut Store) {
             "role":"planner",
             "plan_version":1,
             "requested_model":"openai-codex/gpt-5.6-sol"
+            ,"skills_repository_commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }),
         assignee: "planner".into(),
         workspace: "/tmp/worktree".into(),

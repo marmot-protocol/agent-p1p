@@ -1,9 +1,11 @@
 //! Restart-safe durable outbox projection into controller-owned Hermes gates.
 
 use std::fmt;
+use std::str::FromStr;
 use std::time::Duration;
 
 use pip_controller::{DispatchError, schedule_claimed_dispatch};
+use pip_core::GitSha;
 use pip_hermes::{
     CommandRunner, GateError, GateProjectionResult, GateReleaseResult, HermesError,
     HermesGateController, HermesProjector, HermesReader, ProcessRunner, ProjectionError,
@@ -33,6 +35,15 @@ pub enum DispatchCycleResult {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DispatchCycleContext<'a> {
+    pub skills_repository_commit: &'a str,
+    pub hermes_program: &'a str,
+    pub owner: &'a str,
+    pub now: u64,
+    pub lease_seconds: u64,
+}
+
 #[derive(Debug)]
 pub enum DispatchCycleError {
     Store(StoreError),
@@ -43,6 +54,7 @@ pub enum DispatchCycleError {
     Projection(ProjectionError),
     Serialization(String),
     DispatchPaused,
+    InvalidSkillsCommit,
 }
 
 impl fmt::Display for DispatchCycleError {
@@ -59,6 +71,9 @@ impl fmt::Display for DispatchCycleError {
             }
             Self::DispatchPaused => {
                 formatter.write_str("repository dispatch is disabled or paused")
+            }
+            Self::InvalidSkillsCommit => {
+                formatter.write_str("dispatch requires an exact skills repository commit")
             }
         }
     }
@@ -86,49 +101,55 @@ error_from!(ProjectionError, Projection);
 pub fn dispatch_once(
     store: &mut Store,
     policy: &RepositoryPolicy,
-    hermes_program: &str,
-    owner: &str,
-    now: u64,
-    lease_seconds: u64,
+    context: DispatchCycleContext<'_>,
 ) -> Result<DispatchCycleResult, DispatchCycleError> {
-    dispatch_once_with(
-        store,
-        policy,
-        ProcessRunner,
-        hermes_program,
-        owner,
-        now,
-        lease_seconds,
-    )
+    dispatch_once_with(store, policy, ProcessRunner, context)
 }
 
 pub fn dispatch_once_with<R: CommandRunner + Clone>(
     store: &mut Store,
     policy: &RepositoryPolicy,
     runner: R,
-    hermes_program: &str,
-    owner: &str,
-    now: u64,
-    lease_seconds: u64,
+    context: DispatchCycleContext<'_>,
 ) -> Result<DispatchCycleResult, DispatchCycleError> {
     if !policy.dispatch_enabled || policy.intake.paused {
         return Err(DispatchCycleError::DispatchPaused);
     }
-    let Some(claimed) =
-        store.claim_effect_matching(owner, now, lease_seconds, &DISPATCH_EFFECTS)?
+    let skills_repository_commit = GitSha::from_str(context.skills_repository_commit)
+        .map_err(|_| DispatchCycleError::InvalidSkillsCommit)?;
+    let Some(claimed) = store.claim_effect_matching(
+        context.owner,
+        context.now,
+        context.lease_seconds,
+        &DISPATCH_EFFECTS,
+    )?
     else {
         return Ok(DispatchCycleResult::Idle);
     };
     let case = store
         .case(&claimed.case_key)?
         .ok_or_else(|| StoreError::MissingCase(claimed.case_key.clone()))?;
-    let dispatches = schedule_claimed_dispatch(&claimed, &case, &policy.workflow_policy()?)?;
+    let dispatches = schedule_claimed_dispatch(
+        &claimed,
+        &case,
+        &policy.workflow_policy()?,
+        skills_repository_commit,
+    )?;
     let timeout = Duration::from_secs(20);
     let output_bound = 4 * 1024 * 1024;
-    let reader = HermesReader::new(runner.clone(), hermes_program, timeout, output_bound)?;
-    let gate_controller =
-        HermesGateController::new(runner.clone(), hermes_program, timeout, output_bound)?;
-    let projector = HermesProjector::new(runner, hermes_program, timeout, output_bound)?;
+    let reader = HermesReader::new(
+        runner.clone(),
+        context.hermes_program,
+        timeout,
+        output_bound,
+    )?;
+    let gate_controller = HermesGateController::new(
+        runner.clone(),
+        context.hermes_program,
+        timeout,
+        output_bound,
+    )?;
+    let projector = HermesProjector::new(runner, context.hermes_program, timeout, output_bound)?;
     let mut observed = reader.list_tasks(&policy.board)?;
     let mut projections = Vec::with_capacity(dispatches.len() * 2);
     let mut gates = Vec::with_capacity(dispatches.len());
@@ -171,7 +192,7 @@ pub fn dispatch_once_with<R: CommandRunner + Clone>(
             released += 1;
         }
     }
-    let ledger = store.complete_task_projections(&projections, owner, now, None)?;
+    let ledger = store.complete_task_projections(&projections, context.owner, context.now, None)?;
     Ok(DispatchCycleResult::Projected {
         effect_id: claimed.effect_id,
         projection_count: projections.len(),

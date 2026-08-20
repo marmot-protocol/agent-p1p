@@ -106,6 +106,10 @@ Exit gate:
 
 ## Phase 6: GitHub write boundary
 
+**Implementation status:** Partial. The idempotent write primitives and
+adversarial tests exist. The active controller does not yet consume every
+durable write/takeover effect, so the phase exit gate is not met.
+
 Deliverables:
 
 - Idempotent issue comments and provenance markers.
@@ -122,8 +126,10 @@ Exit gate:
 
 ## Phase 7: Packaging and lifecycle
 
-**Implementation status:** Complete locally; CI and live-host evidence remain
-separate gates.
+**Implementation status:** The signed cohort, installer, non-dispatching unit,
+and disposable lifecycle are complete locally. The active controller unit is a
+packaged template only; its install/upgrade/rollback path remains open. CI and
+live-host evidence are separate gates.
 
 Deliverables:
 
@@ -162,6 +168,10 @@ Exit gate:
 - No Rust shadow operation creates or releases a task.
 
 ## Phase 9: One generic MDK shadow case
+
+**Implementation status:** Not started. Activation remains unauthorized and the
+runtime gaps listed in [`implementation-status.md`](implementation-status.md)
+must close first.
 
 Deliverables:
 

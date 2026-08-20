@@ -1,7 +1,7 @@
 ---
 name: reviewer-secperf
 description: Use when reviewing a Pip v2 PR for security and performance.
-version: 0.2.0
+version: 0.3.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -32,12 +32,11 @@ The Hermes `cursor-reviewer` profile is the v1-style task orchestrator. It deleg
 5. Reject any model identifier Cursor reports that differs from the request. Record that Cursor does not independently attest provider-side routing.
 6. Review trust boundaries, data exposure, unsafe parsing, misuse/abuse paths, resource bounds, algorithmic regressions, concurrency, and denial-of-service risk. Treat any unexpected MLS/CGKA, key, trust-anchor, authorization-semantic, or push-context change as blocking and escalate to JG.
 7. Independently verify every material claim against the exact checkout and GitHub. Do not alter branches, commits, PR text, labels, or code.
-8. Return a schema-valid `review-result`. After validating it, call
+8. Return the Rust `reviewer-secperf` contract from `docs/worker-result-contracts.md`. Put confidence, provider limitations, and durable artifact paths under `evidence`. After validating it, call
    `kanban_complete` with a concise summary and the complete object as
    `metadata`; Hermes must durably store the contract in the Kanban run
    metadata. Then return the same object as the entire final response without
-   prose or a code fence. Include exact head, findings, confidence,
-   requested/reported model evidence, and durable artifact paths.
+   prose or a code fence.
 
 ## Blocking rule
 

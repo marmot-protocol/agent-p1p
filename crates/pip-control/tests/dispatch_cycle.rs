@@ -2,7 +2,9 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use pip_control::{DispatchCycleResult, dispatch_once_with, load_repository_policy};
+use pip_control::{
+    DispatchCycleContext, DispatchCycleResult, dispatch_once_with, load_repository_policy,
+};
 use pip_hermes::{CommandOutput, CommandRunner, CommandSpec, HermesError, TaskSnapshot};
 use pip_store::{EffectInput, EventInput, NewCase, PolicyInput, Store};
 use serde_json::{Value, json};
@@ -46,10 +48,7 @@ fn planner_dispatch_projects_gate_and_worker_then_atomically_acks_outbox() {
         &mut store,
         &policy,
         runner.clone(),
-        "hermes",
-        "controller-1",
-        100,
-        30,
+        context("controller-1", 100),
     )
     .unwrap();
     assert_eq!(
@@ -78,10 +77,7 @@ fn planner_dispatch_projects_gate_and_worker_then_atomically_acks_outbox() {
             &mut store,
             &policy,
             idle_runner.clone(),
-            "hermes",
-            "controller-2",
-            102,
-            30,
+            context("controller-2", 102),
         )
         .unwrap(),
         DispatchCycleResult::Idle
@@ -96,18 +92,7 @@ fn crash_after_gate_release_reconciles_existing_advanced_tasks_without_duplicate
     let policy = active_policy();
     let first = creation_runner();
     first.outputs.borrow_mut().back_mut().unwrap().status = 2;
-    assert!(
-        dispatch_once_with(
-            &mut store,
-            &policy,
-            first,
-            "hermes",
-            "controller-1",
-            100,
-            30,
-        )
-        .is_err()
-    );
+    assert!(dispatch_once_with(&mut store, &policy, first, context("controller-1", 100),).is_err());
     assert_eq!(store.task_projection_count().unwrap(), 0);
 
     let gate = gate("done");
@@ -120,10 +105,7 @@ fn crash_after_gate_release_reconciles_existing_advanced_tasks_without_duplicate
         &mut store,
         &policy,
         recovered.clone(),
-        "hermes",
-        "controller-2",
-        131,
-        30,
+        context("controller-2", 131),
     )
     .unwrap();
     assert!(matches!(report, DispatchCycleResult::Projected { .. }));
@@ -132,6 +114,16 @@ fn crash_after_gate_release_reconciles_existing_advanced_tasks_without_duplicate
         !command.args.iter().any(|argument| argument == "create")
             && !command.args.iter().any(|argument| argument == "complete")
     }));
+}
+
+fn context(owner: &str, now: u64) -> DispatchCycleContext<'_> {
+    DispatchCycleContext {
+        skills_repository_commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        hermes_program: "hermes",
+        owner,
+        now,
+        lease_seconds: 30,
+    }
 }
 
 fn active_policy() -> pip_control::RepositoryPolicy {

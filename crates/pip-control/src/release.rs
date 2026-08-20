@@ -506,7 +506,7 @@ fn valid_artifact_path(value: &str) -> bool {
                 let segment = segment.as_encoded_bytes();
                 !segment.is_empty()
                     && segment.iter().all(|byte| {
-                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'@')
                     })
             })
         })

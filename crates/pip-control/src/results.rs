@@ -179,6 +179,7 @@ fn binding(task_id: &str, desired: &TaskCreateSpec) -> Result<WorkerBinding, Res
         task_id: task_id.into(),
         role: role(body.get("role").and_then(|value| value.as_str()))?,
         requested_model: text(body, "requested_model")?.into(),
+        skills_repository_commit: text(body, "skills_repository_commit")?.into(),
         plan_version: u32::try_from(number(body, "plan_version")?)
             .map_err(|_| ResultCycleError::InvalidProjection)?,
         pr_number: optional_number(body, "pr_number")?,

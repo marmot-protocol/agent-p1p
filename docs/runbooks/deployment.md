@@ -20,6 +20,11 @@ A release cohort contains:
 - an immutable release manifest; and
 - a verifiable signature/attestation for that manifest.
 
+The current cohort contains both the installed non-dispatching shadow unit and
+a staged active-controller template. The target installer intentionally does
+not install or enable the active template yet. Packaging a unit is not
+activation authority.
+
 The manifest binds:
 
 ```json
@@ -125,6 +130,12 @@ before it executes the staged binary.
 - Operator identity authorized to manage the Hermes profiles/board.
 - Sufficient disk for a new release, database snapshot, and rollback release.
 
+The active runtime uses a dedicated service-owned Hermes root at
+`/var/lib/pip-v2/hermes`, with both `HERMES_HOME` and `HERMES_KANBAN_HOME`
+pointing there. The compatible Hermes gateway/dispatcher and every managed
+profile used by Pip must observe that same root. Personal operator state under
+`~/.hermes` is not an acceptable production dependency.
+
 Credentials and provider secrets are provisioned outside this repository and
 outside the release manifest.
 
@@ -191,6 +202,11 @@ Rollback must not delete a worker, branch, PR, database, or release whose
 ownership is uncertain.
 
 ## Generic MDK canary activation
+
+This section is a future authorized procedure. It must not be followed until
+the remaining cutover gaps in
+[`../implementation-status.md`](../implementation-status.md) are closed and
+the active unit has passed its own install/rollback lifecycle tests.
 
 The binary contains no canary issue. The installed MDK policy starts paused:
 

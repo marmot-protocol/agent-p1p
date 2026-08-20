@@ -1,7 +1,7 @@
 ---
 name: planner
 description: Use when validating and planning a pip-ok issue.
-version: 0.3.0
+version: 0.4.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -28,7 +28,7 @@ Validate an authorized issue, identify its actual root cause, and produce a vers
 8. Define scope, non-scope, implementation sequence, regression tests, verification commands, risks, and invariants.
 9. Publish a new immutable issue comment for each plan version plus versioned Markdown and JSON plan artifacts; never edit an earlier planner comment in place. The exact outcome in the heading is a machine-consumed execution disposition: `PROCEED` authorizes ordinary builder dispatch; human-wait outcomes do not. The planned base SHA is an analysis snapshot, not a checkout lock. Every result must include a one-line `authorized_scope` and a `sensitive_scope` array using only the schema categories. `PROCEED` requires no open decisions, dependencies, or sensitive scope and exactly one canonical compact sorted-JSON line: `Pip execution binding: {"authorized_scope":"<exact one-line implementation scope>","dependencies":[],"open_decisions":[],"outcome":"PROCEED","plan_version":<version>,"sensitive_scope":[],"task_id":"<current planner task id>"}`. Never use `PROCEED` when the authorized scope includes cryptography, MLS/CGKA, key handling, trust anchors, membership/admin authorization semantics, or push-payload context. Every human-wait outcome must name a concrete open decision and must not carry an execution binding. When replanning after `Pip: narrow scope — …`, preserve that scope exactly as the execution binding's `authorized_scope` and add one single-line binding to the planner comment: `Pip narrowing binding: {"body_sha256":"<64 hex>","comment_id":<id>,"narrowed_scope":"<exact scope>"}`. Use canonical compact JSON with sorted keys; never broaden or paraphrase the narrowed scope.
    Only for a human-wait outcome, tell the authoritative human that approval may be a complete comment containing `approve`, `approved`, `@agent-p1p approve`, or `@agent-p1p approved`; rejection accepts the corresponding `reject`/`rejected` forms. Extra prose is not accepted. Narrowing still requires `Pip: narrow scope — <one-line scope>`.
-10. Return a `planner-result` contract.
+10. Return the Rust `planner` result contract from `docs/worker-result-contracts.md`. Use `plan_artifact`, numeric `issue_comment_id`, and `issue_comment_body_sha256`; do not emit legacy `case_id`, `schema_version`, `plan_file`, or ISO timestamp fields.
 
 ## Stop outcomes
 
@@ -38,4 +38,4 @@ Do not use a human-wait outcome merely because `master` moved, implementation ha
 
 ## Completion
 
-Planning is complete only when the issue comment and both plan artifacts agree, contain the planned base SHA, and the structured result validates.
+Planning is complete only when the immutable issue comment and plan artifact agree, contain the planned base SHA, and the contract validates against the exact task/model/skills binding.

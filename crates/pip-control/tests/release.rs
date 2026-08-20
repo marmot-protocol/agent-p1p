@@ -189,6 +189,29 @@ fn deterministic_manifest_creation_and_offline_signing_form_a_verifiable_cohort(
     ));
 }
 
+#[test]
+fn systemd_instance_template_names_are_safe_release_artifacts() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir_all(root.path().join("bin")).unwrap();
+    fs::create_dir_all(root.path().join("share/pip-v2/systemd")).unwrap();
+    let binary = root.path().join("bin/pip-control");
+    let unit = root
+        .path()
+        .join("share/pip-v2/systemd/pip-v2-controller@.service");
+    fs::write(&binary, b"binary\n").unwrap();
+    fs::write(&unit, b"[Service]\n").unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o555)).unwrap();
+    fs::set_permissions(&unit, fs::Permissions::from_mode(0o444)).unwrap();
+
+    let manifest = create_release_manifest(root.path(), &release_metadata()).unwrap();
+    assert!(
+        manifest
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path.ends_with("pip-v2-controller@.service"))
+    );
+}
+
 struct Fixture {
     root: tempfile::TempDir,
     manifest: Vec<u8>,
@@ -245,6 +268,20 @@ fn release_fixture() -> Fixture {
         manifest,
         signature,
         public_key,
+    }
+}
+
+fn release_metadata() -> ReleaseMetadata {
+    ReleaseMetadata {
+        version: "0.1.0".into(),
+        source_commit: "a".repeat(40),
+        cargo_lock_sha256: "b".repeat(64),
+        target: "x86_64-unknown-linux-gnu".into(),
+        rust_toolchain: "rustc 1.96.1".into(),
+        built_at: "2026-08-20T12:00:00Z".into(),
+        builder_identity: "github-actions:pip-release".into(),
+        workflow_version: 2,
+        contract_version: 1,
     }
 }
 

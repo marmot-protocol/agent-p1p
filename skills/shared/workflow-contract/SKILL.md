@@ -1,7 +1,7 @@
 ---
 name: workflow-contract
 description: Use for every Pip v2 case task. Enforce shared invariants.
-version: 0.1.0
+version: 0.2.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -22,7 +22,7 @@ This is the shared contract for every Pip v2 role. Role-specific skills add resp
 2. Work only on the assigned repository, issue, case, and Pip-owned branch.
 3. Never expose credentials or secrets in output, logs, comments, or artifacts.
 4. Record requested and actual models. If they differ, return `BLOCKED_UNEXPECTED_MODEL`.
-5. Copy `route_id`, `comment_id`, `evidence_body_sha256`, `planner_comment_id`, `planner_body_sha256`, and `planned_base_sha` exactly from the task's authorization binding into every non-planner result.
+5. Copy the case identity, task ID, role, plan version, requested `provider/model`, skills repository commit, PR number, and expected head exactly from the immutable task binding. Never reconstruct or normalize them from prose.
 6. Bind CI and review evidence to an exact 40-character PR head SHA.
 7. Do not treat CodeRabbit as mandatory; concrete findings are still actionable. If a CodeRabbit status exists but says the review was rate limited, do not represent it as complete evidence.
 8. A PR that had any red CI attempt is permanently ineligible. A green rerun does not clear that history.
@@ -30,7 +30,8 @@ This is the shared contract for every Pip v2 role. Role-specific skills add resp
 10. Human takeover or removed authorization stops the case.
 11. Complete the versioned structured result contract before reporting success.
 12. Never merge directly from a planning, building, or review role.
-13. Parent summaries may be truncated. Resolve every parent with `hermes kanban --board pip-mdk show <task-id> --json`, read the full run metadata, and dereference the declared result artifact before relying on PR numbers, findings, or remediation evidence.
+13. Parent summaries may be truncated. Resolve every declared parent on the task's assigned board, read the full durable run metadata, and dereference declared result artifacts before relying on PR numbers, findings, or remediation evidence.
+14. Return contract version 1 with exactly these common fields plus the role fields: `contract_version`, `workflow_version`, `case` (`repository_id`, `issue_number`, `workflow_version`), `task_id`, `role`, `requested_model`, `actual_model`, `skills_repository_commit`, integer `started_at_unix`, integer `completed_at_unix`, and object `evidence`. Put supplemental artifact paths or diagnostics inside `evidence`. The full field guide is `docs/worker-result-contracts.md` in the source/release documentation.
 
 ## Ownership
 

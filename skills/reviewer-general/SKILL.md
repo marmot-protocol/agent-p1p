@@ -1,7 +1,7 @@
 ---
 name: reviewer-general
 description: Use for exact-head correctness review of a Pip v2 PR.
-version: 0.1.0
+version: 0.2.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -33,7 +33,8 @@ Record the reviewed head SHA. Any later commit invalidates the verdict. Confirm 
 
 ## Completion
 
-Post a role-stamped review and produce a validating `review-result`. After
+Post a role-stamped review and produce the Rust `reviewer-general` contract
+from `docs/worker-result-contracts.md`. After
 validating it, call `kanban_complete` with a concise summary and the complete
 object as `metadata`; Hermes must durably store the contract in the Kanban run
 metadata. Then return the same object as the entire final response without

@@ -145,6 +145,7 @@ fn binding(result: &WorkerResult) -> WorkerBinding {
         task_id: common.task_id.clone(),
         role: common.role,
         requested_model: common.requested_model.clone(),
+        skills_repository_commit: common.skills_repository_commit.clone(),
         plan_version,
         pr_number,
         expected_head_sha,

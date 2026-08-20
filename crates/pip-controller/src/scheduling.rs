@@ -95,6 +95,7 @@ pub struct DispatchContext {
     pub remediation_round: u32,
     pub pr_number: Option<PullRequestNumber>,
     pub head_sha: Option<GitSha>,
+    pub skills_repository_commit: GitSha,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -171,6 +172,7 @@ pub fn schedule_claimed_dispatch(
     claimed: &ClaimedEffect,
     case: &StoredCase,
     policy: &WorkflowPolicy,
+    skills_repository_commit: GitSha,
 ) -> Result<Vec<WorkflowDispatch>, DispatchError> {
     if claimed.case_key != case.case_key || claimed.state_revision != case.state_revision {
         return Err(DispatchError::StaleEffect);
@@ -213,6 +215,7 @@ pub fn schedule_claimed_dispatch(
             .map(GitSha::from_str)
             .transpose()
             .map_err(|_| DispatchError::InvalidStoredCase)?,
+        skills_repository_commit,
     };
     schedule_effect(&claimed.effect_id, effect, &context, policy)
 }
@@ -357,6 +360,10 @@ fn dispatch(
     body.insert(
         "requested_model".into(),
         json!(format!("{}/{}", binding.provider, binding.model)),
+    );
+    body.insert(
+        "skills_repository_commit".into(),
+        json!(context.skills_repository_commit.to_string()),
     );
 
     Ok(WorkflowDispatch {

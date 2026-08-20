@@ -14,7 +14,10 @@ mod shadow;
 
 pub use ci::{CiCycle, CiCycleError, PullRequestSource, reconcile_ci_once};
 pub use cli::{CliError, run_cli};
-pub use dispatch::{DispatchCycleError, DispatchCycleResult, dispatch_once, dispatch_once_with};
+pub use dispatch::{
+    DispatchCycleContext, DispatchCycleError, DispatchCycleResult, dispatch_once,
+    dispatch_once_with,
+};
 pub use install::{
     HostInstallOptions, InstallError, InstallFault, InstallLayout, InstallOutcome, InstallResult,
     install_host_release, install_release, install_release_pinned,

@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the Pip v2 active controller cycle for %i
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15s
+AccuracySec=1s
+RandomizedDelaySec=2s
+Persistent=true
+Unit=pip-v2-controller@%i.service
+
+[Install]
+WantedBy=timers.target
