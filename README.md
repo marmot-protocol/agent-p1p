@@ -7,14 +7,17 @@ Hermes Kanban boards.
 
 ## Status
 
-The repository is migrating from a Python single-issue prototype to the target
-Rust control plane. The deterministic ledger, workflow, GitHub boundaries,
-release lifecycle, Hermes-native projection, and direct-provider adapter have
-substantial local test coverage. Dispatch now separates Hermes-native roles
-from durable Rust-owned direct jobs without substituting models. The direct-job
-consumer, repository checkout/worktree allocation, Hermes bootstrap, and live
-recovery evidence remain cutover blockers. No live MDK intake or dispatch has
-been authorized.
+The repository now contains the locally complete single-repository Rust shadow
+runtime: deterministic workflow and ledger, generic intake, exact worktrees,
+Hermes-native projections, an isolated direct-Cursor executor, controller-only
+Git publication, exact-head GitHub review/CI gates, managed Hermes bootstrap,
+and a signed rollback-safe systemd release. The Python implementation remains
+only as a frozen reference until a Rust canary is authorized and proven.
+
+No live MDK intake or dispatch has been authorized. Host provisioning, exact
+credential identities and scopes, required CI contexts, live Hermes/provider
+compatibility, and one deliberately labeled shadow case are still cutover
+gates. Local completeness is not production evidence.
 
 The Python implementation is useful as a safety prototype and behavioral
 reference, but it is not the target runtime and must not be installed from the
@@ -93,8 +96,11 @@ fresh Hermes-native task  fresh Cursor task
 Hermes Kanban is the repository-scoped queue and operational view for
 Hermes-native roles. Direct-provider jobs use the ledger's durable queue and
 may later be mirrored to the board for visibility, but Hermes never executes
-them. Neither queue is a second workflow database: no completion can release
-downstream work until the control plane validates and commits it.
+them. The direct queue crosses a controller-owned, immutable inbox/result-file
+boundary into a separate `pip-v2-worker` identity that cannot open the ledger,
+Hermes state, repository cache, or systemd credentials. Neither queue is a
+second workflow database: no completion can release downstream work until the
+control plane validates and commits it.
 
 ## Canary policy
 

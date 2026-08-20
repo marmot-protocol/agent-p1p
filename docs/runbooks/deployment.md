@@ -20,10 +20,10 @@ A release cohort contains:
 - an immutable release manifest; and
 - a verifiable signature/attestation for that manifest.
 
-The current cohort contains both the installed non-dispatching shadow unit and
-a staged active-controller template. The target installer intentionally does
-not install or enable the active template yet. Packaging a unit is not
-activation authority.
+The cohort contains the non-dispatching shadow unit plus inactive controller,
+direct-worker, and Hermes-gateway templates. The installer installs these unit
+files but never enables or starts them. Installed code is not activation
+authority.
 
 The manifest binds:
 
@@ -121,13 +121,13 @@ before it executes the staged binary.
 ## Host prerequisites
 
 - Supported Linux/systemd version and architecture.
-- Existing compatible Hermes gateway/dispatcher, verified through a capability
-  probe rather than an assumed version string alone.
+- A compatible Hermes executable, verified through capability probes rather
+  than an assumed version string alone. Pip supplies its own isolated gateway
+  unit and does not reuse a personal gateway.
 - Required provider CLIs and exact configured models available.
 - Root-owned credential files with documented mode and size bounds.
-- Dedicated control-plane service identity with no login and exclusive ledger
-  ownership.
-- Operator identity authorized to manage the Hermes profiles/board.
+- Dedicated no-login `pip-v2-control` and `pip-v2-worker` identities. Only the
+  former can open the ledger; only the latter receives direct-provider state.
 - Sufficient disk for a new release, database snapshot, and rollback release.
 
 The active runtime uses a dedicated service-owned Hermes root at
@@ -141,7 +141,9 @@ outside the release manifest. An active repository requires three distinct
 GitHub identities and credentials: the controller/PR author,
 `reviewer-general`, and `reviewer-secperf`. The two review tokens are delivered
 only to the controller service and are never placed in worker profiles, prompts,
-task metadata, or environments.
+task metadata, or environments. Git branch publication invokes the signed
+`pip-control` binary as askpass and gives Git a credential-file path, never a
+token value in argv or environment.
 
 ## Install ordering
 
@@ -164,7 +166,8 @@ task metadata, or environments.
 9. Back up the ledger and apply migrations transactionally.
 10. Install policy, unit, wrapper, and skill-link changes.
 11. Atomically switch the current release pointer.
-12. Start the control service with intake/dispatch still paused.
+12. Leave the installed gateway, controller, direct-worker, and shadow timers
+    stopped unless their prior state was already enabled during an upgrade.
 13. Validate identity, ownership, socket, database, and read/write boundaries.
 14. Run non-dispatching GitHub/Hermes reconciliation and compare expected state.
 15. Restore only the prior enabled/active policy state. Never infer activation
@@ -215,33 +218,88 @@ the active unit has passed its own install/rollback lifecycle tests.
 The binary contains no canary issue. The installed MDK policy starts paused:
 
 ```yaml
-repository: marmot-protocol/mdk
+repository:
+  id: 1055628515
+  owner: marmot-protocol
+  name: mdk
+  default_branch: master
 board: pip-mdk
-intake_label: pip-ok
-intake_enabled: false
+intake:
+  label: pip-ok
+  enabled: false
+  paused: true
+  repository_active_limit: 1
+  global_active_limit: 1
 dispatch_enabled: false
 github:
   automation_actor_id: null
   reviewer_general_actor_id: null
   reviewer_secperf_actor_id: null
-max_active_cases: 1
-merge_mode: shadow
-autonomous_merge: false
-merge_method: squash
+merge:
+  mode: shadow
+  autonomous: false
+  method: squash
 ```
 
-After reviewed release installation and non-dispatching reconciliation:
+After reviewed release installation, but before enabling any timer:
+
+1. Provision `/var/lib/pip-v2/repositories/mdk` as a real checkout owned by
+   `pip-v2-control`, with exactly one `origin` URL matching
+   `https://github.com/marmot-protocol/mdk.git`.
+
+   For the public MDK canary, the initial checkout is:
+
+   ```bash
+   sudo -u pip-v2-control env \
+     HOME=/var/lib/pip-v2 \
+     GIT_CONFIG_GLOBAL=/dev/null \
+     GIT_CONFIG_NOSYSTEM=1 \
+     GIT_TERMINAL_PROMPT=0 \
+     git -c core.hooksPath=/dev/null \
+       -c credential.helper= \
+       -c http.proxy= \
+       -c http.extraHeader= \
+       -c http.sslVerify=true \
+       clone --no-checkout --origin origin \
+       https://github.com/marmot-protocol/mdk.git \
+       /var/lib/pip-v2/repositories/mdk
+   ```
+2. Provision the service-owned Hermes auth file and direct-provider state
+   outside the release. Do not copy tokens into policy or profiles.
+3. Run the exact installed bootstrap as `pip-v2-control`:
+
+   ```bash
+   sudo -u pip-v2-control env \
+     HOME=/var/lib/pip-v2/hermes/home \
+     HERMES_HOME=/var/lib/pip-v2/hermes \
+     HERMES_KANBAN_HOME=/var/lib/pip-v2/hermes \
+     /opt/pip-v2/current/bin/pip-control bootstrap-runtime \
+       --policy /etc/pip-v2/repositories/mdk.json \
+       --hermes-root /var/lib/pip-v2/hermes \
+       --skills-root /opt/pip-v2/current/share/pip-v2/skills \
+       --auth-source /var/lib/pip-v2/hermes/auth.json \
+       --hermes /usr/local/bin/hermes
+   ```
+
+4. Retain the JSON capability/bootstrap output and verify every effective
+   profile binding plus board visibility from the service-owned root.
+5. Configure all three numeric GitHub actor IDs and the actual required MDK CI
+   contexts. Empty required contexts are not acceptable canary policy.
+6. Run non-dispatching GitHub, Hermes, and direct-provider health/recovery
+   probes.
+
+Only after those checks and separate activation authorization:
 
 1. Verify the legacy pipeline will not intake the selected issue.
 2. Select one ordinary, repository-local, non-sensitive issue suitable for the
    planner to validate; do not encode it in policy.
 3. Confirm no other open MDK issue currently satisfies Pip v2 intake policy.
-4. Enable repository intake and dispatch with `max_active_cases: 1`.
-5. Set `github.automation_actor_id` to the verified numeric identity used by
-   the controller credential; activation fails closed while it is absent.
+4. Enable repository intake and dispatch with both active limits set to one.
+5. Start `pip-v2-hermes-gateway.service`, then enable the
+   `pip-v2-controller@mdk.timer` and `pip-v2-direct-worker@mdk.timer` units.
 6. Have a trusted actor apply `pip-ok` to that one issue.
 7. Observe the generic intake path create exactly one case and planner task.
-8. Keep merge mode shadow throughout the trial.
+8. Keep merge mode `shadow` and autonomous merge false throughout the trial.
 
 If another issue becomes eligible, concurrency prevents its activation but the
 operator should remove the unintended authorization and record the discrepancy.

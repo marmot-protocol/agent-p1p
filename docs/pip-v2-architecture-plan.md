@@ -220,9 +220,10 @@ must record the precise assurance available rather than claim more.
 Execution mode is also a policy value and selects an executor, not merely a
 task-body annotation:
 
-- `hermes` roles are projected to the repository board with an existing Hermes
-  profile and Hermes-supported exact provider/model override. Their workspace
-  is encoded as `dir:<absolute-path>` or `worktree:<absolute-path>`.
+- `hermes` roles are projected to the repository board with a managed,
+  service-owned Hermes profile and Hermes-supported exact provider/model
+  override. Their workspace is encoded as `dir:<absolute-path>` or
+  `worktree:<absolute-path>`.
 - `direct` roles are committed to a durable controller queue and consumed by
   the Rust direct-provider service. The board may show a controller-owned
   mirror for operator visibility, but the Hermes gateway cannot claim or run

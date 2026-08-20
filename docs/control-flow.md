@@ -21,6 +21,14 @@ The decision and outbox insertion share one SQLite transaction. Performing the
 external effect does not. A restart may repeat observation or effect delivery,
 so every effect carries a stable idempotency key.
 
+Hermes-native work is projected to the repository board. Direct-provider work
+remains a ledger effect until the controller validates it, records an immutable
+attempt, and atomically publishes a read-only inbox envelope. The separate
+`pip-v2-worker` service executes that envelope without ledger or credential
+access and writes a bounded result envelope. Only a freshly authorized
+controller cycle can validate, record, and ingest that result; the worker never
+advances state itself.
+
 ## Case states
 
 The initial target state vocabulary is:
@@ -90,9 +98,10 @@ directly to building.
 5. Canonicalize the assigned worktree under the controller root, require the
    policy-bound push URL, disable repository hooks/filesystem monitors, clear
    repository credential-helper/proxy/header configuration, force TLS
-   verification, publish only the assigned branch with exact force-with-lease,
-   verify the remote head, then create/update and independently verify the
-   draft PR/head.
+   verification, invoke signed askpass with only the systemd credential-file
+   path, publish only the assigned branch with exact force-with-lease, verify
+   the remote head, then create/update and independently verify the draft
+   PR/head.
 6. If CI is pending, enter `WAITING_CI` without redispatching the builder.
 7. If CI fails because of the change, create a builder remediation event.
 8. If CI is green and acceptable on the exact head, enter `REVIEWING` and

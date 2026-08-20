@@ -91,13 +91,12 @@ Exit gate:
 
 ## Phase 5: Projection and worker execution
 
-**Implementation status:** Partial. Policy now routes Hermes-native roles to
-controller-gated board projections and direct Cursor roles to leased,
-transactionally enqueued `RUN_DIRECT_WORKER` effects; mixed reviewer dispatch
-uses both paths without model substitution. The tested Cursor adapter and
-worktree allocator are not yet connected to a direct-job consumer. Hermes paths
-are typed but still name the configured workspace root rather than a reconciled
-checkout.
+**Implementation status:** Locally complete. Hermes-native roles use
+controller-gated board projections. Direct Cursor roles use durable attempts
+and a controller-owned immutable inbox/result bridge to a separate service
+identity with no ledger access. Exact policy-bound checkouts and case worktrees
+are reconciled before projection, and both paths converge through the same
+bound result-ingestion contract.
 
 Deliverables:
 
@@ -139,8 +138,9 @@ controller-root worktree and policy-bound push URL while repository-controlled
 hooks, filesystem monitors, credential helpers, proxies, and HTTP headers are
 disabled and TLS verification is forced. Guarded merge is implemented behind
 explicit guarded/autonomous policy and is unreachable under MDK shadow policy.
-A service-owned Git credential helper and live credential-scope evidence remain
-separate activation gates.
+The signed `pip-control` binary now acts as Git askpass and passes only the
+systemd credential-file path to Git. Live credential identity and scope evidence
+remains a separate activation gate.
 
 Deliverables:
 
@@ -158,8 +158,9 @@ Exit gate:
 
 ## Phase 7: Packaging and lifecycle
 
-**Implementation status:** The signed cohort, installer, shadow unit, inert
-active-controller templates, and disposable lifecycle are complete locally.
+**Implementation status:** The signed cohort, installer, isolated control and
+direct-worker identities, shadow unit, inert active-runtime templates, and
+disposable lifecycle are complete locally.
 Fresh install, reinstall, upgrade, rollback, and restart all preserve disabled
 active and shadow timers. CI and live-host evidence are separate gates.
 
