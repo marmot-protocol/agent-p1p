@@ -10,15 +10,67 @@ from .kanban_router import RouteError, canonical_route_id, route_once
 
 Runner = Callable[[list[str]], subprocess.CompletedProcess[str]]
 EXPECTED_MODELS = {
-    "builder-grok": {"cursor-grok-4.6-high", "cursor/cursor-grok-4.6-high"},
+    "builder-grok": {
+        "composer-2.5",
+        "cursor/composer-2.5",
+    },
     "reviewer-general": {"gpt-5.6-sol", "openai-codex/gpt-5.6-sol"},
-    "reviewer-secperf": {"kimi-k3-high", "cursor/kimi-k3-high"},
+    "reviewer-secperf": {
+        "claude-opus-4-8-thinking-high",
+        "cursor/claude-opus-4-8-thinking-high",
+    },
     "final-reviewer": {"gpt-5.6-sol", "openai-codex/gpt-5.6-sol"},
 }
 
 
 class GateError(RouteError):
     """A Kanban task result does not satisfy the next deterministic gate."""
+
+
+def _task_execution_binding(task: dict[str, Any]) -> dict[str, str] | None:
+    body = task.get("body")
+    marker = "Authorization binding:\n```json\n"
+    if not isinstance(body, str) or marker not in body:
+        return None
+    encoded = body.split(marker, 1)[1].split("\n```", 1)[0]
+    try:
+        binding = json.loads(encoded)
+    except json.JSONDecodeError as exc:
+        raise GateError("task execution binding is malformed JSON") from exc
+    if not isinstance(binding, dict):
+        raise GateError("task execution binding is not an object")
+    values = {
+        key: binding.get(key)
+        for key in (
+            "execution_mode",
+            "execution_model",
+            "execution_provider",
+            "skills_repository_commit",
+        )
+    }
+    execution_values = (
+        values["execution_mode"],
+        values["execution_model"],
+        values["execution_provider"],
+    )
+    if not any(value is not None for value in execution_values):
+        return None
+    if (
+        values["execution_mode"] not in {"direct-cursor", "hermes"}
+        or not isinstance(values["execution_model"], str)
+        or not values["execution_model"]
+        or not isinstance(values["execution_provider"], str)
+        or not values["execution_provider"]
+    ):
+        raise GateError("task execution binding is incomplete")
+    skills_commit = values["skills_repository_commit"]
+    if skills_commit is not None and (
+        not isinstance(skills_commit, str)
+        or len(skills_commit) != 40
+        or any(char not in "0123456789abcdef" for char in skills_commit)
+    ):
+        raise GateError("task skills repository commit binding is invalid")
+    return {key: value for key, value in values.items() if isinstance(value, str)}
 
 
 def _command_json(command: list[str], runner: Runner) -> Any:
@@ -54,6 +106,18 @@ def _metadata(show: dict[str, Any], contract: str) -> dict[str, Any]:
             raise GateError("task run metadata is malformed JSON") from exc
     if not isinstance(raw, dict):
         raise GateError("task run metadata is not an object")
+    raw = dict(raw)
+    artifacts = raw.pop("artifacts", None)
+    if artifacts is not None and (
+        not isinstance(artifacts, list)
+        or any(not isinstance(path, str) or not path for path in artifacts)
+    ):
+        raise GateError("task run artifact envelope is malformed")
+    worker_session_id = raw.pop("worker_session_id", None)
+    if worker_session_id is not None and (
+        not isinstance(worker_session_id, str) or not worker_session_id
+    ):
+        raise GateError("task run worker-session envelope is malformed")
     try:
         validate_contract(contract, raw)
     except ContractError as exc:
@@ -61,10 +125,66 @@ def _metadata(show: dict[str, Any], contract: str) -> dict[str, Any]:
     task = show["task"]
     if raw.get("task_id") != task.get("id"):
         raise GateError("task result is bound to a different task")
+    expected_profiles = {
+        "builder-grok": "cursor-fixer",
+        "reviewer-general": "reviewer-general",
+        "reviewer-secperf": "cursor-reviewer",
+        "final-reviewer": "final-reviewer",
+    }
+    durable_profile = runs[-1].get("profile")
+    expected_profile = expected_profiles.get(str(raw.get("role")))
+    if (
+        durable_profile is not None
+        and expected_profile is not None
+        and durable_profile != expected_profile
+    ):
+        raise GateError("worker profile conflicts with task result role")
+    execution_binding = _task_execution_binding(task)
+    if (
+        execution_binding is not None
+        and "skills_repository_commit" in execution_binding
+        and raw.get("skills_repository_commit")
+        != execution_binding["skills_repository_commit"]
+    ):
+        raise GateError("task result skills repository commit conflicts with binding")
+    if (
+        execution_binding is not None
+        and execution_binding["execution_mode"] == "hermes"
+        and (
+            task.get("model_override") != execution_binding["execution_model"]
+            or task.get("provider_override") != execution_binding["execution_provider"]
+        )
+    ):
+        raise GateError("Hermes task override conflicts with execution binding")
     durable_model_seen = False
-    for source_name, source in (("task", task), ("run", runs[-1])):
-        observed_model = source.get("model")
-        observed_provider = source.get("provider")
+    if (
+        execution_binding is not None
+        and execution_binding["execution_mode"] == "direct-cursor"
+    ):
+        durable_model_seen = True
+        execution_model = execution_binding["execution_model"]
+        execution_provider = execution_binding["execution_provider"]
+        allowed_actual = {
+            execution_model,
+            f"{execution_provider}/{execution_model}",
+        }
+        if (
+            raw.get("requested_model") not in allowed_actual
+            or raw.get("actual_model") not in allowed_actual
+        ):
+            raise GateError(
+                "task result model conflicts with durable execution binding"
+            )
+        model_sources: tuple[tuple[str, dict[str, Any]], ...] = ()
+    else:
+        model_sources = (("task", task), ("run", runs[-1]))
+    for source_name, source in model_sources:
+        if source_name == "task":
+            observed_model = source.get("model_override", source.get("model"))
+            observed_provider = source.get("provider_override", source.get("provider"))
+        else:
+            observed_model = source.get("model")
+            observed_provider = source.get("provider")
         if observed_model is None and observed_provider is None:
             continue
         durable_model_seen = True
@@ -234,6 +354,8 @@ def _release_gate(
     gate_show: dict[str, Any],
     runner: Runner,
     before_activate: Callable[[], None] | None = None,
+    *,
+    activation_context: dict[str, Any] | None = None,
 ) -> bool:
     if not _initial_gate_is_blocked(gate_show):
         return False
@@ -249,7 +371,9 @@ def _release_gate(
             "complete",
             gate_id,
             "--result",
-            "semantic and live authorization gates passed",
+            json.dumps(activation_context, sort_keys=True)
+            if activation_context is not None
+            else "semantic and live authorization gates passed",
         ]
     )
     if completed.returncode != 0:
@@ -487,8 +611,25 @@ def advance_gates(
         implementation_base_validator(
             remediated["implementation_base_sha"], remediated["head_sha"]
         )
-    for key in ("review-general-2", "review-secperf-2"):
-        if _release_gate(board, shows[f"gate:{key}"], runner, before_activate):
+    for key, role, originating in (
+        ("review-general-2", "reviewer-general", list(general_findings.values())),
+        ("review-secperf-2", "reviewer-secperf", list(secperf_findings.values())),
+    ):
+        activation_context = {
+            "activation": "same-head-re-review",
+            "originating_role": role,
+            "originating_findings": originating,
+            "pr_number": remediated["pr_number"],
+            "reviewed_head_sha": remediated["head_sha"],
+            "finding_resolutions": remediated["finding_resolutions"],
+        }
+        if _release_gate(
+            board,
+            shows[f"gate:{key}"],
+            runner,
+            before_activate,
+            activation_context=activation_context,
+        ):
             advanced.append(key)
 
     second_reviews = (shows["review-general-2"], shows["review-secperf-2"])

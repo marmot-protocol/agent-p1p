@@ -39,7 +39,7 @@ Environment=PATH=@CALLER_HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=PYTHONPATH=/opt/pip-v2/current
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONSAFEPATH=1
-ExecStart=/usr/local/bin/pip-v2-route-consumer consume --route /run/pip-v2/decision-route.json --board pip-mdk
+ExecStart=/usr/local/bin/pip-v2-route-consumer consume --route /run/pip-v2/decision-route.json --board pip-mdk --skills-repository-commit-file /opt/pip-v2/SOURCE.COMMIT
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
@@ -97,6 +97,26 @@ def render_route_consumer_service(caller: str, caller_group: str, home: Path) ->
 
 def render_route_consumer_timer() -> str:
     return ROUTE_CONSUMER_TIMER
+
+
+def _read_source_commit(path: Path) -> str:
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != 0
+            or stat.S_IMODE(metadata.st_mode) & 0o022
+            or metadata.st_size not in {40, 41}
+        ):
+            raise RouteConsumerError("skills repository commit file is untrusted")
+        raw = os.read(descriptor, 42)
+    finally:
+        os.close(descriptor)
+    commit = raw.decode("ascii").strip()
+    if len(commit) != 40 or any(char not in "0123456789abcdef" for char in commit):
+        raise RouteConsumerError("skills repository commit file is malformed")
+    return commit
 
 
 def _read_route(path: Path) -> dict[str, Any]:
@@ -353,6 +373,7 @@ def consume_route(
     live_validator: Callable[[dict[str, Any]], None] = _validate_live_route,
     gate_advancer: Callable[..., dict[str, Any]] = advance_gates,
     terminator: Callable[[int], None] = _terminate_worker,
+    skills_repository_commit: str | None = None,
 ) -> dict[str, Any]:
     action = route.get("action")
     if action == "stop" and route.get("case_id") == "mdk#1240":
@@ -384,12 +405,14 @@ def consume_route(
             terminator,
             preserve_route_id=str(route.get("route_id")),
         )
-    task_ids = route_once(
-        route,
-        board=board,
-        runner=runner,
-        before_activate=checked_live,
-    )
+    route_kwargs: dict[str, Any] = {
+        "board": board,
+        "runner": runner,
+        "before_activate": checked_live,
+    }
+    if skills_repository_commit is not None:
+        route_kwargs["skills_repository_commit"] = skills_repository_commit
+    task_ids = route_once(route, **route_kwargs)
     result: dict[str, Any] = {"status": "routed", "action": action, "tasks": task_ids}
     if action == "dispatch_builder":
         result["gate"] = gate_advancer(
@@ -419,6 +442,7 @@ def main(argv: list[str] | None = None) -> int:
     consume = commands.add_parser("consume")
     consume.add_argument("--route", type=Path, required=True)
     consume.add_argument("--board", default="pip-mdk")
+    consume.add_argument("--skills-repository-commit-file", type=Path, required=True)
     render = commands.add_parser("render-units")
     render.add_argument("--caller", required=True)
     render.add_argument("--caller-group", required=True)
@@ -435,7 +459,13 @@ def main(argv: list[str] | None = None) -> int:
             )
             args.timer_output.write_text(render_route_consumer_timer())
             return 0
-        result = consume_route(_read_route(args.route), board=args.board)
+        result = consume_route(
+            _read_route(args.route),
+            board=args.board,
+            skills_repository_commit=_read_source_commit(
+                args.skills_repository_commit_file
+            ),
+        )
         print(json.dumps(result, sort_keys=True))
         return 0
     except (OSError, RouteError, subprocess.SubprocessError) as exc:

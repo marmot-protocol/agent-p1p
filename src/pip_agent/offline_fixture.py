@@ -76,7 +76,7 @@ def _planner() -> dict[str, Any]:
 
 def _builder() -> dict[str, Any]:
     return {
-        **_common("build-r1", "builder-grok", "cursor/cursor-grok-4.6-high"),
+        **_common("build-r1", "builder-grok", "cursor/composer-2.5"),
         "outcome": "REVIEW_READY",
         "plan_version": 1,
         "build_round": 1,
@@ -145,7 +145,7 @@ def run_offline_fixture(database: Path, fault: Fault | None = None) -> dict[str,
         )
 
         general = _review("reviewer-general", "openai-codex/gpt-5.6-sol")
-        secperf = _review("reviewer-secperf", "cursor/kimi-k3-high")
+        secperf = _review("reviewer-secperf", "cursor/claude-opus-4-8-thinking-high")
         if fault == "stale-head":
             secperf["reviewed_head_sha"] = "d" * 40
         for review in (general, secperf):

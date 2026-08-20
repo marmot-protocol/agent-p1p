@@ -14,17 +14,17 @@ metadata:
 
 ## Overview
 
-The Hermes `cursor-reviewer` profile is the v1-style task orchestrator. It delegates the substantive read-only review to one fresh direct Cursor Agent invocation using `kimi-k3-high`. It must be independent of the builder and general reviewer.
+The Hermes `cursor-reviewer` profile is the v1-style task orchestrator. It delegates the substantive read-only review to one fresh direct Cursor Agent invocation using `claude-opus-4-8-thinking-high`. It must be independent of the builder and general reviewer.
 
 ## Workflow
 
 1. Resolve the parent draft PR through GitHub. Record its exact head SHA and verify CI is green on that head before review.
-2. Verify `kimi-k3-high` appears in `agent --list-models`.
+2. Verify `claude-opus-4-8-thinking-high` appears in `agent --list-models`.
 3. Clone or fetch the repository in the scratch workspace and check out the exact PR head without modifying or pushing it.
 4. Invoke Cursor once in a fresh read-only session:
    ```sh
    agent -p --mode plan --output-format json \
-     --model kimi-k3-high \
+     --model claude-opus-4-8-thinking-high \
      --workspace <checkout> \
      <complete-review-prompt>
    ```

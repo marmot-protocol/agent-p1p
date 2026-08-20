@@ -36,6 +36,7 @@ def test_passive_route_does_not_touch_kanban() -> None:
 def test_router_unit_has_no_custom_ledger_or_worktree_mutation() -> None:
     unit = render_route_consumer_service("jeff", "jeff", Path("/home/jeff"))
     assert "--board pip-mdk" in unit
+    assert "--skills-repository-commit-file /opt/pip-v2/SOURCE.COMMIT" in unit
     assert "ledger" not in unit
     assert "/code/worktrees" not in unit
     assert "ReadWritePaths=/home/jeff/.hermes" in unit

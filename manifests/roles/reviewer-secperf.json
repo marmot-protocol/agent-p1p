@@ -2,7 +2,7 @@
   "name": "reviewer-secperf",
   "execution": "cursor",
   "provider": "cursor",
-  "model": "kimi-k3-high",
+  "model": "claude-opus-4-8-thinking-high",
   "reasoning": "high",
   "outer_reasoning_model": null,
   "fresh_session": true,

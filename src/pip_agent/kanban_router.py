@@ -19,6 +19,15 @@ REPOSITORY = "marmot-protocol/mdk"
 ISSUE_NUMBER = 1240
 ISSUE_URL = "https://github.com/marmot-protocol/mdk/issues/1240"
 ACTIVE_ACTIONS = {"dispatch_builder", "replan"}
+DAG_REVISION = 3
+
+
+def _task_idempotency_key(route_id: str, key: str) -> str:
+    return f"pip-v2:{route_id}:dag-v{DAG_REVISION}:{key}"
+
+
+def _gate_idempotency_key(route_id: str, key: str) -> str:
+    return f"pip-v2:{route_id}:gate:dag-v{DAG_REVISION}:{key}"
 
 
 @dataclass(frozen=True)
@@ -60,7 +69,15 @@ def validate_route(payload: Mapping[str, Any]) -> str:
     return route_id
 
 
-def _task_body(route: Mapping[str, Any], phase: str, instructions: str) -> str:
+def _task_body(
+    route: Mapping[str, Any],
+    phase: str,
+    instructions: str,
+    *,
+    execution_mode: str | None = None,
+    execution_model: str | None = None,
+    execution_provider: str | None = None,
+) -> str:
     evidence = {
         key: route[key]
         for key in (
@@ -84,9 +101,21 @@ def _task_body(route: Mapping[str, Any], phase: str, instructions: str) -> str:
         "planner_task_id",
         "authorized_scope",
         "narrowed_scope",
+        "skills_repository_commit",
     ):
         if key in route:
             evidence[key] = route[key]
+    execution_values = (execution_mode, execution_model, execution_provider)
+    if any(value is not None for value in execution_values):
+        if not all(isinstance(value, str) and value for value in execution_values):
+            raise RouteError("task execution binding is incomplete")
+        evidence.update(
+            {
+                "execution_mode": execution_mode,
+                "execution_model": execution_model,
+                "execution_provider": execution_provider,
+            }
+        )
     return (
         f"# Pip v2 {phase}\n\n"
         f"Authorization binding:\n```json\n{json.dumps(evidence, indent=2, sort_keys=True)}\n```\n\n"
@@ -99,8 +128,16 @@ def _task_body(route: Mapping[str, Any], phase: str, instructions: str) -> str:
     )
 
 
-def builder_dag(route: Mapping[str, Any]) -> list[TaskSpec]:
+def builder_dag(
+    route: Mapping[str, Any], *, skills_repository_commit: str | None = None
+) -> list[TaskSpec]:
     validate_route(route)
+    if skills_repository_commit is not None:
+        if len(skills_repository_commit) != 40 or any(
+            char not in "0123456789abcdef" for char in skills_repository_commit
+        ):
+            raise RouteError("skills repository commit is invalid")
+        route = {**route, "skills_repository_commit": skills_repository_commit}
     if route.get("action") != "dispatch_builder":
         raise RouteError("builder DAG requires a builder route")
     return [
@@ -110,12 +147,18 @@ def builder_dag(route: Mapping[str, Any]) -> list[TaskSpec]:
             body=_task_body(
                 route,
                 "builder",
-                "Use direct Cursor `cursor-grok-4.6-high` through the builder-grok workflow. "
+                "Use direct Cursor `composer-2.5` through the builder-grok workflow. "
                 "Start from the current default-branch head. Treat planned_base_sha as planning "
                 "context, not a checkout lock; adapt the plan to ordinary upstream movement. "
                 "Return to planning only with a concrete incompatibility that makes the planned "
                 "scope unsafe or unimplementable. Open a draft PR and do not complete until CI is "
-                "green on its exact head.",
+                "green on its exact head. Do not reuse or update PR #1515: it had a failed CI "
+                "attempt and is permanently ineligible under the red-CI-ever rule. Create a new "
+                "branch and new draft PR; leave #1515 untouched for the control plane to close "
+                "only after the replacement is independently validated.",
+                execution_mode="direct-cursor",
+                execution_model="composer-2.5",
+                execution_provider="cursor",
             ),
             assignee="cursor-fixer",
             parents=(),
@@ -126,7 +169,12 @@ def builder_dag(route: Mapping[str, Any]) -> list[TaskSpec]:
             key="review-general-1",
             title="Pip v2 correctness review mdk#1240 round 1",
             body=_task_body(
-                route, "general review", "Review the parent PR exact head read-only."
+                route,
+                "general review",
+                "Review the parent PR exact head read-only.",
+                execution_mode="hermes",
+                execution_model="gpt-5.6-sol",
+                execution_provider="openai-codex",
             ),
             assignee="reviewer-general",
             parents=("build",),
@@ -141,8 +189,11 @@ def builder_dag(route: Mapping[str, Any]) -> list[TaskSpec]:
             body=_task_body(
                 route,
                 "security review",
-                "Use direct Cursor `kimi-k3-high` through the reviewer-secperf workflow. "
-                "Review the parent PR exact head read-only.",
+                "Use direct Cursor `claude-opus-4-8-thinking-high` through the "
+                "reviewer-secperf workflow. Review the parent PR exact head read-only.",
+                execution_mode="direct-cursor",
+                execution_model="claude-opus-4-8-thinking-high",
+                execution_provider="cursor",
             ),
             assignee="cursor-reviewer",
             parents=("build",),
@@ -155,9 +206,12 @@ def builder_dag(route: Mapping[str, Any]) -> list[TaskSpec]:
             body=_task_body(
                 route,
                 "review remediation",
-                "Read both review results. Use direct Cursor `cursor-grok-4.6-high` to address "
+                "Read both review results. Use direct Cursor `composer-2.5` to address "
                 "every blocking finding on the existing Pip branch. If no change is needed, "
                 "record that fact. Require green CI on the resulting exact head.",
+                execution_mode="direct-cursor",
+                execution_model="composer-2.5",
+                execution_provider="cursor",
             ),
             assignee="cursor-fixer",
             parents=("build", "review-general-1", "review-secperf-1"),
@@ -171,6 +225,9 @@ def builder_dag(route: Mapping[str, Any]) -> list[TaskSpec]:
                 route,
                 "general re-review",
                 "Independently re-review the current exact PR head and confirm every prior finding.",
+                execution_mode="hermes",
+                execution_model="gpt-5.6-sol",
+                execution_provider="openai-codex",
             ),
             assignee="reviewer-general",
             parents=("remediate",),
@@ -185,8 +242,11 @@ def builder_dag(route: Mapping[str, Any]) -> list[TaskSpec]:
             body=_task_body(
                 route,
                 "security re-review",
-                "Use direct Cursor `kimi-k3-high`. Independently review the current exact PR "
-                "head and confirm every prior finding.",
+                "Use direct Cursor `claude-opus-4-8-thinking-high`. Independently review "
+                "the current exact PR head and confirm every prior finding.",
+                execution_mode="direct-cursor",
+                execution_model="claude-opus-4-8-thinking-high",
+                execution_provider="cursor",
             ),
             assignee="cursor-reviewer",
             parents=("remediate",),
@@ -202,6 +262,9 @@ def builder_dag(route: Mapping[str, Any]) -> list[TaskSpec]:
                 "Verify both required reviews approve the same current head, CI is green on that "
                 "head, and no blocking finding remains. HUMAN MERGE ONLY. Return durable final "
                 "metadata to the deterministic gate; do not notify anyone and never merge.",
+                execution_mode="hermes",
+                execution_model="gpt-5.6-sol",
+                execution_provider="openai-codex",
             ),
             assignee="final-reviewer",
             parents=("review-general-2", "review-secperf-2"),
@@ -278,7 +341,7 @@ def _activation_gate_command(
             sort_keys=True,
         ),
         "--idempotency-key",
-        f"pip-v2:{route_id}:gate:{key}",
+        _gate_idempotency_key(route_id, key),
         "--created-by",
         "pip-v2-router",
         "--parent",
@@ -325,6 +388,7 @@ def route_once(
     runner: Callable[[list[str]], subprocess.CompletedProcess[str]] = _default_runner,
     board: str = "pip-mdk",
     before_activate: Callable[[], None] | None = None,
+    skills_repository_commit: str | None = None,
 ) -> dict[str, str]:
     route_id = validate_route(route)
     sentinel_id = _gate_sentinel(board, route_id, runner)
@@ -409,7 +473,9 @@ def route_once(
     created: dict[str, str] = {}
     statuses: dict[str, str | None] = {}
     gate_statuses: dict[str, str | None] = {}
-    for priority, spec in enumerate(builder_dag(route), start=100):
+    for priority, spec in enumerate(
+        builder_dag(route, skills_repository_commit=skills_repository_commit), start=100
+    ):
         gate_key = f"gate:{spec.key}"
         created[gate_key], gate_statuses[spec.key] = _created_task_info(
             runner(_activation_gate_command(board, route_id, spec.key, sentinel_id))
@@ -430,7 +496,7 @@ def route_once(
             "--parent",
             created[gate_key],
             "--idempotency-key",
-            f"pip-v2:{route_id}:{spec.key}",
+            _task_idempotency_key(route_id, spec.key),
             "--created-by",
             "pip-v2-router",
             "--max-runtime",

@@ -152,9 +152,9 @@ It does not interpret code, override model verdicts, summarize away evidence, ch
 | Profile | Execution path | Model | Reasoning |
 |---|---|---|---|
 | `planner` | Fresh Hermes session | OpenAI/Codex GPT-5.6-Sol | `xhigh` |
-| `builder-grok` | Direct Cursor worker adapter | `cursor-grok-4.6-high` | High |
+| `builder-grok` | Direct Cursor worker adapter | `composer-2.5` | High |
 | `reviewer-general` | Fresh Hermes session | OpenAI/Codex GPT-5.6-Sol | High |
-| `reviewer-secperf` | Direct Cursor worker adapter | `kimi-k3-high` | High |
+| `reviewer-secperf` | Direct Cursor worker adapter | `claude-opus-4-8-thinking-high` | High |
 | `final-reviewer` | Fresh Hermes session | OpenAI/Codex GPT-5.6-Sol | `xhigh` |
 
 The Cursor model identifiers above were verified as available on the current Cursor Ultra account during design.
@@ -604,8 +604,8 @@ Trusted actors must be centrally configured and tested. Unknown actors fail clos
 
 ```text
 OpenAI/Codex → GPT-5.6-Sol
-Cursor → cursor-grok-4.6-high
-Cursor → kimi-k3-high
+Cursor → composer-2.5
+Cursor → claude-opus-4-8-thinking-high
 ```
 
 No silent fallback is permitted. Every run records requested and actual model. A mismatch blocks the result.
@@ -640,8 +640,8 @@ Record when available:
 
 ```yaml
 provider: cursor
-requested_model: cursor-grok-4.6-high
-actual_model: cursor-grok-4.6-high
+requested_model: composer-2.5
+actual_model: composer-2.5
 started_at: ...
 completed_at: ...
 duration_seconds: ...
@@ -782,9 +782,9 @@ MDK was selected because it has a large actionable issue backlog and is highly v
 ### Workstream C: Role profiles and adapters
 
 - Create `planner` at GPT-5.6-Sol `xhigh`.
-- Create direct Cursor `builder-grok` adapter using `cursor-grok-4.6-high`.
+- Create direct Cursor `builder-grok` adapter using `composer-2.5`.
 - Create `reviewer-general` at GPT-5.6-Sol High.
-- Create direct Cursor `reviewer-secperf` adapter using `kimi-k3-high`.
+- Create direct Cursor `reviewer-secperf` adapter using `claude-opus-4-8-thinking-high`.
 - Create `final-reviewer` at GPT-5.6-Sol `xhigh`.
 - Enforce fresh session per run.
 - Enforce requested/actual model match.

@@ -2,7 +2,7 @@
   "name": "builder-grok",
   "execution": "cursor",
   "provider": "cursor",
-  "model": "cursor-grok-4.6-high",
+  "model": "composer-2.5",
   "reasoning": "high",
   "outer_reasoning_model": null,
   "fresh_session": true,

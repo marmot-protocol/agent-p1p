@@ -105,6 +105,58 @@ def test_builder_route_creates_v1_style_review_dag() -> None:
     assert "HUMAN MERGE ONLY" in by_key["final-review"].body
     assert "do not notify anyone" in by_key["final-review"].body
 
+    bindings = {}
+    for key, spec in by_key.items():
+        encoded = spec.body.split("Authorization binding:\n```json\n", 1)[1].split(
+            "\n```", 1
+        )[0]
+        bindings[key] = json.loads(encoded)
+    assert (
+        bindings["build"]
+        | {
+            "execution_mode": "direct-cursor",
+            "execution_model": "composer-2.5",
+            "execution_provider": "cursor",
+        }
+        == bindings["build"]
+    )
+    assert bindings["remediate"]["execution_model"] == "composer-2.5"
+    assert bindings["review-secperf-1"]["execution_model"] == (
+        "claude-opus-4-8-thinking-high"
+    )
+    assert bindings["review-secperf-2"]["execution_model"] == (
+        "claude-opus-4-8-thinking-high"
+    )
+    assert bindings["review-general-1"]["execution_mode"] == "hermes"
+    assert bindings["final-review"]["execution_provider"] == "openai-codex"
+
+
+def test_builder_dag_binds_exact_installed_skills_commit() -> None:
+    specs = kanban_router.builder_dag(
+        _active_route(), skills_repository_commit="a" * 40
+    )
+    for spec in specs:
+        encoded = spec.body.split("Authorization binding:\n```json\n", 1)[1].split(
+            "\n```", 1
+        )[0]
+        assert json.loads(encoded)["skills_repository_commit"] == "a" * 40
+
+
+def test_dag_upgrade_revisions_builder_after_historical_red_ci() -> None:
+    route_id = str(_active_route()["route_id"])
+    assert kanban_router._task_idempotency_key(route_id, "build") == (
+        f"pip-v2:{route_id}:dag-v3:build"
+    )
+    assert kanban_router._task_idempotency_key(route_id, "review-general-1") == (
+        f"pip-v2:{route_id}:dag-v3:review-general-1"
+    )
+    assert kanban_router._gate_idempotency_key(route_id, "build") == (
+        f"pip-v2:{route_id}:gate:dag-v3:build"
+    )
+    assert kanban_router._gate_idempotency_key(route_id, "review-general-1") == (
+        f"pip-v2:{route_id}:gate:dag-v3:review-general-1"
+    )
+
 
 def test_builder_dag_uses_kanban_idempotency_and_real_parent_ids() -> None:
     commands: list[list[str]] = []
@@ -274,7 +326,7 @@ def test_partial_dag_failure_never_activates_builder() -> None:
         route_once(_active_route(), runner=runner)
 
     assert commands[0][commands[0].index("--idempotency-key") + 1].endswith(
-        ":gate:build"
+        ":gate:dag-v3:build"
     )
     assert not any("complete" in command for command in commands)
 

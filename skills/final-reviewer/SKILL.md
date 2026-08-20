@@ -22,7 +22,7 @@ Holistically adjudicate the complete case using GPT-5.6-Sol at `xhigh` reasoning
 2. Inspect all plan versions and the active authorized plan.
 3. Inspect the final diff and every build/remediation round.
 4. Inspect both review histories, CodeRabbit findings when present, and resolution evidence.
-5. Verify the join bundle binds mandatory approvals and green CI to the current exact head.
+5. Verify the join bundle binds mandatory approvals and green CI to the current exact head. Independently query all check-run attempts with `filter=all`; any historical red attempt permanently blocks that PR. Permit a skipped check only when it is the exact conditional `Publish wn-agent release` job.
 6. Decide whether the work solves the right root problem with sufficient evidence.
 7. Return `HUMAN_REVIEW_REQUIRED`, `RETURN_TO_BUILD`, `RETURN_TO_REVIEW`, `RETURN_TO_PLANNING`, `WAIT_FOR_ISSUE_CREATOR`, `BLOCKED`, `ABANDON`, or `BLOCKED_UNEXPECTED_MODEL`.
 

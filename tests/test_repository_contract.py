@@ -44,7 +44,7 @@ def review_result(role: str, head: str, *, outcome: str = "APPROVE") -> dict:
     model = (
         "openai-codex/gpt-5.6-sol"
         if role == "reviewer-general"
-        else "cursor/kimi-k3-high"
+        else "cursor/claude-opus-4-8-thinking-high"
     )
     return {
         "schema_version": 1,
@@ -79,8 +79,8 @@ def builder_result(head: str, *, resolutions: list[dict] | None = None) -> dict:
         "task_id": "builder-grok-r2",
         "role": "builder-grok",
         "outcome": "REVIEW_READY",
-        "requested_model": "cursor/cursor-grok-4.6-high",
-        "actual_model": "cursor/cursor-grok-4.6-high",
+        "requested_model": "cursor/composer-2.5",
+        "actual_model": "cursor/composer-2.5",
         "skills_repository_commit": "a" * 40,
         "started_at": "2026-08-15T12:00:00Z",
         "completed_at": "2026-08-15T12:10:00Z",
@@ -181,9 +181,9 @@ def test_mdk_is_configured_as_shadow_merge_pilot() -> None:
     assert config["legacy_existing_work_stays_on_legacy_board"] is True
     assert config["models"] == {
         "planner": "openai-codex/gpt-5.6-sol",
-        "builder-grok": "cursor/cursor-grok-4.6-high",
+        "builder-grok": "cursor/composer-2.5",
         "reviewer-general": "openai-codex/gpt-5.6-sol",
-        "reviewer-secperf": "cursor/kimi-k3-high",
+        "reviewer-secperf": "cursor/claude-opus-4-8-thinking-high",
         "final-reviewer": "openai-codex/gpt-5.6-sol",
     }
 
@@ -239,7 +239,7 @@ def test_validate_contract_rejects_model_substitution() -> None:
         "task_id": "reviewer-secperf-r1",
         "role": "reviewer-secperf",
         "outcome": "APPROVE",
-        "requested_model": "cursor/kimi-k3-high",
+        "requested_model": "cursor/claude-opus-4-8-thinking-high",
         "actual_model": "cursor/auto",
         "skills_repository_commit": "a" * 40,
         "started_at": "2026-08-15T12:00:00Z",
@@ -390,8 +390,8 @@ def test_builder_contract_rejects_green_ci_for_stale_head() -> None:
         "task_id": "build-r1",
         "role": "builder-grok",
         "outcome": "REVIEW_READY",
-        "requested_model": "cursor/cursor-grok-4.6-high",
-        "actual_model": "cursor/cursor-grok-4.6-high",
+        "requested_model": "cursor/composer-2.5",
+        "actual_model": "cursor/composer-2.5",
         "skills_repository_commit": "a" * 40,
         "started_at": "2026-08-15T12:00:00Z",
         "completed_at": "2026-08-15T12:10:00Z",
@@ -420,8 +420,8 @@ def test_builder_contract_rejects_review_ready_with_red_ci() -> None:
         "task_id": "build-r1",
         "role": "builder-grok",
         "outcome": "REVIEW_READY",
-        "requested_model": "cursor/cursor-grok-4.6-high",
-        "actual_model": "cursor/cursor-grok-4.6-high",
+        "requested_model": "cursor/composer-2.5",
+        "actual_model": "cursor/composer-2.5",
         "skills_repository_commit": "a" * 40,
         "started_at": "2026-08-15T12:00:00Z",
         "completed_at": "2026-08-15T12:10:00Z",
@@ -450,8 +450,8 @@ def test_common_result_rejects_role_outcome_mismatch() -> None:
         "task_id": "build-r1",
         "role": "builder-grok",
         "outcome": "ARBITRARY",
-        "requested_model": "cursor/cursor-grok-4.6-high",
-        "actual_model": "cursor/cursor-grok-4.6-high",
+        "requested_model": "cursor/composer-2.5",
+        "actual_model": "cursor/composer-2.5",
         "skills_repository_commit": "a" * 40,
         "started_at": "2026-08-15T12:00:00Z",
         "completed_at": "2026-08-15T12:10:00Z",

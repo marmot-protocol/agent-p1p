@@ -52,6 +52,7 @@ def _runner(
     *,
     head: str = HEAD,
     conclusion: str = "success",
+    check_name: str = "Rust tests",
     intake_label: bool = True,
     review_decision: str | None = None,
     reviews: list[dict[str, object]] | None = None,
@@ -79,6 +80,10 @@ def _runner(
                             "headRefOid": head,
                             "reviewDecision": review_decision,
                             "author": {"login": "agent-p1p"},
+                            "commits": {
+                                "nodes": [{"commit": {"oid": head}}],
+                                "pageInfo": {"hasNextPage": False},
+                            },
                             "reviewThreads": {
                                 "nodes": [{"isResolved": True}],
                                 "pageInfo": {"hasNextPage": False},
@@ -102,6 +107,7 @@ def _runner(
                 "total_count": 1,
                 "check_runs": [
                     {
+                        "name": check_name,
                         "head_sha": HEAD,
                         "status": "completed",
                         "conclusion": conclusion,
@@ -141,7 +147,7 @@ def test_live_final_evidence_rejects_changed_head() -> None:
 
 
 def test_live_final_evidence_rejects_any_non_green_check_attempt() -> None:
-    with pytest.raises(GitHubGateError, match="non-green"):
+    with pytest.raises(GitHubGateError, match="red CI|non-green"):
         fetch_live_final_evidence(42, HEAD, runner=_runner(conclusion="failure"))
 
 
@@ -242,6 +248,45 @@ def test_live_final_evidence_rejects_withdrawn_issue_intake() -> None:
 def test_live_final_evidence_rejects_non_success_check(conclusion: str) -> None:
     with pytest.raises(GitHubGateError, match="non-green"):
         fetch_live_final_evidence(42, HEAD, runner=_runner(conclusion=conclusion))
+
+
+def test_live_final_evidence_accepts_exact_expected_skipped_release_job() -> None:
+    evidence = fetch_live_final_evidence(
+        42,
+        HEAD,
+        runner=_runner(conclusion="skipped", check_name="Publish wn-agent release"),
+    )
+    assert evidence["ci"]["required_checks_green"] is True
+
+
+def test_live_final_evidence_rejects_red_ci_on_earlier_pr_commit() -> None:
+    old = "b" * 40
+    base = _runner()
+
+    def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+        completed = base(command)
+        payload = json.loads(completed.stdout)
+        if "graphql" in command:
+            payload["data"]["repository"]["pullRequest"]["commits"]["nodes"] = [
+                {"commit": {"oid": old}},
+                {"commit": {"oid": HEAD}},
+            ]
+        elif f"commits/{old}/check-runs" in " ".join(command):
+            payload = {
+                "total_count": 1,
+                "check_runs": [
+                    {
+                        "name": "Rust tests",
+                        "head_sha": old,
+                        "status": "completed",
+                        "conclusion": "failure",
+                    }
+                ],
+            }
+        return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+    with pytest.raises(GitHubGateError, match="earlier point"):
+        fetch_live_final_evidence(42, HEAD, runner=runner)
 
 
 def test_live_final_evidence_rejects_effective_changes_requested() -> None:

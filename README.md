@@ -11,9 +11,9 @@ Runtime foundation and an inert MDK shadow pilot. The empty `pip-mdk` board is a
 | Role | Runtime | Model |
 |---|---|---|
 | `planner` | fresh Hermes profile | `openai-codex/gpt-5.6-sol`, `xhigh` |
-| `builder-grok` | direct Cursor adapter | `cursor-grok-4.6-high` |
+| `builder-grok` | direct Cursor adapter | `composer-2.5` |
 | `reviewer-general` | fresh Hermes profile | `openai-codex/gpt-5.6-sol`, `high` |
-| `reviewer-secperf` | direct Cursor adapter | `kimi-k3-high` |
+| `reviewer-secperf` | direct Cursor adapter | `claude-opus-4-8-thinking-high` |
 | `final-reviewer` | fresh Hermes profile | `openai-codex/gpt-5.6-sol`, `xhigh` |
 
 The two Cursor roles use the existing v1 `cursor-fixer` and `cursor-reviewer` Hermes profiles as orchestration shells. Each shell launches one fresh direct Cursor session with the exact requested model. This is cooperative same-UID orchestration, not hostile-worker containment.
@@ -136,6 +136,7 @@ sudo bash -c '
   <verified-installer-sha256> \
   --wheel /home/jeff/code/agent-p1p/dist/agent_p1p-0.1.0-py3-none-any.whl \
   --sha256 <verified-wheel-sha256> \
+  --source-commit <reviewed-40-character-git-commit> \
   --caller jeff \
   --issue 1240
 ```

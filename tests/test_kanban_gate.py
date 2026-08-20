@@ -42,7 +42,32 @@ def advance_gates(*args: Any, **kwargs: Any) -> dict[str, Any]:
                     else raw_metadata
                 )
                 if isinstance(metadata, dict):
-                    payload["task"].setdefault("model", metadata.get("actual_model"))
+                    metadata = copy.deepcopy(metadata)
+                    metadata.setdefault("artifacts", ["/tmp/result.json"])
+                    metadata.setdefault("worker_session_id", "session-trusted")
+                    payload["runs"][-1]["metadata"] = metadata
+                    task = payload["task"]
+                    actual = metadata.get("actual_model")
+                    if isinstance(actual, str) and actual:
+                        if "/" in actual:
+                            provider, model = actual.split("/", 1)
+                        else:
+                            provider, model = "openai-codex", actual
+                        mode = "direct-cursor" if provider == "cursor" else "hermes"
+                        binding = {
+                            "execution_mode": mode,
+                            "execution_model": model,
+                            "execution_provider": provider,
+                        }
+                        task.setdefault(
+                            "body",
+                            "Authorization binding:\n```json\n"
+                            + json.dumps(binding, sort_keys=True)
+                            + "\n```",
+                        )
+                        if mode == "hermes":
+                            task.setdefault("model_override", model)
+                            task.setdefault("provider_override", provider)
                     return subprocess.CompletedProcess(
                         command,
                         completed.returncode,
@@ -76,7 +101,7 @@ def _results() -> dict[str, dict[str, object]]:
     remediation["build_round"] = 2
     general1 = _review("reviewer-general", "openai-codex/gpt-5.6-sol")
     general1["task_id"] = "t-general-1"
-    secperf1 = _review("reviewer-secperf", "cursor/kimi-k3-high")
+    secperf1 = _review("reviewer-secperf", "cursor/claude-opus-4-8-thinking-high")
     secperf1["task_id"] = "t-secperf-1"
     general2 = copy.deepcopy(general1)
     general2["task_id"] = "t-general-2"
@@ -207,6 +232,23 @@ def test_semantic_gate_rejects_mismatched_second_review_head() -> None:
         advance_gates(_route(), _task_ids(), board="pip-mdk", runner=runner)
 
 
+def test_expected_model_policy_accepts_current_cursor_lanes() -> None:
+    kanban_gate._assert_expected_model(
+        {
+            "requested_model": "cursor/composer-2.5",
+            "actual_model": "cursor/composer-2.5",
+        },
+        "builder-grok",
+    )
+    kanban_gate._assert_expected_model(
+        {
+            "requested_model": "cursor/claude-opus-4-8-thinking-high",
+            "actual_model": "cursor/claude-opus-4-8-thinking-high",
+        },
+        "reviewer-secperf",
+    )
+
+
 def test_semantic_gate_rejects_self_consistent_but_unauthorized_model() -> None:
     results = _results()
     results["build"]["requested_model"] = "cursor/auto"
@@ -232,6 +274,134 @@ def test_semantic_gate_rejects_self_consistent_but_unauthorized_model() -> None:
 
     with pytest.raises(GateError, match="unauthorized model"):
         advance_gates(_route(), _task_ids(), board="pip-mdk", runner=runner)
+
+
+def test_metadata_accepts_trusted_hermes_completion_envelope() -> None:
+    result = _results()["build"]
+    expected = copy.deepcopy(result)
+    result["artifacts"] = ["/tmp/builder-result.json"]
+    result["worker_session_id"] = "session-trusted"
+    show = {
+        "task": {
+            "id": "t-build",
+            "status": "done",
+            "model": "cursor/composer-2.5",
+        },
+        "runs": [{"metadata": result}],
+    }
+
+    assert kanban_gate._metadata(show, "builder-result") == expected
+
+
+def test_metadata_accepts_native_task_model_override_fields() -> None:
+    result = _results()["review-general-1"]
+    show = {
+        "task": {
+            "id": "t-general-1",
+            "status": "done",
+            "model_override": "gpt-5.6-sol",
+            "provider_override": "openai-codex",
+        },
+        "runs": [{"metadata": result}],
+    }
+
+    assert kanban_gate._metadata(show, "review-result") == result
+
+
+def test_metadata_accepts_direct_cursor_model_bound_in_task_body() -> None:
+    result = _results()["build"]
+    result["requested_model"] = "cursor/composer-2.5"
+    result["actual_model"] = "cursor/composer-2.5"
+    binding = {
+        "execution_mode": "direct-cursor",
+        "execution_model": "composer-2.5",
+        "execution_provider": "cursor",
+    }
+    show = {
+        "task": {
+            "id": "t-build",
+            "status": "done",
+            "body": "Authorization binding:\n```json\n"
+            + json.dumps(binding, sort_keys=True)
+            + "\n```",
+        },
+        "runs": [{"metadata": result}],
+    }
+
+    assert kanban_gate._metadata(show, "builder-result") == result
+
+
+def test_metadata_rejects_skills_commit_conflicting_with_task_binding() -> None:
+    result = _results()["build"]
+    binding = {
+        "execution_mode": "direct-cursor",
+        "execution_model": "composer-2.5",
+        "execution_provider": "cursor",
+        "skills_repository_commit": "c" * 40,
+    }
+    show = {
+        "task": {
+            "id": "t-build",
+            "status": "done",
+            "body": "Authorization binding:\n```json\n"
+            + json.dumps(binding, sort_keys=True)
+            + "\n```",
+        },
+        "runs": [{"metadata": result}],
+    }
+
+    with pytest.raises(GateError, match="skills repository commit"):
+        kanban_gate._metadata(show, "builder-result")
+
+
+def test_metadata_rejects_worker_profile_conflicting_with_result_role() -> None:
+    result = _results()["build"]
+    result["artifacts"] = ["/tmp/result.json"]
+    result["worker_session_id"] = "session-trusted"
+    show = {
+        "task": {
+            "id": "t-build",
+            "status": "done",
+            "body": "Authorization binding:\n```json\n"
+            + json.dumps(
+                {
+                    "execution_mode": "direct-cursor",
+                    "execution_model": "composer-2.5",
+                    "execution_provider": "cursor",
+                },
+                sort_keys=True,
+            )
+            + "\n```",
+        },
+        "runs": [{"metadata": result, "profile": "reviewer-general"}],
+    }
+
+    with pytest.raises(GateError, match="worker profile conflicts"):
+        kanban_gate._metadata(show, "builder-result")
+
+
+def test_metadata_rejects_hermes_override_conflicting_with_task_binding() -> None:
+    result = _results()["review-general-1"]
+    binding = {
+        "execution_mode": "hermes",
+        "execution_model": "gpt-5.6-sol",
+        "execution_provider": "openai-codex",
+    }
+    show = {
+        "task": {
+            "id": "t-general-1",
+            "status": "done",
+            "body": "Authorization binding:\n```json\n"
+            + json.dumps(binding, sort_keys=True)
+            + "\n```",
+            "model_override": "gpt-5.6-sol",
+            "provider_override": "other-provider",
+        },
+        "runs": [{"metadata": result}],
+    }
+
+    with pytest.raises(GateError, match="execution binding"):
+        kanban_gate._metadata(show, "review-result")
 
 
 def test_metadata_rejects_worker_model_conflicting_with_durable_run() -> None:
@@ -352,12 +522,27 @@ def test_semantic_gate_accepts_exact_resolution_and_originating_confirmation() -
             "evidence": ["fixture regression passed"],
         }
     ]
+    commands: list[list[str]] = []
 
     def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
         if "show" not in command:
             return subprocess.CompletedProcess(command, 0, "", "")
         task_id = command[command.index("show") + 1]
         key = next(key for key, value in _task_ids().items() if value == task_id)
+        if key == "gate:review-general-2":
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "task": {"id": task_id, "status": "blocked"},
+                        "runs": [],
+                        "events": [{"kind": "created"}],
+                    }
+                ),
+                "",
+            )
         gate_response = _gate_response(command, key, task_id)
         if gate_response is not None:
             return gate_response
@@ -373,7 +558,17 @@ def test_semantic_gate_accepts_exact_resolution_and_originating_confirmation() -
 
     result = advance_gates(_route(), _task_ids(), board="pip-mdk", runner=runner)
 
-    assert result["advanced"] == ["final-review"]
+    assert result["advanced"] == ["review-general-2", "final-review"]
+    general_gate_completion = next(
+        command
+        for command in commands
+        if "complete" in command and "t-gate-review-general-2" in command
+    )
+    activation = json.loads(
+        general_gate_completion[general_gate_completion.index("--result") + 1]
+    )
+    assert activation["reviewed_head_sha"] == head
+    assert activation["originating_findings"] == [finding]
 
 
 def test_semantic_gate_validates_final_result_before_human_disposition() -> None:

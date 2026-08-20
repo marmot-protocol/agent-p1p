@@ -28,9 +28,9 @@
   "branch_prefix": "pip/v2/",
   "models": {
     "planner": "openai-codex/gpt-5.6-sol",
-    "builder-grok": "cursor/cursor-grok-4.6-high",
+    "builder-grok": "cursor/composer-2.5",
     "reviewer-general": "openai-codex/gpt-5.6-sol",
-    "reviewer-secperf": "cursor/kimi-k3-high",
+    "reviewer-secperf": "cursor/claude-opus-4-8-thinking-high",
     "final-reviewer": "openai-codex/gpt-5.6-sol"
   },
   "reasoning": {

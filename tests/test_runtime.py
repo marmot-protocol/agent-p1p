@@ -52,8 +52,8 @@ def test_role_manifests_define_three_hermes_and_two_direct_cursor_roles() -> Non
     assert roles["planner"].reasoning == "xhigh"
     assert roles["reviewer-general"].reasoning == "high"
     assert roles["final-reviewer"].reasoning == "xhigh"
-    assert roles["builder-grok"].model == "cursor-grok-4.6-high"
-    assert roles["reviewer-secperf"].model == "kimi-k3-high"
+    assert roles["builder-grok"].model == "composer-2.5"
+    assert roles["reviewer-secperf"].model == "claude-opus-4-8-thinking-high"
     assert roles["builder-grok"].outer_reasoning_model is None
     assert roles["reviewer-secperf"].outer_reasoning_model is None
     for role in roles.values():
@@ -579,7 +579,7 @@ def _write_fake_cursor(
     models: tuple[str, ...] = (),
     mutate_worktree: bool = False,
 ) -> None:
-    advertised = models or ("cursor-grok-4.6-high", "kimi-k3-high")
+    advertised = models or ("composer-2.5", "claude-opus-4-8-thinking-high")
     script = (
         "#!/usr/bin/env python3\n"
         "import json, sys\n"
@@ -600,7 +600,7 @@ def _write_fake_cursor(
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
-def _builder_payload(model: str = "cursor/cursor-grok-4.6-high") -> dict:
+def _builder_payload(model: str = "cursor/composer-2.5") -> dict:
     head = "b" * 40
     return {
         "schema_version": 1,
@@ -615,7 +615,7 @@ def _builder_payload(model: str = "cursor/cursor-grok-4.6-high") -> dict:
         "task_id": "build-r1",
         "role": "builder-grok",
         "outcome": "REVIEW_READY",
-        "requested_model": "cursor/cursor-grok-4.6-high",
+        "requested_model": "cursor/composer-2.5",
         "actual_model": model,
         "skills_repository_commit": "a" * 40,
         "started_at": "2026-08-15T12:00:00Z",
@@ -661,14 +661,14 @@ def test_cursor_adapter_renders_both_skills_and_validates_fixture_output(
     assert "# Pip v2 Workflow Contract" in prompt
     assert "# Builder Grok" in prompt
     invocation = json.loads((tmp_path / "artifacts/invocation.json").read_text())
-    assert invocation["model"] == "cursor-grok-4.6-high"
+    assert invocation["model"] == "composer-2.5"
     assert invocation["worktree"] == str((tmp_path / "worktree").resolve())
     assert "--sandbox" in invocation["command"]
     assert "--no-mcps" not in invocation["command"]
     verification = json.loads(
         (tmp_path / "artifacts/model-verification.json").read_text()
     )
-    assert verification["requested_model"] == "cursor-grok-4.6-high"
+    assert verification["requested_model"] == "composer-2.5"
     assert verification["exact_model_advertised"] is True
     assert verification["cli_reports_actual_model"] is False
     assert json.loads((tmp_path / "artifacts/run-status.json").read_text()) == {
@@ -707,7 +707,7 @@ def test_cursor_adapter_rejects_unadvertised_pinned_model(tmp_path: Path) -> Non
     _write_fake_cursor(
         executable,
         _builder_payload(),
-        models=("kimi-k3-high",),
+        models=("claude-opus-4-8-thinking-high",),
     )
     (tmp_path / "worktree").mkdir()
     adapter = CursorAdapter(ROOT, roles["builder-grok"], executable=executable)

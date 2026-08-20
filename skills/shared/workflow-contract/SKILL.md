@@ -24,11 +24,13 @@ This is the shared contract for every Pip v2 role. Role-specific skills add resp
 4. Record requested and actual models. If they differ, return `BLOCKED_UNEXPECTED_MODEL`.
 5. Copy `route_id`, `comment_id`, `evidence_body_sha256`, `planner_comment_id`, `planner_body_sha256`, and `planned_base_sha` exactly from the task's authorization binding into every non-planner result.
 6. Bind CI and review evidence to an exact 40-character PR head SHA.
-7. Do not treat CodeRabbit as mandatory; concrete findings are still actionable.
-8. Do not silently broaden scope or edit a dependency repository.
-9. Human takeover or removed authorization stops the case.
-10. Complete the versioned structured result contract before reporting success.
-11. Never merge directly from a planning, building, or review role.
+7. Do not treat CodeRabbit as mandatory; concrete findings are still actionable. If a CodeRabbit status exists but says the review was rate limited, do not represent it as complete evidence.
+8. A PR that had any red CI attempt is permanently ineligible. A green rerun does not clear that history.
+9. Do not silently broaden scope or edit a dependency repository.
+10. Human takeover or removed authorization stops the case.
+11. Complete the versioned structured result contract before reporting success.
+12. Never merge directly from a planning, building, or review role.
+13. Parent summaries may be truncated. Resolve every parent with `hermes kanban --board pip-mdk show <task-id> --json`, read the full run metadata, and dereference the declared result artifact before relying on PR numbers, findings, or remediation evidence.
 
 ## Ownership
 

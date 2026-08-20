@@ -8,13 +8,14 @@ umask 077
 GITHUB_CREDENTIAL=/etc/pip-v2/github.token
 
 usage() {
-  echo "usage: sudo $0 --installer-sha256 HEX --wheel /absolute/path.whl --sha256 HEX --caller USER --issue 1240" >&2
+  echo "usage: sudo $0 --installer-sha256 HEX --wheel /absolute/path.whl --sha256 HEX --source-commit SHA40 --caller USER --issue 1240" >&2
   exit 2
 }
 
 WHEEL=""
 EXPECTED_SHA=""
 EXPECTED_INSTALLER_SHA=""
+SOURCE_COMMIT=""
 CALLER="${SUDO_USER:-}"
 ISSUE=""
 while (($#)); do
@@ -22,6 +23,7 @@ while (($#)); do
     --installer-sha256) [[ $# -ge 2 ]] || usage; EXPECTED_INSTALLER_SHA="${2,,}"; shift 2 ;;
     --wheel) [[ $# -ge 2 ]] || usage; WHEEL="$2"; shift 2 ;;
     --sha256) [[ $# -ge 2 ]] || usage; EXPECTED_SHA="${2,,}"; shift 2 ;;
+    --source-commit) [[ $# -ge 2 ]] || usage; SOURCE_COMMIT="${2,,}"; shift 2 ;;
     --caller) [[ $# -ge 2 ]] || usage; CALLER="$2"; shift 2 ;;
     --issue) [[ $# -ge 2 ]] || usage; ISSUE="$2"; shift 2 ;;
     *) usage ;;
@@ -32,6 +34,7 @@ done
 [[ -n "$WHEEL" && -n "$CALLER" && "$ISSUE" =~ ^[1-9][0-9]*$ ]] || usage
 [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{64}$ ]] || usage
 [[ "$EXPECTED_INSTALLER_SHA" =~ ^[0-9a-f]{64}$ ]] || usage
+[[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || usage
 SCRIPT_UID="$(stat -c %u "${BASH_SOURCE[0]}")"
 SCRIPT_MODE="$(stat -c %a "${BASH_SOURCE[0]}")"
 [[ "$SCRIPT_UID" == "0" && $((8#$SCRIPT_MODE & 8#22)) -eq 0 ]] || {
@@ -72,6 +75,7 @@ HAD_DECISION_TIMER=0
 HAD_ROUTER_UNIT=0
 HAD_ROUTER_TIMER=0
 HAD_WHEEL_SHA=0
+HAD_SOURCE_COMMIT=0
 HAD_DECISION_ROUTE=0
 DECISION_ROUTE_REPLACED=0
 CREATED_GROUP=0
@@ -187,6 +191,7 @@ PY
   restore_file "$HAD_ROUTER_UNIT" "$INSTALL_TMP/backup/router-unit" /etc/systemd/system/pip-v2-route-consumer.service
   restore_file "$HAD_ROUTER_TIMER" "$INSTALL_TMP/backup/router-timer" /etc/systemd/system/pip-v2-route-consumer.timer
   restore_file "$HAD_WHEEL_SHA" "$INSTALL_TMP/backup/wheel-sha" /opt/pip-v2/WHEEL.SHA256
+  restore_file "$HAD_SOURCE_COMMIT" "$INSTALL_TMP/backup/source-commit" /opt/pip-v2/SOURCE.COMMIT
   systemctl daemon-reload >/dev/null 2>&1
   if [[ "$OLD_ENABLED" == "1" ]]; then
     systemctl enable pip-v2-control.service >/dev/null 2>&1
@@ -385,6 +390,7 @@ if [[ -e /etc/systemd/system/pip-v2-decision.timer ]]; then cp -a /etc/systemd/s
 if [[ -e /etc/systemd/system/pip-v2-route-consumer.service ]]; then cp -a /etc/systemd/system/pip-v2-route-consumer.service "$INSTALL_TMP/backup/router-unit"; HAD_ROUTER_UNIT=1; fi
 if [[ -e /etc/systemd/system/pip-v2-route-consumer.timer ]]; then cp -a /etc/systemd/system/pip-v2-route-consumer.timer "$INSTALL_TMP/backup/router-timer"; HAD_ROUTER_TIMER=1; fi
 if [[ -e /opt/pip-v2/WHEEL.SHA256 ]]; then cp -a /opt/pip-v2/WHEEL.SHA256 "$INSTALL_TMP/backup/wheel-sha"; HAD_WHEEL_SHA=1; fi
+if [[ -e /opt/pip-v2/SOURCE.COMMIT ]]; then cp -a /opt/pip-v2/SOURCE.COMMIT "$INSTALL_TMP/backup/source-commit"; HAD_SOURCE_COMMIT=1; fi
 
 if [[ ! -f "$GITHUB_CREDENTIAL" || -L "$GITHUB_CREDENTIAL" ]]; then
   echo "GitHub credential must be a root-owned mode-0600 regular file" >&2
@@ -482,6 +488,8 @@ fi
 ln -sfn "releases/$WHEEL_SHA" /opt/pip-v2/current.new
 mv -Tf /opt/pip-v2/current.new /opt/pip-v2/current
 printf '%s\n' "$WHEEL_SHA" > /opt/pip-v2/WHEEL.SHA256
+install -o root -g root -m 0444 /dev/null /opt/pip-v2/SOURCE.COMMIT
+printf '%s\n' "$SOURCE_COMMIT" > /opt/pip-v2/SOURCE.COMMIT
 
 LINK_RESULT="$(runuser -u "$CALLER" -- /usr/bin/env \
   HOME="$CALLER_HOME" \

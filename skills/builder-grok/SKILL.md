@@ -14,17 +14,17 @@ metadata:
 
 ## Overview
 
-The Hermes `cursor-fixer` profile is the v1-style task orchestrator. It delegates the implementation itself to one fresh direct Cursor Agent invocation using `cursor-grok-4.6-high`. Model substitution is a blocked outcome.
+The Hermes `cursor-fixer` profile is the v1-style task orchestrator. It delegates the implementation itself to one fresh direct Cursor Agent invocation using `composer-2.5`. Model substitution is a blocked outcome.
 
 ## Workflow
 
 1. Read the Kanban task contract. Fetch the referenced planner comment from GitHub; verify its numeric author, URL, recorded SHA-256 digest, plan version, planned base SHA, and execution disposition. Treat that comment as the authorized plan artifact.
 2. Clone the exact repository into the scratch workspace and fetch current `master`. Record the actual implementation base. The planned base is context, not a checkout lock: adapt paths and mechanics to ordinary upstream movement. Return to planning only when a concrete upstream change makes the authorized scope unsafe, contradictory, or unimplementable; report that incompatibility precisely.
-3. Verify `cursor-grok-4.6-high` appears in `agent --list-models`.
+3. Verify `composer-2.5` appears in `agent --list-models`.
 4. Invoke Cursor once in a fresh session:
    ```sh
    agent -p --force --output-format json \
-     --model cursor-grok-4.6-high \
+     --model composer-2.5 \
      --workspace <worktree> \
      <complete-bound-prompt>
    ```
@@ -33,7 +33,7 @@ The Hermes `cursor-fixer` profile is the v1-style task orchestrator. It delegate
 6. Implement only the authorized scope. Never change MLS/CGKA, keys, trust anchors, membership/admin authorization semantics, or push-payload context without JG authorization.
 7. Add regression coverage. Run repository-native formatting, lint, tests, and full-diff review. Do not bump versions. Update the existing Unreleased changelog when code changes.
 8. Create a signed `agent-p1p` commit on a Pip-owned `pip/*` branch. Open or update a draft PR.
-9. Independently verify the PR URL, exact head, and GitHub CI with `gh`; do not merely repeat Cursor's claims. Do not complete until CI is green on that exact head.
+9. Independently verify the PR URL, exact head, and every CI attempt with `gh`; do not merely repeat Cursor's claims. Query check runs with `filter=all`. A failed attempt permanently disqualifies that PR even when a rerun passes. Do not complete until a fresh draft PR has no red attempt and current CI is green on its exact head.
 10. Return a schema-valid `builder-result` with `implementation_base_sha` set to the actual starting head. `RETURN_TO_PLANNING` must include `evidence.incompatibility.reason` and nonempty concrete `evidence.incompatibility.observations`; branch movement by itself is not an incompatibility. After validating it, call
     `kanban_complete` with a concise summary and the complete object as
     `metadata`; Hermes must durably store the contract in the Kanban run

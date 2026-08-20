@@ -10,6 +10,7 @@ from typing import Any
 Runner = Callable[[list[str]], subprocess.CompletedProcess[str]]
 REPOSITORY = "marmot-protocol/mdk"
 EXPECTED_AUTHOR = "agent-p1p"
+ALLOWED_SKIPPED_CHECKS = {"Publish wn-agent release"}
 _SHA40 = re.compile(r"[0-9a-f]{40}")
 
 
@@ -125,6 +126,7 @@ query($owner:String!,$name:String!,$number:Int!){
     pullRequest(number:$number){
       number state isDraft mergeable headRefName headRefOid reviewDecision
       author{login}
+      commits(first:100){nodes{commit{oid}} pageInfo{hasNextPage}}
       reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}}
       reviews(last:100){nodes{databaseId state submittedAt author{login}} pageInfo{hasPreviousPage}}
     }
@@ -208,11 +210,60 @@ query($owner:String!,$name:String!,$number:Int!){
     review_nodes = reviews.get("nodes")
     _assert_no_effective_changes_request(review_nodes)
 
+    commits = pr.get("commits")
+    if not isinstance(commits, Mapping) or commits.get("pageInfo", {}).get(
+        "hasNextPage"
+    ):
+        raise GitHubGateError("PR commit history is incomplete")
+    commit_nodes = commits.get("nodes")
+    if not isinstance(commit_nodes, list) or not commit_nodes:
+        raise GitHubGateError("PR commit history is hollow")
+    commit_shas: list[str] = []
+    for node in commit_nodes:
+        commit = node.get("commit") if isinstance(node, Mapping) else None
+        oid = commit.get("oid") if isinstance(commit, Mapping) else None
+        if not isinstance(oid, str) or _SHA40.fullmatch(oid) is None:
+            raise GitHubGateError("PR commit history is malformed")
+        commit_shas.append(oid)
+    if head_sha not in commit_shas:
+        raise GitHubGateError("PR commit history omits the current head")
+
+    for commit_sha in commit_shas:
+        history = _json(
+            [
+                "gh",
+                "api",
+                f"repos/{REPOSITORY}/commits/{commit_sha}/check-runs?per_page=100&filter=all",
+                "-H",
+                "Accept: application/vnd.github+json",
+            ],
+            runner,
+        )
+        history_runs = (
+            history.get("check_runs") if isinstance(history, Mapping) else None
+        )
+        history_total = (
+            history.get("total_count") if isinstance(history, Mapping) else None
+        )
+        if (
+            not isinstance(history_runs, list)
+            or type(history_total) is not int
+            or history_total != len(history_runs)
+        ):
+            raise GitHubGateError("historical CI evidence is incomplete")
+        if any(
+            isinstance(run, Mapping)
+            and run.get("conclusion")
+            in {"failure", "timed_out", "action_required", "startup_failure"}
+            for run in history_runs
+        ):
+            raise GitHubGateError("PR had red CI at an earlier point")
+
     checks = _json(
         [
             "gh",
             "api",
-            f"repos/{REPOSITORY}/commits/{head_sha}/check-runs?per_page=100",
+            f"repos/{REPOSITORY}/commits/{head_sha}/check-runs?per_page=100&filter=all",
             "-H",
             "Accept: application/vnd.github+json",
         ],
@@ -227,13 +278,20 @@ query($owner:String!,$name:String!,$number:Int!){
         or not runs
     ):
         raise GitHubGateError("CI check-run evidence is hollow or incomplete")
-    if any(
-        not isinstance(run, Mapping)
-        or run.get("head_sha") != head_sha
-        or run.get("status") != "completed"
-        or run.get("conclusion") != "success"
-        for run in runs
-    ):
+
+    def check_is_acceptable(run: Any) -> bool:
+        if (
+            not isinstance(run, Mapping)
+            or run.get("head_sha") != head_sha
+            or run.get("status") != "completed"
+        ):
+            return False
+        conclusion = run.get("conclusion")
+        if conclusion == "success":
+            return True
+        return conclusion == "skipped" and run.get("name") in ALLOWED_SKIPPED_CHECKS
+
+    if any(not check_is_acceptable(run) for run in runs):
         raise GitHubGateError("exact-head CI contains incomplete or non-green checks")
 
     status_pages: list[list[Any]] = []
@@ -262,6 +320,7 @@ query($owner:String!,$name:String!,$number:Int!){
         updated_at = status.get("updated_at")
         status_id = status.get("id")
         state = status.get("state")
+
         if (
             not isinstance(context, str)
             or not context
