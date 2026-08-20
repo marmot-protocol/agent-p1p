@@ -110,10 +110,11 @@ Exit gate:
 adversarial tests exist. Authorization removal and foreign-PR takeover are
 durable, and final-review dispatch now waits for exact published GitHub
 evidence. Distinct role identities now publish the joined reviews before
-remediation or final preflight, and human-held issue/PR disposition comments
-and local terminal effects are consumed transactionally. Planner,
-branch/draft-PR, and guarded-merge effects remain open, so the phase exit gate
-is not met.
+remediation or final preflight, planner results cannot release their typed
+outcome until the controller publishes the immutable plan comment, and
+human-held issue/PR disposition comments and local terminal effects are
+consumed transactionally. Branch/draft-PR and guarded-merge effects remain
+open, so the phase exit gate is not met.
 
 Deliverables:
 

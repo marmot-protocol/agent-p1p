@@ -229,6 +229,16 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     let authorization = crate::reconcile_active_authorization(&reader, &policy, &mut store, now)
         .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let plan_publication = crate::publish_plan_once(
+        &writer,
+        &policy,
+        &mut store,
+        now,
+        required(&options, "--owner")?,
+        lease_seconds,
+        authorization.is_authorized(),
+    )
+    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     let review_publication = crate::publish_reviews_once(
         &general_review_writer,
         &secperf_review_writer,
@@ -284,6 +294,7 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         "intake": intake,
         "takeover": takeover,
         "authorization": authorization,
+        "plan_publication": plan_publication,
         "review_publication": review_publication,
         "final_preflight": final_preflight,
         "disposition": disposition,

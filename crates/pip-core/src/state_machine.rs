@@ -30,6 +30,7 @@ impl CaseState {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Event {
+    PlanRecorded,
     Proceed,
     WaitingForIssueCreator,
     NeedsHumanScopeDecision,
@@ -68,7 +69,8 @@ pub enum Event {
 }
 
 impl Event {
-    pub const ALL: [Self; 35] = [
+    pub const ALL: [Self; 36] = [
+        Self::PlanRecorded,
         Self::Proceed,
         Self::WaitingForIssueCreator,
         Self::NeedsHumanScopeDecision,
@@ -174,6 +176,7 @@ string_enum!(CaseState, "case state", {
 });
 
 string_enum!(Event, "event", {
+    "PLAN_RECORDED" => PlanRecorded,
     "PROCEED" => Proceed,
     "WAITING_FOR_ISSUE_CREATOR" => WaitingForIssueCreator,
     "NEEDS_HUMAN_SCOPE_DECISION" => NeedsHumanScopeDecision,
@@ -238,6 +241,7 @@ impl Default for TransitionContext {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Effect {
     DispatchPlanner,
+    PublishPlan,
     DispatchBuilder,
     ObserveCi,
     DispatchReviewers,
@@ -321,6 +325,7 @@ pub fn transition(
     use Event as Ev;
 
     match (state, event) {
+        (State::Planning, Ev::PlanRecorded) => decision(State::Planning, &[Fx::PublishPlan]),
         (State::Planning, Ev::Proceed) => decision(State::ReadyToBuild, &[Fx::DispatchBuilder]),
         (
             State::Planning,

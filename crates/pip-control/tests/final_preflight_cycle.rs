@@ -8,7 +8,7 @@ use pip_github::{
     CheckConclusion, CheckRunSnapshot, CheckStatus, CommitStatusState, GitHubError,
     PullRequestEvidence, PullRequestSnapshot, ReviewSnapshot, ReviewState, ReviewThreadSnapshot,
 };
-use pip_store::{EffectInput, EventInput, NewCase, Store};
+use pip_store::{EffectInput, EventInput, NewCase, Store, TransitionInput};
 use serde_json::{Value, json};
 
 #[derive(Clone)]
@@ -71,7 +71,7 @@ fn exact_published_reviews_clean_ci_and_resolved_threads_release_final_review() 
         .claim_effect_matching("dispatcher", 200, 30, &["DISPATCH_FINAL_REVIEWER"])
         .unwrap()
         .unwrap();
-    assert_eq!(effect.state_revision, 9);
+    assert_eq!(effect.state_revision, 10);
 }
 
 #[test]
@@ -200,9 +200,21 @@ fn final_review_store(
 ) -> Store {
     let mut store = planning_store(path);
     let results = results();
-    for result in &results[..2] {
-        ingest_worker_result(&mut store, &policy.case_policy(), &binding(result), result).unwrap();
-    }
+    ingest_worker_result(
+        &mut store,
+        &policy.case_policy(),
+        &binding(&results[0]),
+        &results[0],
+    )
+    .unwrap();
+    accept_plan(&mut store, &results[0]);
+    ingest_worker_result(
+        &mut store,
+        &policy.case_policy(),
+        &binding(&results[1]),
+        &results[1],
+    )
+    .unwrap();
     assert!(matches!(
         reconcile_ci_once(source, policy, &mut store, 100).unwrap(),
         CiCycle::Transitioned { .. }
@@ -251,9 +263,21 @@ fn remediated_final_review_store(
 ) -> Store {
     let mut store = planning_store(path);
     let mut results = results();
-    for result in &results[..2] {
-        ingest_worker_result(&mut store, &policy.case_policy(), &binding(result), result).unwrap();
-    }
+    ingest_worker_result(
+        &mut store,
+        &policy.case_policy(),
+        &binding(&results[0]),
+        &results[0],
+    )
+    .unwrap();
+    accept_plan(&mut store, &results[0]);
+    ingest_worker_result(
+        &mut store,
+        &policy.case_policy(),
+        &binding(&results[1]),
+        &results[1],
+    )
+    .unwrap();
     reconcile_ci_once(source, policy, &mut store, 100).unwrap();
 
     let mut changed = serde_json::to_value(&results[2]).unwrap();
@@ -322,6 +346,41 @@ fn remediated_final_review_store(
     );
     mark_reviews_published(&mut store);
     store
+}
+
+fn accept_plan(store: &mut Store, result: &WorkerResult) {
+    let WorkerResult::Planner(plan) = result else {
+        panic!("planner result required");
+    };
+    let case = store.case("repo:984321#1240@1").unwrap().unwrap();
+    store
+        .apply_transition(
+            &TransitionInput {
+                case_key: case.case_key,
+                expected_revision: case.state_revision,
+                next_state: "READY_TO_BUILD".into(),
+                remediation_round: 0,
+                plan_version: plan.plan_version,
+                pr_number: None,
+                head_sha: None,
+                observed_at: 3,
+                event: EventInput {
+                    event_id: "event-plan-published".into(),
+                    event_type: "PROCEED".into(),
+                    payload: json!({"planner_result": plan}),
+                },
+                run: None,
+                evidence: Vec::new(),
+                findings: Vec::new(),
+                effects: vec![EffectInput {
+                    effect_id: "effect-builder".into(),
+                    effect_type: "DISPATCH_BUILDER".into(),
+                    payload: json!({"case_key":"repo:984321#1240@1"}),
+                }],
+            },
+            None,
+        )
+        .unwrap();
 }
 
 fn mark_reviews_published(store: &mut Store) {

@@ -21,9 +21,7 @@
       "sensitive_scope": [],
       "dependencies": [],
       "open_decisions": [],
-      "plan_artifact": "artifacts/plan-1.json",
-      "issue_comment_id": 10001,
-      "issue_comment_body_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      "plan_artifact": "artifacts/plan-1.json"
     },
     {
       "contract_version": 1,

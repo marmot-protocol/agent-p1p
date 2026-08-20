@@ -181,7 +181,7 @@ hold according to policy.
 
 | Role | Target responsibility | Write authority |
 |---|---|---|
-| `planner` | Validate issue, root cause, scope, dependencies, and test plan. | Issue plan comment and plan artifacts only. |
+| `planner` | Validate issue, root cause, scope, dependencies, and test plan. | Versioned plan artifacts and a bound result contract only. |
 | `builder` | Manage the assigned worktree, implement the active plan, test, commit, push, and create/update a draft PR. | Assigned Pip branch and draft PR. |
 | `reviewer-general` | Correctness, integration, errors, concurrency, tests, maintenance. | Review evidence/comments only. |
 | `reviewer-secperf` | Security, privacy, authorization, abuse, resource bounds, performance. | Review evidence/comments only. |
@@ -236,9 +236,13 @@ BLOCKED
 ```
 
 `PROCEED` requires a complete repository-local plan with no unresolved decision.
-Each plan version has a GitHub comment, structured ledger record, and immutable
-Markdown/JSON artifact. A trusted clarification creates another planning run;
-it never releases the builder directly.
+Each plan version has a structured ledger record and immutable Markdown/JSON
+artifact. The controller renders that result into a provenance-marked GitHub
+comment using the PR-author credential. The result first records
+`PLAN_RECORDED`; only successful idempotent publication applies its typed
+planner outcome and releases builder, human-disposition, or terminal effects.
+A trusted clarification creates another planning run; it never releases the
+builder directly.
 
 ## 10. Build and draft-PR contract
 

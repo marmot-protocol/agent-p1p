@@ -5,7 +5,7 @@ use pip_github::{
     CheckConclusion, CheckRunSnapshot, CheckStatus, CommitStatusState, GitHubError,
     PullRequestEvidence, PullRequestSnapshot,
 };
-use pip_store::{EffectInput, EventInput, NewCase, Store};
+use pip_store::{EffectInput, EventInput, NewCase, Store, TransitionInput};
 use serde_json::{Value, json};
 
 struct FixtureSource {
@@ -131,6 +131,7 @@ fn waiting_ci_store(path: std::path::PathBuf) -> Store {
         &results[0],
     )
     .unwrap();
+    accept_plan(&mut store, &results[0]);
     ingest_worker_result(
         &mut store,
         &active_policy().case_policy(),
@@ -146,6 +147,41 @@ fn waiting_ci_store(path: std::path::PathBuf) -> Store {
         now += 1;
     }
     store
+}
+
+fn accept_plan(store: &mut Store, result: &WorkerResult) {
+    let WorkerResult::Planner(plan) = result else {
+        panic!("planner result required");
+    };
+    let case = store.case("repo:984321#1240@1").unwrap().unwrap();
+    store
+        .apply_transition(
+            &TransitionInput {
+                case_key: case.case_key,
+                expected_revision: case.state_revision,
+                next_state: "READY_TO_BUILD".into(),
+                remediation_round: 0,
+                plan_version: plan.plan_version,
+                pr_number: None,
+                head_sha: None,
+                observed_at: 3,
+                event: EventInput {
+                    event_id: "event-plan-published".into(),
+                    event_type: "PROCEED".into(),
+                    payload: json!({"planner_result": plan}),
+                },
+                run: None,
+                evidence: Vec::new(),
+                findings: Vec::new(),
+                effects: vec![EffectInput {
+                    effect_id: "effect-builder".into(),
+                    effect_type: "DISPATCH_BUILDER".into(),
+                    payload: json!({"case_key":"repo:984321#1240@1"}),
+                }],
+            },
+            None,
+        )
+        .unwrap();
 }
 
 fn evidence(check_runs: Vec<CheckRunSnapshot>) -> PullRequestEvidence {

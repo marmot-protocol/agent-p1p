@@ -185,20 +185,12 @@ fn map_event(
 ) -> Result<MappedEvent, IngestError> {
     match result {
         WorkerResult::Planner(result) if case.state == "PLANNING" => Ok(mapped(
-            match result.outcome {
-                PlannerOutcome::Proceed => Event::Proceed,
-                PlannerOutcome::AlreadyFixed => Event::AlreadyFixed,
-                PlannerOutcome::NotReproducible => Event::NotReproducible,
-                PlannerOutcome::Duplicate => Event::Duplicate,
-                PlannerOutcome::RootCauseDifferentScope => Event::RootCauseDifferentScope,
-                PlannerOutcome::CrossRepoDependency => Event::CrossRepoDependency,
-                PlannerOutcome::WaitingForIssueCreator => Event::WaitingForIssueCreator,
-                PlannerOutcome::NeedsHumanScopeDecision => Event::NeedsHumanScopeDecision,
-                PlannerOutcome::Abandon => Event::Abandon,
-                PlannerOutcome::Blocked => Event::Blocked,
-                PlannerOutcome::BlockedUnexpectedModel => Event::BlockedUnexpectedModel,
+            if result.outcome == PlannerOutcome::BlockedUnexpectedModel {
+                Event::BlockedUnexpectedModel
+            } else {
+                Event::PlanRecorded
             },
-            (result.outcome == PlannerOutcome::Proceed).then_some(result.plan_version),
+            None,
             None,
             None,
         )),

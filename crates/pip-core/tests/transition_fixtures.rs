@@ -97,6 +97,15 @@ fn unknown_serialized_values_fail_closed() {
 
 #[test]
 fn accepted_work_emits_only_the_next_declared_effect() {
+    let recorded = transition(
+        CaseState::Planning,
+        Event::PlanRecorded,
+        TransitionContext::default(),
+    )
+    .unwrap();
+    assert_eq!(recorded.next_state, CaseState::Planning);
+    assert_eq!(recorded.effects, [Effect::PublishPlan]);
+
     let build = transition(
         CaseState::Planning,
         Event::Proceed,

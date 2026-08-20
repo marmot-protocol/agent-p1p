@@ -25,6 +25,9 @@ fn complete_worker_sequence_is_immutable_exact_head_and_shadow_held() {
             transition_count: 1
         }
     );
+    assert_eq!(case(&store).state, "PLANNING");
+    assert_eq!(case(&store).plan_version, 0);
+    publish_plan(&mut store, &results[0]);
     assert_eq!(case(&store).state, "READY_TO_BUILD");
 
     assert_eq!(
@@ -84,12 +87,40 @@ fn binding_mismatch_fails_without_ledger_mutation() {
 }
 
 #[test]
+fn unexpected_planner_model_blocks_without_publishing_untrusted_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    create_case(&mut store);
+    let mut value = serde_json::to_value(&results()[0]).unwrap();
+    value["outcome"] = json!("BLOCKED_UNEXPECTED_MODEL");
+    value["actual_model"] = json!("openai-codex/substituted");
+    let result: WorkerResult = serde_json::from_value(value).unwrap();
+
+    ingest_worker_result(&mut store, &policy(), &binding(&result), &result).unwrap();
+
+    assert_eq!(case(&store).state, "BLOCKED");
+    assert!(
+        store
+            .claim_effect_matching("recorder", 10, 30, &["RECORD_BLOCK"])
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        store
+            .claim_effect_matching("publisher", 10, 30, &["PUBLISH_PLAN"])
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
 fn two_reviews_join_to_request_changes_and_preserve_both_runs_and_findings() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
     create_case(&mut store);
     let mut results = results();
     ingest_worker_result(&mut store, &policy(), &binding(&results[0]), &results[0]).unwrap();
+    publish_plan(&mut store, &results[0]);
     ingest_worker_result(&mut store, &policy(), &binding(&results[1]), &results[1]).unwrap();
     accept_ci(&mut store);
 
@@ -202,6 +233,38 @@ fn accept_ci(store: &mut Store) {
         next_pr_number: None,
         next_head_sha: None,
         event_payload: json!({"head_sha": "b".repeat(40)}),
+        run: None,
+        evidence: Vec::new(),
+        findings: Vec::new(),
+    };
+    LedgerController::apply(store, &policy(), &workflow).unwrap();
+}
+
+fn publish_plan(store: &mut Store, result: &WorkerResult) {
+    let WorkerResult::Planner(planner) = result else {
+        panic!("planner result required");
+    };
+    let current = case(store);
+    let workflow = WorkflowCommand {
+        case_id: case_id(),
+        event_id: EventId::from_str("event-plan-published").unwrap(),
+        observed_at: ObservedAt::new(10),
+        expected_state: CaseState::Planning,
+        expected_state_revision: StateRevision::new(
+            NonZeroU64::new(current.state_revision).unwrap(),
+        ),
+        accepted_policy_revision: PolicyRevision::new(NonZeroU64::new(1).unwrap()),
+        remediation_round: current.remediation_round,
+        plan_version: None,
+        pr_number: None,
+        head_sha: None,
+        event: Event::Proceed,
+        accepted_plan_version: Some(PlanVersion::new(
+            NonZeroU32::new(planner.plan_version).unwrap(),
+        )),
+        next_pr_number: None,
+        next_head_sha: None,
+        event_payload: serde_json::to_value(planner).unwrap(),
         run: None,
         evidence: Vec::new(),
         findings: Vec::new(),

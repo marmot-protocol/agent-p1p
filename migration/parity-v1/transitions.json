@@ -64,6 +64,10 @@
   ],
   "target_only": [
     {
+      "target_name": "planner result waits for controller publication",
+      "rationale": "A model result cannot release builder or disposition work until the controller publishes and records the immutable plan comment."
+    },
+    {
       "target_name": "builder dispatch becomes active",
       "rationale": "Separates recorded dispatch intent from observed worker activation."
     },

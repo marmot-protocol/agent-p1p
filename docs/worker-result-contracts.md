@@ -47,11 +47,13 @@ Additional fields:
 - positive `plan_version`;
 - lowercase 40-hex `planned_base_sha`;
 - `root_cause`, `authorized_scope`, `sensitive_scope`, `dependencies`,
-  `open_decisions`, and `plan_artifact`;
-- positive numeric `issue_comment_id`; and
-- lowercase 64-hex `issue_comment_body_sha256`.
+  `open_decisions`, and `plan_artifact`.
 
 `PROCEED` requires empty sensitive scope, dependencies, and open decisions.
+The planner never publishes or identifies a GitHub comment. The controller
+renders the accepted contract into an immutable provenance-marked issue comment
+and records its numeric ID and body digest as controller evidence before any
+builder or human-disposition effect is released.
 
 ## Builder
 

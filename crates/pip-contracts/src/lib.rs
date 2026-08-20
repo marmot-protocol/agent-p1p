@@ -141,8 +141,6 @@ pub struct PlannerResult {
     pub dependencies: Vec<Value>,
     pub open_decisions: Vec<String>,
     pub plan_artifact: String,
-    pub issue_comment_id: u64,
-    pub issue_comment_body_sha256: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -402,14 +400,8 @@ impl PlannerResult {
             WorkerRole::Planner,
             self.outcome == PlannerOutcome::BlockedUnexpectedModel,
         )?;
-        if self.plan_version == 0
-            || self.issue_comment_id == 0
-            || !is_hex(&self.planned_base_sha, 40)
-        {
+        if self.plan_version == 0 || !is_hex(&self.planned_base_sha, 40) {
             return Err(ContractError::InvalidIdentity);
-        }
-        if !is_hex(&self.issue_comment_body_sha256, 64) {
-            return Err(ContractError::InvalidDigest);
         }
         if !not_blank(&self.authorized_scope) || !not_blank(&self.plan_artifact) {
             return Err(ContractError::EmptyRequiredField);

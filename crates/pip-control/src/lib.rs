@@ -10,6 +10,7 @@ mod disposition;
 mod final_preflight;
 mod install;
 mod intake;
+mod plans;
 mod policy;
 mod release;
 mod results;
@@ -38,6 +39,7 @@ pub use install::{
     install_host_release, install_release, install_release_pinned,
 };
 pub use intake::{ActiveIntakeError, ActiveIntakeReport, IntakeCandidateResult, reconcile_intake};
+pub use plans::{PlanPublicationCycle, PlanPublicationError, PlanWriter, publish_plan_once};
 pub use policy::{
     GitHubConfiguration, IntakeConfiguration, MergeConfiguration, PolicyError, RepositoryIdentity,
     RepositoryPolicy, RoleConfiguration, load_repository_policy,

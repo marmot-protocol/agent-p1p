@@ -19,11 +19,12 @@ exist. It is not evidence of live-host installation or a completed canary.
 | Hermes reads/projection | Bounded CLI adapter, capability/task/run reads, controller-owned gates, idempotent projections, result metadata ingestion, and restart convergence | Fake-runner and offline integration tests only |
 | Worker contracts | Versioned planner, builder, two reviewer, and final-reviewer results bound to case, task, role, model, skills commit, plan, PR, and exact head | Contract fixtures and ingestion tests |
 | CI reconciliation | Independent current and historical check/status evaluation on the ledger-bound PR head | Fixture and controller-cycle tests |
-| GitHub reads/writes | Bounded REST reads plus bounded GraphQL review-thread pagination; idempotent issue comment, draft PR, exact-head review, and guarded merge adapter primitives | Adapter tests; not all writes are wired to outbox consumption |
+| GitHub reads/writes | Bounded REST reads plus bounded GraphQL review-thread pagination; idempotent issue comment, draft PR, exact-head review, and guarded merge adapter primitives | Adapter tests; branch/draft-PR and guarded merge writes are not yet wired to outbox consumption |
 | Release/install | Signed source-bound release cohort, artifact verification, content-addressed install, rollback, schema migration, and hardened non-dispatching timer | Local tests and disposable systemd container |
-| Active controller | One `controller-cycle` command that ingests completed runs, reconciles CI, performs generic intake, commits authorization removal or foreign-PR takeover, verifies the final-review preflight, publishes human-held disposition comments, records local terminal effects, and projects dispatch effects only while fresh gates pass | Local tests; active unit template is packaged but not installed or enabled |
+| Active controller | One `controller-cycle` command that ingests completed runs, reconciles CI, performs generic intake, commits authorization removal or foreign-PR takeover, publishes plans and role reviews, verifies the final-review preflight, publishes human-held disposition comments, records local terminal effects, and projects dispatch effects only while fresh gates pass | Local tests; active unit template is packaged but not installed or enabled |
 | Final-review preflight | A durable observation effect joins the accepted plan/build/reviewer ledger, exact numeric GitHub actor and role-stamped approvals, current head CI, clean draft-PR ownership/mergeability, and resolved review threads before final-review dispatch | State-machine, adapter, fixture, and restart-safe lease tests |
 | Review publication | Two distinct controller-held reviewer credentials publish the joined role contracts on the exact head; remediation and final preflight remain blocked until both idempotent reviews exist | Policy, state-machine, mutation, outage/retry, and exact-role fixture tests |
+| Plan publication | Planner results first create a durable `PUBLISH_PLAN` effect; the controller publishes the immutable plan comment and only then applies the typed outcome that releases build, human disposition, or terminal recording | Contract, state-machine, mutation, and outage/retry tests |
 | Human disposition | `HOLD_FOR_HUMAN`, `ESCALATE`, and shadow-ready effects publish idempotent provenance-marked issue or draft-PR comments; local completion, block, abandonment, and takeover effects commit evidence without writing after lost authorization | Mutation fixtures and transactional effect/evidence tests |
 
 ## What is deliberately inert
@@ -41,10 +42,10 @@ exist. It is not evidence of live-host installation or a completed canary.
 These are implementation gaps, not merely missing operational evidence:
 
 1. Consume every durable GitHub effect through the Rust controller. In
-   particular, independently verify and publish planner comments, case-owned
-   branches/draft PRs without giving workers direct workflow authority.
-   Role-stamped reviews, human-held disposition, and terminal recording are now
-   durable controller effects.
+   particular, create and verify case-owned branches/draft PRs without giving
+   model processes direct workflow authority. Planner comments, role-stamped
+   reviews, human-held disposition, and terminal recording are now durable
+   controller effects.
 2. Build the complete deterministic final-review bundle from immutable ledger
    references and fresh GitHub observations. A valid final worker result alone
    is not sufficient.

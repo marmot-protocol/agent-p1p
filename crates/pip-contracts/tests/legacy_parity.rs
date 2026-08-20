@@ -95,8 +95,6 @@ fn adapt(name: &str, source: &Value) -> Result<WorkerResult, String> {
             copy(source, fields, "dependencies", "dependencies")?;
             copy(source, fields, "open_decisions", "open_decisions")?;
             copy(source, fields, "plan_file", "plan_artifact")?;
-            fields.insert("issue_comment_id".into(), json!(1));
-            fields.insert("issue_comment_body_sha256".into(), json!("f".repeat(64)));
         }
         "builder" => {
             for field in [

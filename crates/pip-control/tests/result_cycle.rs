@@ -48,10 +48,11 @@ fn completed_hermes_result_is_bound_to_the_owned_projection_and_ingested_once() 
         }
     );
     assert_eq!(store.run_count().unwrap(), 1);
-    assert_eq!(
-        store.case("repo:984321#1240@1").unwrap().unwrap().state,
-        "READY_TO_BUILD"
-    );
+    let case = store.case("repo:984321#1240@1").unwrap().unwrap();
+    assert_eq!(case.state, "PLANNING");
+    assert_eq!(case.plan_version, 0);
+    let status = store.status(10).unwrap();
+    assert_eq!(status.outbox_pending, 1);
 
     assert_eq!(
         ingest_completed_once_with(

@@ -238,6 +238,7 @@ fn next_head_binding(
 fn effect_name(effect: Effect) -> &'static str {
     match effect {
         Effect::DispatchPlanner => "DISPATCH_PLANNER",
+        Effect::PublishPlan => "PUBLISH_PLAN",
         Effect::DispatchBuilder => "DISPATCH_BUILDER",
         Effect::ObserveCi => "OBSERVE_CI",
         Effect::DispatchReviewers => "DISPATCH_REVIEWERS",

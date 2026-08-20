@@ -1,6 +1,7 @@
 {
   "fixture_format": 1,
   "cases": [
+    {"name": "planner result waits for controller publication", "from": "PLANNING", "event": "PLAN_RECORDED", "to": "PLANNING"},
     {"name": "accepted plan becomes dispatchable", "from": "PLANNING", "event": "PROCEED", "to": "READY_TO_BUILD"},
     {"name": "planning ambiguity waits", "from": "PLANNING", "event": "NEEDS_HUMAN_SCOPE_DECISION", "to": "WAITING_HUMAN"},
     {"name": "builder dispatch becomes active", "from": "READY_TO_BUILD", "event": "BUILDER_DISPATCHED", "to": "BUILDING"},
