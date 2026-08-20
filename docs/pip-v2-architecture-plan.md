@@ -1,6 +1,6 @@
 # Pip v2 target architecture
 
-**Status:** Approved direction; Rust migration not yet implemented
+**Status:** Approved direction; Rust core migration in progress
 
 **Scope:** Full multi-repository target, beginning with an MDK shadow canary
 

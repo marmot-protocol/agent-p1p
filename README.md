@@ -7,8 +7,9 @@ Hermes Kanban boards.
 
 ## Status
 
-The repository is beginning a documentation-first migration from a Python
-single-issue prototype to the target Rust control plane.
+The repository is migrating from a Python single-issue prototype to the target
+Rust control plane. The documentation pass and initial compatibility fixtures
+are in place, and the first pure `pip-core` state-machine slice is implemented.
 
 The Python implementation is useful as a safety prototype and behavioral
 reference, but it is not the target runtime and must not be installed from the
@@ -110,7 +111,8 @@ manifests/              Legacy role manifests retained as migration inputs
 src/pip_agent/          Legacy Python reference implementation
 tests/                  Legacy behavioral and safety tests
 scripts/                Legacy Python-prototype installer
-crates/                 Future Rust workspace (not created in the docs-only pass)
+migration/               Language-neutral Python-to-Rust compatibility fixtures
+crates/pip-core/         Pure Rust domain types and deterministic transitions
 ```
 
 Canonical skills remain under `skills/`; runtime profile directories must
@@ -129,8 +131,16 @@ uv build --wheel
 ```
 
 Do not run `scripts/install-control-plane.sh` from the current migration branch.
-The legacy installer and runtime remain issue-specific and the migration
-baseline does not have green CI or cryptographically bound source provenance.
+The legacy installer and runtime remain issue-specific and do not have
+cryptographically bound source provenance.
+
+The initial Rust core is checked with:
+
+```bash
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --locked
+```
 
 ## Non-negotiable invariants
 

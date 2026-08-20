@@ -1,0 +1,21 @@
+{
+  "fixture_format": 1,
+  "cases": [
+    {"name": "accepted plan becomes dispatchable", "from": "PLANNING", "event": "PROCEED", "to": "READY_TO_BUILD"},
+    {"name": "planning ambiguity waits", "from": "PLANNING", "event": "NEEDS_HUMAN_SCOPE_DECISION", "to": "WAITING_HUMAN"},
+    {"name": "builder dispatch becomes active", "from": "READY_TO_BUILD", "event": "BUILDER_DISPATCHED", "to": "BUILDING"},
+    {"name": "builder result waits for independent CI", "from": "BUILDING", "event": "REVIEW_READY", "to": "WAITING_CI"},
+    {"name": "accepted CI releases reviewers", "from": "WAITING_CI", "event": "CI_ACCEPTED", "to": "REVIEWING"},
+    {"name": "review changes enter remediation", "from": "REVIEWING", "event": "REQUEST_CHANGES", "remediation_round": 0, "max_rounds": 3, "to": "REMEDIATING"},
+    {"name": "review loop bound escalates", "from": "REVIEWING", "event": "REQUEST_CHANGES", "remediation_round": 3, "max_rounds": 3, "to": "ESCALATED"},
+    {"name": "remediation result waits for new exact-head CI", "from": "REMEDIATING", "event": "REVIEW_READY", "to": "WAITING_CI"},
+    {"name": "approved reviews reach final", "from": "REVIEWING", "event": "REVIEWS_APPROVED", "to": "FINAL_REVIEW"},
+    {"name": "shadow final waits for human", "from": "FINAL_REVIEW", "event": "READY", "merge_mode": "shadow", "to": "SHADOW_READY"},
+    {"name": "guarded final reaches deterministic merge gate", "from": "FINAL_REVIEW", "event": "READY", "merge_mode": "guarded", "to": "READY_TO_MERGE"},
+    {"name": "final can return to remediation", "from": "FINAL_REVIEW", "event": "RETURN_TO_BUILD", "remediation_round": 0, "max_rounds": 3, "to": "REMEDIATING"},
+    {"name": "final return bound escalates", "from": "FINAL_REVIEW", "event": "RETURN_TO_BUILD", "remediation_round": 3, "max_rounds": 3, "to": "ESCALATED"},
+    {"name": "guarded merge transaction starts", "from": "READY_TO_MERGE", "event": "MERGE_STARTED", "merge_mode": "guarded", "to": "MERGING"},
+    {"name": "verified merge completes case", "from": "MERGING", "event": "MERGE_VERIFIED", "merge_mode": "guarded", "to": "COMPLETED"},
+    {"name": "human merge completes shadow case", "from": "SHADOW_READY", "event": "HUMAN_MERGED", "to": "COMPLETED"}
+  ]
+}
