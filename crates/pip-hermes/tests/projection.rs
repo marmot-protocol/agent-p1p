@@ -117,6 +117,22 @@ fn exact_existing_projection_is_a_noop() {
 }
 
 #[test]
+fn exact_projection_remains_owned_after_its_gate_advances_status() {
+    let runner = FakeRunner::default();
+    let projector =
+        HermesProjector::new(runner.clone(), "hermes", Duration::from_secs(2), 4096).unwrap();
+    for status in ["ready", "in_progress", "done"] {
+        let mut observed = task("task-1", "Plan issue 1240", "repo:984321#1240@1:planner:1");
+        observed.status = status.into();
+        assert_eq!(
+            projector.project(&spec(), &[observed]).unwrap(),
+            ProjectionResult::Existing("task-1".into())
+        );
+    }
+    assert!(runner.commands.borrow().is_empty());
+}
+
+#[test]
 fn duplicate_or_drifted_projection_fails_without_writing() {
     let runner = FakeRunner::default();
     let projector =

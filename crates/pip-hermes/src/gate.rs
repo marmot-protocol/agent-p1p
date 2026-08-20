@@ -3,13 +3,14 @@
 use std::fmt;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::{CommandOutput, CommandRunner, CommandSpec, HermesError, TaskSnapshot, valid_id};
 
 const CONTROLLER_IDENTITY: &str = "pip-controller";
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct GateCreateSpec {
     pub board: String,
     pub effect_id: String,

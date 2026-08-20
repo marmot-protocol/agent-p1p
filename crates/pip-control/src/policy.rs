@@ -7,9 +7,9 @@ use std::num::{NonZeroU32, NonZeroU64};
 use pip_contracts::WorkerRole;
 use pip_controller::{ExecutionKind, RolePolicy, WorkflowPolicy};
 use pip_core::{ActorId, IntakePolicy, PolicyRevision};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RepositoryIdentity {
     pub id: u64,
@@ -25,7 +25,7 @@ impl RepositoryIdentity {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct IntakeConfiguration {
     pub enabled: bool,
@@ -37,14 +37,14 @@ pub struct IntakeConfiguration {
     pub global_active_limit: u32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum MergeModeConfiguration {
     Shadow,
     Guarded,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct MergeConfiguration {
     mode: MergeModeConfiguration,
@@ -58,14 +58,14 @@ impl MergeConfiguration {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum ExecutionConfiguration {
     Hermes,
     Direct,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoleConfiguration {
     pub role: WorkerRole,
@@ -78,7 +78,7 @@ pub struct RoleConfiguration {
     pub skills: Vec<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RepositoryPolicy {
     pub policy_format: u32,

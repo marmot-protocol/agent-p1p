@@ -12,6 +12,7 @@ pip-contracts = { path = "../pip-contracts" }
 pip-controller = { path = "../pip-controller" }
 pip-core = { path = "../pip-core" }
 pip-github = { path = "../pip-github" }
+pip-hermes = { path = "../pip-hermes" }
 pip-store = { path = "../pip-store" }
 serde.workspace = true
 serde_json.workspace = true

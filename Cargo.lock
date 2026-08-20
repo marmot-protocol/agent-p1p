@@ -473,6 +473,7 @@ dependencies = [
  "pip-controller",
  "pip-core",
  "pip-github",
+ "pip-hermes",
  "pip-store",
  "serde",
  "serde_json",

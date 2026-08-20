@@ -3,13 +3,14 @@
 use std::fmt;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::{CommandRunner, CommandSpec, HermesError, TaskSnapshot, valid_id};
 
 const CONTROLLER_IDENTITY: &str = "pip-controller";
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct TaskCreateSpec {
     pub board: String,
     pub effect_id: String,
@@ -259,7 +260,10 @@ fn task_projection_key(task: &TaskSnapshot) -> Option<String> {
 fn projection_matches(spec: &TaskCreateSpec, task: &TaskSnapshot) -> bool {
     valid_id(&task.id)
         && task.title == spec.title
-        && task.status == "blocked"
+        && matches!(
+            task.status.as_str(),
+            "blocked" | "ready" | "in_progress" | "done"
+        )
         && task.assignee.as_deref() == Some(spec.assignee.as_str())
         && task.created_by.as_deref() == Some(CONTROLLER_IDENTITY)
         && task_projection_key(task).as_deref() == Some(spec.projection_key.as_str())

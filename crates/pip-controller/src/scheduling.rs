@@ -2,10 +2,16 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::num::{NonZeroU32, NonZeroU64};
+use std::str::FromStr;
 
 use pip_contracts::WorkerRole;
-use pip_core::{CaseId, Effect, GitSha, PlanVersion, PullRequestNumber, StateRevision};
+use pip_core::{
+    CaseId, Effect, GitSha, IssueNumber, PlanVersion, PullRequestNumber, RepositoryId,
+    StateRevision, WorkflowVersion,
+};
 use pip_hermes::{GateCreateSpec, TaskCreateSpec};
+use pip_store::{ClaimedEffect, StoredCase};
 use serde_json::{Map, Value, json};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -140,6 +146,9 @@ pub enum DispatchError {
     MissingPullRequest,
     MissingExactHead,
     InvalidGateTask,
+    InvalidStoredCase,
+    StaleEffect,
+    UnsupportedEffect,
 }
 
 impl fmt::Display for DispatchError {
@@ -151,8 +160,61 @@ impl fmt::Display for DispatchError {
             Self::MissingPullRequest => "review dispatch requires a pull request",
             Self::MissingExactHead => "review dispatch requires an exact head",
             Self::InvalidGateTask => "invalid activation gate task identity",
+            Self::InvalidStoredCase => "ledger case cannot form a dispatch binding",
+            Self::StaleEffect => "outbox effect does not match the current case revision",
+            Self::UnsupportedEffect => "outbox effect is not a worker dispatch",
         })
     }
+}
+
+pub fn schedule_claimed_dispatch(
+    claimed: &ClaimedEffect,
+    case: &StoredCase,
+    policy: &WorkflowPolicy,
+) -> Result<Vec<WorkflowDispatch>, DispatchError> {
+    if claimed.case_key != case.case_key || claimed.state_revision != case.state_revision {
+        return Err(DispatchError::StaleEffect);
+    }
+    let case_id = CaseId::new(
+        RepositoryId::new(
+            NonZeroU64::new(case.repository_id).ok_or(DispatchError::InvalidStoredCase)?,
+        ),
+        IssueNumber::new(
+            NonZeroU64::new(case.issue_number).ok_or(DispatchError::InvalidStoredCase)?,
+        ),
+        WorkflowVersion::new(
+            NonZeroU32::new(case.workflow_version).ok_or(DispatchError::InvalidStoredCase)?,
+        ),
+    );
+    if case_id.to_string() != case.case_key {
+        return Err(DispatchError::InvalidStoredCase);
+    }
+    let effect = match claimed.effect_type.as_str() {
+        "DISPATCH_PLANNER" => Effect::DispatchPlanner,
+        "DISPATCH_BUILDER" => Effect::DispatchBuilder,
+        "DISPATCH_REVIEWERS" => Effect::DispatchReviewers,
+        "DISPATCH_FINAL_REVIEWER" => Effect::DispatchFinalReviewer,
+        _ => return Err(DispatchError::UnsupportedEffect),
+    };
+    let context = DispatchContext {
+        case_id,
+        state_revision: StateRevision::new(
+            NonZeroU64::new(case.state_revision).ok_or(DispatchError::InvalidStoredCase)?,
+        ),
+        plan_version: NonZeroU32::new(case.plan_version).map(PlanVersion::new),
+        remediation_round: case.remediation_round,
+        pr_number: case
+            .pr_number
+            .and_then(NonZeroU64::new)
+            .map(PullRequestNumber::new),
+        head_sha: case
+            .head_sha
+            .as_deref()
+            .map(GitSha::from_str)
+            .transpose()
+            .map_err(|_| DispatchError::InvalidStoredCase)?,
+    };
+    schedule_effect(&claimed.effect_id, effect, &context, policy)
 }
 
 impl std::error::Error for DispatchError {}

@@ -3,12 +3,15 @@ use std::str::FromStr;
 
 use pip_contracts::WorkerRole;
 use pip_controller::{
-    DispatchContext, DispatchError, ExecutionKind, RolePolicy, WorkflowPolicy, schedule_effect,
+    DispatchContext, DispatchError, ExecutionKind, RolePolicy, WorkflowPolicy,
+    schedule_claimed_dispatch, schedule_effect,
 };
 use pip_core::{
     CaseId, Effect, GitSha, IssueNumber, PlanVersion, PullRequestNumber, RepositoryId,
     StateRevision, WorkflowVersion,
 };
+use pip_store::{ClaimedEffect, StoredCase};
+use serde_json::json;
 
 fn role(
     role: WorkerRole,
@@ -212,4 +215,42 @@ fn role_policy_rejects_duplicates_missing_skills_and_model_fallbacks() {
         WorkflowPolicy::new("pip-mdk", "scratch", roles),
         Err(DispatchError::InvalidPolicy)
     ));
+}
+
+#[test]
+fn claimed_outbox_dispatch_is_bound_to_the_current_case_revision() {
+    let case = StoredCase {
+        case_key: "repo:984321#1240@1".into(),
+        repository_id: 984_321,
+        issue_number: 1240,
+        workflow_version: 1,
+        state: "REVIEWING".into(),
+        state_revision: 8,
+        policy_revision: 1,
+        remediation_round: 2,
+        plan_version: 1,
+        pr_number: Some(77),
+        head_sha: Some("b".repeat(40)),
+    };
+    let effect = ClaimedEffect {
+        effect_id: "effect-reviewers-1".into(),
+        case_key: case.case_key.clone(),
+        state_revision: 8,
+        effect_type: "DISPATCH_REVIEWERS".into(),
+        payload: json!({"case_key": case.case_key}),
+        lease_owner: "controller-1".into(),
+        lease_until: 200,
+    };
+
+    let dispatches = schedule_claimed_dispatch(&effect, &case, &policy()).unwrap();
+    assert_eq!(dispatches.len(), 2);
+    assert_eq!(dispatches[0].role, WorkerRole::ReviewerGeneral);
+    assert_eq!(dispatches[1].role, WorkerRole::ReviewerSecperf);
+
+    let mut stale = effect;
+    stale.state_revision = 7;
+    assert_eq!(
+        schedule_claimed_dispatch(&stale, &case, &policy()),
+        Err(DispatchError::StaleEffect)
+    );
 }

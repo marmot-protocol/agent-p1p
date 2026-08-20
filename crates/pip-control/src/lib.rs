@@ -3,16 +3,20 @@
 #![forbid(unsafe_code)]
 
 mod cli;
+mod dispatch;
 mod install;
+mod intake;
 mod policy;
 mod release;
 mod shadow;
 
 pub use cli::{CliError, run_cli};
+pub use dispatch::{DispatchCycleError, DispatchCycleResult, dispatch_once, dispatch_once_with};
 pub use install::{
     HostInstallOptions, InstallError, InstallFault, InstallLayout, InstallOutcome, InstallResult,
     install_host_release, install_release, install_release_pinned,
 };
+pub use intake::{ActiveIntakeError, ActiveIntakeReport, IntakeCandidateResult, reconcile_intake};
 pub use policy::{
     IntakeConfiguration, MergeConfiguration, PolicyError, RepositoryIdentity, RepositoryPolicy,
     RoleConfiguration, load_repository_policy,

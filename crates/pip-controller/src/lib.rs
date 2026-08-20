@@ -9,5 +9,5 @@ pub use ledger::{ControllerError, LedgerController, WorkflowCommand};
 
 pub use scheduling::{
     DispatchContext, DispatchError, ExecutionKind, RolePolicy, WorkflowDispatch, WorkflowPolicy,
-    schedule_effect,
+    schedule_claimed_dispatch, schedule_effect,
 };

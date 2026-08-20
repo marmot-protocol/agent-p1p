@@ -288,6 +288,9 @@ pub enum ApplyResult {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct StoredCase {
     pub case_key: String,
+    pub repository_id: u64,
+    pub issue_number: u64,
+    pub workflow_version: u32,
     pub state: String,
     pub state_revision: u64,
     pub policy_revision: u64,
@@ -658,8 +661,11 @@ impl Store {
         Ok(self
             .connection
             .query_row(
-                "SELECT next_state, state_revision, policy_revision, remediation_round, plan_version, pr_number, head_sha
-                 FROM events WHERE case_key = ?1 ORDER BY state_revision DESC LIMIT 1",
+                "SELECT e.next_state, e.state_revision, e.policy_revision, e.remediation_round,
+                        e.plan_version, e.pr_number, e.head_sha,
+                        c.repository_id, c.issue_number, c.workflow_version
+                 FROM events e JOIN cases c ON c.case_key = e.case_key
+                 WHERE e.case_key = ?1 ORDER BY e.state_revision DESC LIMIT 1",
                 [case_key],
                 |row| {
                     let revision: i64 = row.get(1)?;
@@ -669,6 +675,9 @@ impl Store {
                     let pr_number: Option<i64> = row.get(5)?;
                     Ok(StoredCase {
                         case_key: case_key.to_owned(),
+                        repository_id: unsigned(row.get(7)?),
+                        issue_number: unsigned(row.get(8)?),
+                        workflow_version: u32::try_from(row.get::<_, i64>(9)?).unwrap_or_default(),
                         state: row.get(0)?,
                         state_revision: unsigned(revision),
                         policy_revision: unsigned(policy),
@@ -737,26 +746,30 @@ impl Store {
 
     pub fn status(&self, now: u64) -> Result<LedgerStatus> {
         let mut statement = self.connection.prepare(
-            "SELECT case_key, state, state_revision, policy_revision, remediation_round,
+            "SELECT case_key, repository_id, issue_number, workflow_version, state,
+                    state_revision, policy_revision, remediation_round,
                     plan_version, pr_number, head_sha
              FROM cases ORDER BY repository_id, issue_number, workflow_version",
         )?;
         let cases = statement
             .query_map([], |row| {
-                let state_revision: i64 = row.get(2)?;
-                let policy_revision: i64 = row.get(3)?;
-                let remediation_round: i64 = row.get(4)?;
-                let plan_version: i64 = row.get(5)?;
-                let pr_number: Option<i64> = row.get(6)?;
+                let state_revision: i64 = row.get(5)?;
+                let policy_revision: i64 = row.get(6)?;
+                let remediation_round: i64 = row.get(7)?;
+                let plan_version: i64 = row.get(8)?;
+                let pr_number: Option<i64> = row.get(9)?;
                 Ok(StoredCase {
                     case_key: row.get(0)?,
-                    state: row.get(1)?,
+                    repository_id: unsigned(row.get(1)?),
+                    issue_number: unsigned(row.get(2)?),
+                    workflow_version: u32::try_from(row.get::<_, i64>(3)?).unwrap_or_default(),
+                    state: row.get(4)?,
                     state_revision: unsigned(state_revision),
                     policy_revision: unsigned(policy_revision),
                     remediation_round: u32::try_from(remediation_round).unwrap_or_default(),
                     plan_version: u32::try_from(plan_version).unwrap_or_default(),
                     pr_number: pr_number.map(unsigned),
-                    head_sha: row.get(7)?,
+                    head_sha: row.get(10)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -826,6 +839,38 @@ impl Store {
         now: u64,
         lease_seconds: u64,
     ) -> Result<Option<ClaimedEffect>> {
+        self.claim_effect_inner(owner, now, lease_seconds, None)
+    }
+
+    pub fn claim_effect_matching(
+        &mut self,
+        owner: &str,
+        now: u64,
+        lease_seconds: u64,
+        effect_types: &[&str],
+    ) -> Result<Option<ClaimedEffect>> {
+        let unique = effect_types
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        if effect_types.is_empty()
+            || unique.len() != effect_types.len()
+            || effect_types.iter().any(|value| value.trim().is_empty())
+        {
+            return Err(StoreError::InvalidInput(
+                "unique nonempty effect types are required",
+            ));
+        }
+        self.claim_effect_inner(owner, now, lease_seconds, Some(effect_types))
+    }
+
+    fn claim_effect_inner(
+        &mut self,
+        owner: &str,
+        now: u64,
+        lease_seconds: u64,
+        effect_types: Option<&[&str]>,
+    ) -> Result<Option<ClaimedEffect>> {
         self.ensure_writable()?;
         if owner.trim().is_empty() || lease_seconds == 0 {
             return Err(StoreError::InvalidInput(
@@ -838,24 +883,30 @@ impl Store {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let candidate: Option<(String, String, i64, String, String)> = transaction
-            .query_row(
+        let candidate: Option<(String, String, i64, String, String)> = {
+            let mut statement = transaction.prepare(
                 "SELECT effect_id, case_key, state_revision, effect_type, payload_json
                  FROM outbox
                  WHERE delivered_at IS NULL AND (lease_until IS NULL OR lease_until < ?1)
-                 ORDER BY created_at, effect_id LIMIT 1",
-                [sql_u64(now)?],
-                |row| {
-                    Ok((
+                 ORDER BY created_at, effect_id",
+            )?;
+            let mut rows = statement.query([sql_u64(now)?])?;
+            let mut found = None;
+            while let Some(row) = rows.next()? {
+                let effect_type: String = row.get(3)?;
+                if effect_types.is_none_or(|allowed| allowed.contains(&effect_type.as_str())) {
+                    found = Some((
                         row.get(0)?,
                         row.get(1)?,
                         row.get(2)?,
-                        row.get(3)?,
+                        effect_type,
                         row.get(4)?,
-                    ))
-                },
-            )
-            .optional()?;
+                    ));
+                    break;
+                }
+            }
+            found
+        };
         let Some((effect_id, case_key, state_revision, effect_type, payload_json)) = candidate
         else {
             transaction.commit()?;
@@ -1371,23 +1422,28 @@ fn replay_or_conflict(
 fn query_case(connection: &Connection, case_key: &str) -> Result<Option<StoredCase>> {
     Ok(connection
         .query_row(
-            "SELECT case_key, state, state_revision, policy_revision, remediation_round, plan_version, pr_number, head_sha FROM cases WHERE case_key = ?1",
+            "SELECT case_key, repository_id, issue_number, workflow_version, state,
+                    state_revision, policy_revision, remediation_round, plan_version,
+                    pr_number, head_sha FROM cases WHERE case_key = ?1",
             [case_key],
             |row| {
-                let revision: i64 = row.get(2)?;
-                let policy: i64 = row.get(3)?;
-                let remediation: i64 = row.get(4)?;
-                let plan: i64 = row.get(5)?;
-                let pr_number: Option<i64> = row.get(6)?;
+                let revision: i64 = row.get(5)?;
+                let policy: i64 = row.get(6)?;
+                let remediation: i64 = row.get(7)?;
+                let plan: i64 = row.get(8)?;
+                let pr_number: Option<i64> = row.get(9)?;
                 Ok(StoredCase {
                     case_key: row.get(0)?,
-                    state: row.get(1)?,
+                    repository_id: unsigned(row.get(1)?),
+                    issue_number: unsigned(row.get(2)?),
+                    workflow_version: u32::try_from(row.get::<_, i64>(3)?).unwrap_or_default(),
+                    state: row.get(4)?,
                     state_revision: unsigned(revision),
                     policy_revision: unsigned(policy),
                     remediation_round: u32::try_from(remediation).unwrap_or_default(),
                     plan_version: u32::try_from(plan).unwrap_or_default(),
                     pr_number: pr_number.map(unsigned),
-                    head_sha: row.get(7)?,
+                    head_sha: row.get(10)?,
                 })
             },
         )

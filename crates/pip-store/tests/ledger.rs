@@ -98,6 +98,9 @@ fn case_event_projection_and_outbox_are_one_transaction() {
     );
 
     let case = store.case("repo:984321#1240@1").unwrap().unwrap();
+    assert_eq!(case.repository_id, 984_321);
+    assert_eq!(case.issue_number, 1240);
+    assert_eq!(case.workflow_version, 1);
     assert_eq!(case.state, "PLANNING");
     assert_eq!(case.state_revision, 1);
     assert_eq!(store.event_count().unwrap(), 1);
@@ -296,6 +299,52 @@ fn outbox_leases_are_exclusive_recoverable_and_acknowledged() {
         .acknowledge_effect(&reclaimed.effect_id, "worker-b", 132)
         .unwrap();
     assert!(store.claim_effect("worker-c", 200, 30).unwrap().is_none());
+}
+
+#[test]
+fn dispatch_claim_skips_other_durable_effect_types_without_leasing_them() {
+    let (_directory, mut store) = open();
+    let mut case = new_case();
+    case.effects = vec![
+        EffectInput {
+            effect_id: "effect-observe-ci".into(),
+            effect_type: "OBSERVE_CI".into(),
+            payload: json!({"case_key": case.case_key}),
+        },
+        EffectInput {
+            effect_id: "effect-dispatch-planner".into(),
+            effect_type: "DISPATCH_PLANNER".into(),
+            payload: json!({"case_key": case.case_key}),
+        },
+    ];
+    store.create_case(&case).unwrap();
+
+    let claimed = store
+        .claim_effect_matching(
+            "dispatcher",
+            100,
+            30,
+            &[
+                "DISPATCH_PLANNER",
+                "DISPATCH_BUILDER",
+                "DISPATCH_REVIEWERS",
+                "DISPATCH_FINAL_REVIEWER",
+            ],
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(claimed.effect_id, "effect-dispatch-planner");
+    store
+        .acknowledge_effect(&claimed.effect_id, "dispatcher", 101)
+        .unwrap();
+    assert_eq!(
+        store
+            .claim_effect("observer", 102, 30)
+            .unwrap()
+            .unwrap()
+            .effect_id,
+        "effect-observe-ci"
+    );
 }
 
 #[test]
