@@ -12,6 +12,7 @@ mod policy;
 mod release;
 mod results;
 mod shadow;
+mod takeover;
 
 pub use authorization::{
     ActiveAuthorization, AuthorizationBlock, AuthorizationError, reconcile_active_authorization,
@@ -29,8 +30,8 @@ pub use install::{
 };
 pub use intake::{ActiveIntakeError, ActiveIntakeReport, IntakeCandidateResult, reconcile_intake};
 pub use policy::{
-    IntakeConfiguration, MergeConfiguration, PolicyError, RepositoryIdentity, RepositoryPolicy,
-    RoleConfiguration, load_repository_policy,
+    GitHubConfiguration, IntakeConfiguration, MergeConfiguration, PolicyError, RepositoryIdentity,
+    RepositoryPolicy, RoleConfiguration, load_repository_policy,
 };
 pub use release::{
     ArtifactManifest, ReleaseError, ReleaseManifest, ReleaseMetadata, VerifiedRelease,
@@ -40,3 +41,4 @@ pub use results::{
     ResultCycle, ResultCycleError, ingest_completed_once, ingest_completed_once_with,
 };
 pub use shadow::{IntakeSource, ShadowCandidate, ShadowError, ShadowReport, reconcile_read_only};
+pub use takeover::{TakeoverCycle, TakeoverError, reconcile_takeover_once};

@@ -37,6 +37,12 @@ pub struct IntakeConfiguration {
     pub global_active_limit: u32,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitHubConfiguration {
+    pub automation_actor_id: Option<u64>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum MergeModeConfiguration {
@@ -88,6 +94,7 @@ pub struct RepositoryPolicy {
     pub workflow_version: u32,
     pub workspace: String,
     pub branch_prefix: String,
+    pub github: GitHubConfiguration,
     pub intake: IntakeConfiguration,
     pub dispatch_enabled: bool,
     pub merge: MergeConfiguration,
@@ -213,6 +220,8 @@ fn validate_policy(policy: &RepositoryPolicy) -> Result<(), PolicyError> {
         && !policy.workspace.trim().is_empty()
         && policy.workspace.starts_with('/')
         && valid_branch_prefix(&policy.branch_prefix)
+        && policy.github.automation_actor_id.is_none_or(|id| id > 0)
+        && (!policy.dispatch_enabled || policy.github.automation_actor_id.is_some())
         && valid_segment(&policy.intake.label)
         && !trusted.is_empty()
         && trusted.len() == policy.intake.trusted_actor_ids.len()

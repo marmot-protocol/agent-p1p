@@ -144,6 +144,7 @@ fn active_policy(repository_limit: u32, global_limit: u32) -> RepositoryPolicy {
     policy.intake.enabled = true;
     policy.intake.paused = false;
     policy.dispatch_enabled = true;
+    policy.github.automation_actor_id = Some(202_880);
     policy.intake.trusted_actor_ids = vec![202_880];
     policy.intake.excluded_issue_numbers.clear();
     policy.intake.repository_active_limit = repository_limit;

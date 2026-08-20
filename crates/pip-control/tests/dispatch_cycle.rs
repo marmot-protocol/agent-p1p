@@ -154,6 +154,7 @@ fn active_policy() -> pip_control::RepositoryPolicy {
     value["intake"]["enabled"] = json!(true);
     value["intake"]["paused"] = json!(false);
     value["dispatch_enabled"] = json!(true);
+    value["github"]["automation_actor_id"] = json!(202880);
     load_repository_policy(&serde_json::to_vec(&value).unwrap()).unwrap()
 }
 

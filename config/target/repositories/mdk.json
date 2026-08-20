@@ -11,6 +11,9 @@
   "workflow_version": 2,
   "workspace": "/var/lib/pip-v2/worktrees/mdk",
   "branch_prefix": "pip/v2/",
+  "github": {
+    "automation_actor_id": null
+  },
   "intake": {
     "enabled": false,
     "paused": true,

@@ -21,7 +21,7 @@ exist. It is not evidence of live-host installation or a completed canary.
 | CI reconciliation | Independent current and historical check/status evaluation on the ledger-bound PR head | Fixture and controller-cycle tests |
 | GitHub writes | Idempotent issue comment, draft PR, exact-head review, and guarded merge adapter primitives | Adapter tests; not all are wired to outbox consumption |
 | Release/install | Signed source-bound release cohort, artifact verification, content-addressed install, rollback, schema migration, and hardened non-dispatching timer | Local tests and disposable systemd container |
-| Active controller | One `controller-cycle` command that ingests completed runs, reconciles CI, performs generic intake, freshly revalidates every active issue authorization, and projects dispatch effects only while that gate passes | Local tests; active unit template is packaged but not installed or enabled |
+| Active controller | One `controller-cycle` command that ingests completed runs, reconciles CI, performs generic intake, commits authorization removal or foreign-PR takeover, and projects dispatch effects only while fresh gates pass | Local tests; active unit template is packaged but not installed or enabled |
 
 ## What is deliberately inert
 
@@ -41,11 +41,10 @@ These are implementation gaps, not merely missing operational evidence:
    particular, independently verify and publish planner comments, case-owned
    branches/draft PRs, role-stamped reviews, and human-held disposition without
    giving workers direct workflow authority.
-2. Reconcile foreign commits/ownership and commit durable human takeover.
-   Authorization removal is now committed as an immutable abandonment event
-   and transactionally supersedes older pending effects. Review threads,
-   current mergeability, and policy revision still require a final-review
-   preflight before dispatch and disposition.
+2. Build the final-review preflight for review threads, current mergeability,
+   policy revision, and exact published review evidence. Authorization removal
+   and foreign PR ownership/head changes now commit immutable abandonment or
+   takeover events and transactionally supersede older pending effects.
 3. Build the complete deterministic final-review bundle from immutable ledger
    references and fresh GitHub observations. A valid final worker result alone
    is not sufficient.

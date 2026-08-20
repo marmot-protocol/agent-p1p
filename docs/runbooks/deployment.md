@@ -216,6 +216,8 @@ board: pip-mdk
 intake_label: pip-ok
 intake_enabled: false
 dispatch_enabled: false
+github:
+  automation_actor_id: null
 max_active_cases: 1
 merge_mode: shadow
 autonomous_merge: false
@@ -228,9 +230,11 @@ After reviewed release installation and non-dispatching reconciliation:
    planner to validate; do not encode it in policy.
 3. Confirm no other open MDK issue currently satisfies Pip v2 intake policy.
 4. Enable repository intake and dispatch with `max_active_cases: 1`.
-5. Have a trusted actor apply `pip-ok` to that one issue.
-6. Observe the generic intake path create exactly one case and planner task.
-7. Keep merge mode shadow throughout the trial.
+5. Set `github.automation_actor_id` to the verified numeric identity used by
+   the controller credential; activation fails closed while it is absent.
+6. Have a trusted actor apply `pip-ok` to that one issue.
+7. Observe the generic intake path create exactly one case and planner task.
+8. Keep merge mode shadow throughout the trial.
 
 If another issue becomes eligible, concurrency prevents its activation but the
 operator should remove the unintended authorization and record the discrepancy.

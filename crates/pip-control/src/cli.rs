@@ -174,6 +174,8 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
     } else {
         json!({"result": "disabled"})
     };
+    let takeover = crate::reconcile_takeover_once(&reader, &policy, &mut store, now)
+        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     let authorization = crate::reconcile_active_authorization(&reader, &policy, &mut store, now)
         .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     let dispatch = crate::dispatch_once(
@@ -198,6 +200,7 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         "worker_result": result,
         "ci": ci,
         "intake": intake,
+        "takeover": takeover,
         "authorization": authorization,
         "dispatch": dispatch,
     }))

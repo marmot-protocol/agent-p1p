@@ -163,6 +163,11 @@ proves whether GitHub performed it.
   immutable abandonment event and supersedes older pending effects in the same
   SQLite transaction.
 - Human commits to or ownership changes on a Pip PR trigger takeover policy.
+- Active policy names the numeric GitHub automation actor. The controller also
+  derives the one allowed case branch from repository, issue, and workflow
+  identity. A foreign PR author, repository, branch, disposition change, or
+  protected-state head change commits `HUMAN_TOOK_OVER`; expected head movement
+  is allowed only while a builder is active in `BUILDING` or `REMEDIATING`.
 - A running worker may be terminated only through an identity-checked process
   lease; PID alone is insufficient.
 - Passive external lookup failure retains the last durable state but cannot
