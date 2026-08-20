@@ -340,6 +340,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pip-executor"
+version = "0.1.0"
+dependencies = [
+ "pip-core",
+ "tempfile",
+ "wait-timeout",
+]
+
+[[package]]
 name = "pip-github"
 version = "0.1.0"
 dependencies = [

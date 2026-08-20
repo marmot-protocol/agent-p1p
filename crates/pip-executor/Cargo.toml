@@ -1,0 +1,13 @@
+[package]
+name = "pip-executor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+pip-core = { path = "../pip-core" }
+wait-timeout.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
