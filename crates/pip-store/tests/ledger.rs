@@ -407,6 +407,43 @@ fn effect_owner_can_release_a_live_lease_for_immediate_retry() {
 }
 
 #[test]
+fn external_effect_evidence_and_delivery_commit_atomically_and_replay() {
+    let (_directory, mut store) = open();
+    store.create_case(&new_case()).unwrap();
+    let claimed = store.claim_effect("consumer", 100, 30).unwrap().unwrap();
+    let evidence = EvidenceInput {
+        evidence_id: format!("evidence-effect-{}", claimed.effect_id),
+        kind: "GITHUB_EFFECT".into(),
+        source: "github".into(),
+        payload: json!({"result":"created","external_id":9001}),
+    };
+
+    assert_eq!(
+        store
+            .complete_effect_evidence(&claimed.effect_id, "consumer", 101, &evidence)
+            .unwrap(),
+        ApplyResult::Applied
+    );
+    assert_eq!(store.evidence_count().unwrap(), 1);
+    assert_eq!(store.status(101).unwrap().outbox_delivered, 1);
+    assert_eq!(
+        store
+            .complete_effect_evidence(&claimed.effect_id, "retry", 102, &evidence)
+            .unwrap(),
+        ApplyResult::Replayed
+    );
+
+    let conflicting = EvidenceInput {
+        payload: json!({"result":"different"}),
+        ..evidence
+    };
+    assert!(matches!(
+        store.complete_effect_evidence(&claimed.effect_id, "retry", 102, &conflicting),
+        Err(StoreError::IdempotencyConflict { .. })
+    ));
+}
+
+#[test]
 fn online_backup_is_a_complete_reopenable_ledger() {
     let (directory, mut store) = open();
     store.create_case(&new_case()).unwrap();

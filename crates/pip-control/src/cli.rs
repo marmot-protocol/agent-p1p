@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use pip_github::{GitHubReader, UreqTransport};
+use pip_github::{GitHubReader, GitHubWriter, UreqTransport};
 use pip_store::Store;
 use serde_json::{Value, json};
 
@@ -151,8 +151,17 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         })
         .transpose()?
         .unwrap_or(60);
+    let transport = UreqTransport::new(Duration::from_secs(20));
     let reader = GitHubReader::new(
-        UreqTransport::new(Duration::from_secs(20)),
+        transport.clone(),
+        "https://api.github.com",
+        token,
+        4 * 1024 * 1024,
+        10,
+    )
+    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let writer = GitHubWriter::new(
+        transport,
         "https://api.github.com",
         token,
         4 * 1024 * 1024,
@@ -188,6 +197,16 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         authorization.is_authorized(),
     )
     .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let disposition = crate::consume_disposition_once(
+        &writer,
+        &policy,
+        &mut store,
+        now,
+        required(&options, "--owner")?,
+        lease_seconds,
+        authorization.is_authorized(),
+    )
+    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     let dispatch = crate::dispatch_once(
         &mut store,
         &policy,
@@ -213,6 +232,7 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         "takeover": takeover,
         "authorization": authorization,
         "final_preflight": final_preflight,
+        "disposition": disposition,
         "dispatch": dispatch,
     }))
 }

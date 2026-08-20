@@ -328,6 +328,11 @@ In shadow mode, `READY` becomes `SHADOW_READY` and produces a human-held
 notification. It cannot merge. In explicitly authorized guarded-merge mode,
 `READY` permits the deterministic merge transaction to begin.
 
+For the repository-scoped implementation, the shadow notification is an
+idempotent provenance-marked comment on the draft PR. Human-wait and escalation
+notifications use the issue. Losing issue authorization suppresses new comment
+writes; abandonment and takeover are still recorded locally and durably.
+
 ## 13. Guarded merge
 
 Merge is a deterministic external transaction, never a free-form model action.

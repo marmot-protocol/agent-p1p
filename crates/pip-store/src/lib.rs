@@ -1073,6 +1073,91 @@ impl Store {
         Ok(())
     }
 
+    pub fn complete_effect_evidence(
+        &mut self,
+        effect_id: &str,
+        owner: &str,
+        now: u64,
+        evidence: &EvidenceInput,
+    ) -> Result<ApplyResult> {
+        self.ensure_writable()?;
+        if effect_id.trim().is_empty()
+            || owner.trim().is_empty()
+            || evidence.evidence_id.trim().is_empty()
+            || evidence.kind.trim().is_empty()
+            || evidence.source.trim().is_empty()
+            || !evidence.payload.is_object()
+        {
+            return Err(StoreError::InvalidInput(
+                "effect, owner, and object evidence identity are required",
+            ));
+        }
+        let payload_json = serde_json::to_string(&evidence.payload)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (case_key, delivered, superseded): (String, Option<i64>, Option<i64>) = transaction
+            .query_row(
+                "SELECT case_key, delivered_at, superseded_at FROM outbox WHERE effect_id = ?1",
+                [effect_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::LeaseLost(effect_id.to_owned()))?;
+        let existing: Option<(String, String, String, String)> = transaction
+            .query_row(
+                "SELECT case_key, kind, source, payload_json FROM evidence WHERE evidence_id = ?1",
+                [&evidence.evidence_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+        if delivered.is_some() {
+            if existing
+                != Some((
+                    case_key,
+                    evidence.kind.clone(),
+                    evidence.source.clone(),
+                    payload_json,
+                ))
+            {
+                return Err(StoreError::IdempotencyConflict {
+                    id: evidence.evidence_id.clone(),
+                });
+            }
+            transaction.commit()?;
+            return Ok(ApplyResult::Replayed);
+        }
+        if superseded.is_some() || existing.is_some() {
+            return Err(StoreError::IdempotencyConflict {
+                id: evidence.evidence_id.clone(),
+            });
+        }
+        let lease_valid: bool = transaction.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM outbox
+                WHERE effect_id = ?1 AND delivered_at IS NULL AND superseded_at IS NULL
+                  AND lease_owner = ?2 AND lease_until >= ?3
+            )",
+            params![effect_id, owner, sql_u64(now)?],
+            |row| row.get(0),
+        )?;
+        if !lease_valid {
+            return Err(StoreError::LeaseLost(effect_id.to_owned()));
+        }
+        insert_evidence(&transaction, &case_key, now, std::slice::from_ref(evidence))?;
+        let updated = transaction.execute(
+            "UPDATE outbox SET delivered_at = ?1, lease_owner = NULL, lease_until = NULL
+             WHERE effect_id = ?2 AND lease_owner = ?3 AND lease_until >= ?1
+               AND delivered_at IS NULL AND superseded_at IS NULL",
+            params![sql_u64(now)?, effect_id, owner],
+        )?;
+        if updated != 1 {
+            return Err(StoreError::LeaseLost(effect_id.to_owned()));
+        }
+        transaction.commit()?;
+        Ok(ApplyResult::Applied)
+    }
+
     pub fn complete_task_projection(
         &mut self,
         input: &TaskProjectionInput,
