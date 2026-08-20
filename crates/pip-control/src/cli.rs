@@ -6,8 +6,10 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use pip_github::{GitHubReader, UreqTransport};
 use pip_store::Store;
 use serde_json::{Value, json};
 
@@ -24,6 +26,7 @@ pub enum CliError {
     InputTooLarge(PathBuf),
     Filesystem(String),
     Ledger(String),
+    Reconciliation(String),
     Release(ReleaseError),
     Clock,
 }
@@ -45,6 +48,9 @@ impl fmt::Display for CliError {
             ),
             Self::Filesystem(error) => write!(formatter, "input filesystem error: {error}"),
             Self::Ledger(error) => write!(formatter, "ledger status failed: {error}"),
+            Self::Reconciliation(error) => {
+                write!(formatter, "shadow reconciliation failed: {error}")
+            }
             Self::Release(error) => error.fmt(formatter),
             Self::Clock => formatter.write_str("system clock is before the Unix epoch"),
         }
@@ -68,8 +74,43 @@ pub fn run_cli(arguments: impl IntoIterator<Item = String>) -> Result<Value, Cli
         "status" => status(&arguments[1..]),
         "verify-release" => verify(&arguments[1..]),
         "seal-release" => seal(&arguments[1..]),
+        "shadow-reconcile" => shadow_reconcile(&arguments[1..]),
         _ => Err(CliError::InvalidArgument(command.into())),
     }
+}
+
+fn shadow_reconcile(arguments: &[String]) -> Result<Value, CliError> {
+    let options = options(arguments, &["--policy", "--github-token"], &["--now"])?;
+    let policy_bytes = read_bounded(Path::new(required(&options, "--policy")?), 1024 * 1024)?;
+    let policy = crate::load_repository_policy(&policy_bytes)
+        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let token = read_secret(Path::new(required(&options, "--github-token")?), 1024)?;
+    let token = std::str::from_utf8(&token)
+        .map_err(|_| CliError::InvalidArgument("--github-token".into()))?
+        .trim();
+    if token.is_empty() {
+        return Err(CliError::InvalidArgument("--github-token".into()));
+    }
+    let now = options
+        .get("--now")
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|_| CliError::InvalidArgument("--now".into()))
+        })
+        .transpose()?
+        .map_or_else(current_time, Ok)?;
+    let reader = GitHubReader::new(
+        UreqTransport::new(Duration::from_secs(20)),
+        "https://api.github.com",
+        token,
+        4 * 1024 * 1024,
+        10,
+    )
+    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let report = crate::reconcile_read_only(&reader, &policy, now, 0, 0)
+        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    serde_json::to_value(report).map_err(|error| CliError::Reconciliation(error.to_string()))
 }
 
 fn seal(arguments: &[String]) -> Result<Value, CliError> {

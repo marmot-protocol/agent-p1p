@@ -472,6 +472,7 @@ dependencies = [
  "pip-contracts",
  "pip-controller",
  "pip-core",
+ "pip-github",
  "pip-store",
  "serde",
  "serde_json",
