@@ -6,7 +6,7 @@ mod write;
 
 pub use write::{
     CommentSpec, GitHubWriter, MergeModePolicy, MergeSpec, MutationRequest, MutationResult,
-    MutationTransport,
+    MutationTransport, PullRequestSpec, ReviewEvent, ReviewMutationSpec,
 };
 
 use std::collections::{BTreeMap, BTreeSet};

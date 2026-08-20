@@ -4,7 +4,8 @@ use std::rc::Rc;
 
 use pip_github::{
     CommentSpec, GitHubError, GitHubWriter, MergeModePolicy, MergeSpec, MutationRequest,
-    MutationResult, MutationTransport, ReadResponse,
+    MutationResult, MutationTransport, PullRequestSpec, ReadResponse, ReviewEvent,
+    ReviewMutationSpec,
 };
 
 #[derive(Clone, Default)]
@@ -155,4 +156,258 @@ fn shadow_or_disabled_policy_cannot_send_a_merge_request() {
         Err(GitHubError::MutationDisabled)
     ));
     assert!(transport.requests.borrow().is_empty());
+}
+
+fn pull_request() -> PullRequestSpec {
+    PullRequestSpec {
+        owner: "marmot-protocol".into(),
+        repository: "mdk".into(),
+        repository_id: 984_321,
+        effect_id: "effect-draft-pr-1".into(),
+        expected_actor_id: 1001,
+        title: "Fix issue 1240".into(),
+        body: "Implements the accepted plan.".into(),
+        head_branch: "pip/v2/repo-984321/issue-1240/workflow-1".into(),
+        head_sha: "b".repeat(40),
+        base_branch: "main".into(),
+    }
+}
+
+#[test]
+fn draft_pull_request_is_created_once_on_the_owned_exact_head() {
+    let transport = FakeTransport::default();
+    transport.push(200, "[]");
+    let mut response = serde_json::json!({
+        "id": 9001,
+        "number": 77,
+        "state": "open",
+        "draft": true,
+        "title": "Fix issue 1240",
+        "body": "marker replaced below",
+        "html_url": "https://github.test/pr/77",
+        "user": {"id": 1001},
+        "head": {
+            "ref": "pip/v2/repo-984321/issue-1240/workflow-1",
+            "sha": "b".repeat(40),
+            "repo": {"id": 984321}
+        },
+        "base": {"ref": "main"}
+    });
+    let writer = writer(transport.clone());
+    let expected_body = writer.render_pull_request_body(&pull_request()).unwrap();
+    response["body"] = serde_json::json!(expected_body);
+    transport.push(201, &response.to_string());
+
+    assert_eq!(
+        writer.ensure_draft_pull_request(&pull_request()).unwrap(),
+        MutationResult::Created(77)
+    );
+    let requests = transport.requests.borrow();
+    assert_eq!([requests[0].method, requests[1].method], ["GET", "POST"]);
+    let posted: serde_json::Value = serde_json::from_slice(&requests[1].body).unwrap();
+    assert_eq!(posted["draft"], true);
+    assert_eq!(posted["head"], pull_request().head_branch);
+    assert!(
+        posted["body"]
+            .as_str()
+            .unwrap()
+            .contains("effect=effect-draft-pr-1")
+    );
+}
+
+#[test]
+fn existing_owned_draft_is_reused_but_foreign_branch_ownership_blocks() {
+    let transport = FakeTransport::default();
+    let github = writer(transport.clone());
+    let body = github.render_pull_request_body(&pull_request()).unwrap();
+    transport.push(
+        200,
+        &serde_json::json!([{
+            "id": 9001,
+            "number": 77,
+            "state": "open",
+            "draft": true,
+            "title": "Fix issue 1240",
+            "body": body,
+            "html_url": "https://github.test/pr/77",
+            "user": {"id": 1001},
+            "head": {"ref": pull_request().head_branch, "sha": "b".repeat(40), "repo": {"id": 984321}},
+            "base": {"ref": "main"}
+        }])
+        .to_string(),
+    );
+    assert_eq!(
+        github.ensure_draft_pull_request(&pull_request()).unwrap(),
+        MutationResult::Existing(77)
+    );
+    assert_eq!(transport.requests.borrow().len(), 1);
+
+    let transport = FakeTransport::default();
+    transport.push(
+        200,
+        &serde_json::json!([{
+            "id": 9002,
+            "number": 78,
+            "state": "open",
+            "draft": true,
+            "title": "Human PR",
+            "body": "no marker",
+            "html_url": "https://github.test/pr/78",
+            "user": {"id": 2002},
+            "head": {"ref": pull_request().head_branch, "sha": "b".repeat(40), "repo": {"id": 984321}},
+            "base": {"ref": "main"}
+        }])
+        .to_string(),
+    );
+    assert!(matches!(
+        writer(transport).ensure_draft_pull_request(&pull_request()),
+        Err(GitHubError::OwnershipConflict)
+    ));
+}
+
+#[test]
+fn owned_draft_content_is_updated_without_changing_its_head() {
+    let transport = FakeTransport::default();
+    let github = writer(transport.clone());
+    let desired = pull_request();
+    let mut previous = desired.clone();
+    previous.title = "Earlier title".into();
+    previous.body = "Earlier body.".into();
+    let previous_body = github.render_pull_request_body(&previous).unwrap();
+    let desired_body = github.render_pull_request_body(&desired).unwrap();
+    transport.push(
+        200,
+        &serde_json::json!([{
+            "id": 9001,
+            "number": 77,
+            "state": "open",
+            "draft": true,
+            "title": previous.title,
+            "body": previous_body,
+            "html_url": "https://github.test/pr/77",
+            "user": {"id": 1001},
+            "head": {"ref": desired.head_branch, "sha": desired.head_sha, "repo": {"id": 984321}},
+            "base": {"ref": "main"}
+        }])
+        .to_string(),
+    );
+    transport.push(
+        200,
+        &serde_json::json!({
+            "id": 9001,
+            "number": 77,
+            "state": "open",
+            "draft": true,
+            "title": desired.title,
+            "body": desired_body,
+            "html_url": "https://github.test/pr/77",
+            "user": {"id": 1001},
+            "head": {"ref": desired.head_branch, "sha": desired.head_sha, "repo": {"id": 984321}},
+            "base": {"ref": "main"}
+        })
+        .to_string(),
+    );
+
+    assert_eq!(
+        github.ensure_draft_pull_request(&desired).unwrap(),
+        MutationResult::Updated(77)
+    );
+    let requests = transport.requests.borrow();
+    assert_eq!(requests[1].method, "PATCH");
+    let patched: serde_json::Value = serde_json::from_slice(&requests[1].body).unwrap();
+    assert_eq!(patched["title"], desired.title);
+    assert!(patched.get("head").is_none());
+}
+
+#[test]
+fn exact_head_review_is_published_once_with_role_provenance() {
+    let spec = ReviewMutationSpec {
+        owner: "marmot-protocol".into(),
+        repository: "mdk".into(),
+        pull_request_number: 77,
+        effect_id: "effect-review-secperf-r1".into(),
+        expected_actor_id: 1001,
+        expected_head_sha: "b".repeat(40),
+        body: "No blocking security findings.".into(),
+        event: ReviewEvent::Approve,
+    };
+    let transport = FakeTransport::default();
+    transport.push(200, "[]");
+    let writer = writer(transport.clone());
+    let expected_body = writer.render_review_body(&spec).unwrap();
+    transport.push(
+        200,
+        &serde_json::json!({
+            "id": 81,
+            "user": {"id": 1001},
+            "body": expected_body,
+            "state": "APPROVED",
+            "commit_id": "b".repeat(40),
+            "html_url": "https://github.test/pr/77#review-81"
+        })
+        .to_string(),
+    );
+    assert_eq!(
+        writer.ensure_pull_request_review(&spec).unwrap(),
+        MutationResult::Created(81)
+    );
+    let requests = transport.requests.borrow();
+    assert_eq!([requests[0].method, requests[1].method], ["GET", "POST"]);
+    let posted: serde_json::Value = serde_json::from_slice(&requests[1].body).unwrap();
+    assert_eq!(posted["commit_id"], "b".repeat(40));
+    assert_eq!(posted["event"], "APPROVE");
+}
+
+#[test]
+fn exact_review_replay_is_a_noop_but_head_drift_conflicts() {
+    let spec = ReviewMutationSpec {
+        owner: "marmot-protocol".into(),
+        repository: "mdk".into(),
+        pull_request_number: 77,
+        effect_id: "effect-review-general-r1".into(),
+        expected_actor_id: 1001,
+        expected_head_sha: "b".repeat(40),
+        body: "No blocking general findings.".into(),
+        event: ReviewEvent::Approve,
+    };
+    let transport = FakeTransport::default();
+    let github = writer(transport.clone());
+    let body = github.render_review_body(&spec).unwrap();
+    transport.push(
+        200,
+        &serde_json::json!([{
+            "id": 82,
+            "user": {"id": 1001},
+            "body": body,
+            "state": "APPROVED",
+            "commit_id": "b".repeat(40),
+            "html_url": "https://github.test/pr/77#review-82"
+        }])
+        .to_string(),
+    );
+    assert_eq!(
+        github.ensure_pull_request_review(&spec).unwrap(),
+        MutationResult::Existing(82)
+    );
+    assert_eq!(transport.requests.borrow().len(), 1);
+
+    let transport = FakeTransport::default();
+    let github = writer(transport.clone());
+    let body = github.render_review_body(&spec).unwrap();
+    transport.push(
+        200,
+        &serde_json::json!([{
+            "id": 82,
+            "user": {"id": 1001},
+            "body": body,
+            "state": "APPROVED",
+            "commit_id": "c".repeat(40),
+            "html_url": "https://github.test/pr/77#review-82"
+        }])
+        .to_string(),
+    );
+    assert!(matches!(
+        github.ensure_pull_request_review(&spec),
+        Err(GitHubError::IdempotencyConflict)
+    ));
 }
