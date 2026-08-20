@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/pip-core"]
+members = ["crates/pip-contracts", "crates/pip-core"]
 resolver = "3"
 
 [workspace.package]
