@@ -1,0 +1,26 @@
+{
+  "fixture_format": 1,
+  "base": {
+    "case": {"repository_id": 984321, "issue_number": 1240, "workflow_version": 2},
+    "pr_number": 77,
+    "plan_version": 1,
+    "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "builder": {"head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "ci_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "ci_green": true},
+    "ci": {"head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "completed": true, "hollow": false, "rate_limited": false, "required_checks_green": true},
+    "general": {"role": "reviewer-general", "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "approved": true, "blocking_findings": []},
+    "secperf": {"role": "reviewer-secperf", "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "approved": true, "blocking_findings": []},
+    "findings": [{"id": "finding-1", "origin": "reviewer-general", "reviewed_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "resolution_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "mandatory": true, "origin_confirmed": true}],
+    "open_blocking_threads": 0,
+    "pip_owned": true,
+    "mergeable": true,
+    "authorization_valid": true
+  },
+  "cases": [
+    {"name": "complete exact-head evidence", "set": {}, "expected_blockers": []},
+    {"name": "stale current head invalidates all head evidence", "set": {"head_sha": "cccccccccccccccccccccccccccccccccccccccc"}, "expected_blockers": ["BUILDER_HEAD_MISMATCH", "BUILDER_CI_HEAD_MISMATCH", "CI_HEAD_MISMATCH", "GENERAL_REVIEW_HEAD_MISMATCH", "SECPERF_REVIEW_HEAD_MISMATCH", "FINDING_RESOLUTION_HEAD_MISMATCH"]},
+    {"name": "authorization removal fails closed", "set": {"authorization_valid": false}, "expected_blockers": ["AUTHORIZATION_INVALID"]},
+    {"name": "review changes cannot join", "set": {"general.approved": false, "general.blocking_findings": ["finding-2"]}, "expected_blockers": ["GENERAL_REVIEW_NOT_APPROVED", "GENERAL_REVIEW_HAS_BLOCKING_FINDINGS"]},
+    {"name": "origin must confirm resolution", "set": {"findings.0.origin_confirmed": false}, "expected_blockers": ["FINDING_NOT_ORIGIN_CONFIRMED"]},
+    {"name": "rate-limited CI is not green evidence", "set": {"ci.rate_limited": true}, "expected_blockers": ["CI_RATE_LIMITED"]}
+  ]
+}

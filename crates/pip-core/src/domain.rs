@@ -76,12 +76,14 @@ macro_rules! nonzero_id {
 
 nonzero_id!(IssueNumber, NonZeroU64, u64);
 nonzero_id!(RepositoryId, NonZeroU64, u64);
+nonzero_id!(ActorId, NonZeroU64, u64);
+nonzero_id!(PullRequestNumber, NonZeroU64, u64);
 nonzero_id!(WorkflowVersion, NonZeroU32, u32);
 nonzero_id!(PolicyRevision, NonZeroU64, u64);
 nonzero_id!(StateRevision, NonZeroU64, u64);
 nonzero_id!(PlanVersion, NonZeroU32, u32);
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct CaseId {
     repository: RepositoryId,
     issue: IssueNumber,
@@ -156,6 +158,32 @@ macro_rules! textual_id {
 
 textual_id!(RunId, "run ID");
 textual_id!(FindingId, "finding ID");
+textual_id!(EventId, "event ID");
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ObservedAt(u64);
+
+impl ObservedAt {
+    #[must_use]
+    pub const fn new(unix_seconds: u64) -> Self {
+        Self(unix_seconds)
+    }
+
+    #[must_use]
+    pub const fn unix_seconds(self) -> u64 {
+        self.0
+    }
+}
+
+impl StateRevision {
+    #[must_use]
+    pub fn checked_next(self) -> Option<Self> {
+        self.get()
+            .checked_add(1)
+            .and_then(NonZeroU64::new)
+            .map(Self::new)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct GitSha([u8; 40]);

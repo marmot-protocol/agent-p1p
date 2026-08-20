@@ -1,0 +1,34 @@
+{
+  "fixture_format": 1,
+  "base": {
+    "policy": {
+      "revision": 1,
+      "intake_enabled": true,
+      "global_paused": false,
+      "repository_paused": false,
+      "required_label": "pip-ok",
+      "trusted_actor_ids": [1001],
+      "repository_active_limit": 1,
+      "global_active_limit": 4
+    },
+    "observation": {
+      "open": true,
+      "is_pull_request": false,
+      "labels": ["bug", "pip-ok"],
+      "latest_label_actor_id": 1001,
+      "excluded": false,
+      "held": false,
+      "already_owned": false,
+      "repository_active_cases": 0,
+      "global_active_cases": 0
+    }
+  },
+  "cases": [
+    {"name": "eligible issue", "set": {}, "expected_blockers": []},
+    {"name": "untrusted label actor", "set": {"observation.latest_label_actor_id": 2002}, "expected_blockers": ["UNTRUSTED_LABEL_ACTOR"]},
+    {"name": "required label absent", "set": {"observation.labels": ["bug"]}, "expected_blockers": ["REQUIRED_LABEL_MISSING"]},
+    {"name": "global pause is immediately restrictive", "set": {"policy.global_paused": true}, "expected_blockers": ["GLOBAL_PAUSED"]},
+    {"name": "existing workflow ownership prevents duplicates", "set": {"observation.already_owned": true}, "expected_blockers": ["ALREADY_OWNED"]},
+    {"name": "all blockers are stable and ordered", "set": {"policy.intake_enabled": false, "policy.repository_paused": true, "observation.open": false, "observation.excluded": true}, "expected_blockers": ["INTAKE_DISABLED", "REPOSITORY_PAUSED", "ISSUE_CLOSED", "EXCLUDED"]}
+  ]
+}
