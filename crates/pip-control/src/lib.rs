@@ -20,6 +20,7 @@ mod results;
 mod reviews;
 mod shadow;
 mod takeover;
+mod workspace;
 
 pub use authorization::{
     ActiveAuthorization, AuthorizationBlock, AuthorizationError, reconcile_active_authorization,
@@ -33,7 +34,7 @@ pub use direct_worker::{
 };
 pub use dispatch::{
     DispatchCycleContext, DispatchCycleError, DispatchCycleResult, dispatch_once,
-    dispatch_once_with,
+    dispatch_once_with, dispatch_once_with_workspace,
 };
 pub use disposition::{
     DispositionCycle, DispositionError, DispositionWriter, consume_disposition_once,
@@ -68,3 +69,4 @@ pub use reviews::{
 };
 pub use shadow::{IntakeSource, ShadowCandidate, ShadowError, ShadowReport, reconcile_read_only};
 pub use takeover::{TakeoverCycle, TakeoverError, reconcile_takeover_once};
+pub use workspace::{GitWorkspacePreparer, WorkspaceError, WorkspacePreparer};

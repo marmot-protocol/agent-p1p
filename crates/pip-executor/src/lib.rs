@@ -2,11 +2,13 @@
 
 #![forbid(unsafe_code)]
 
+mod checkout;
 mod cursor;
 mod process;
 mod provider;
 mod publication;
 
+pub use checkout::{CheckoutError, CheckoutReconciler};
 pub use cursor::{CursorExecutionError, CursorExecutor, CursorTask};
 mod worktree;
 

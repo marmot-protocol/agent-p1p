@@ -14,7 +14,9 @@ use pip_hermes::{
 use pip_store::{ApplyResult, EffectInput, Store, StoreError, TaskProjectionInput};
 use serde::Serialize;
 
-use crate::{PolicyError, RepositoryPolicy};
+use crate::{
+    GitWorkspacePreparer, PolicyError, RepositoryPolicy, WorkspaceError, WorkspacePreparer,
+};
 
 const DISPATCH_EFFECTS: [&str; 4] = [
     "DISPATCH_PLANNER",
@@ -55,6 +57,7 @@ pub enum DispatchCycleError {
     Hermes(HermesError),
     Gate(GateError),
     Projection(ProjectionError),
+    Workspace(WorkspaceError),
     Serialization(String),
     DispatchPaused,
     InvalidSkillsCommit,
@@ -69,6 +72,7 @@ impl fmt::Display for DispatchCycleError {
             Self::Hermes(error) => error.fmt(formatter),
             Self::Gate(error) => error.fmt(formatter),
             Self::Projection(error) => error.fmt(formatter),
+            Self::Workspace(error) => error.fmt(formatter),
             Self::Serialization(error) => {
                 write!(formatter, "dispatch serialization failed: {error}")
             }
@@ -100,19 +104,40 @@ error_from!(DispatchError, Schedule);
 error_from!(HermesError, Hermes);
 error_from!(GateError, Gate);
 error_from!(ProjectionError, Projection);
+error_from!(WorkspaceError, Workspace);
 
 pub fn dispatch_once(
     store: &mut Store,
     policy: &RepositoryPolicy,
     context: DispatchCycleContext<'_>,
 ) -> Result<DispatchCycleResult, DispatchCycleError> {
-    dispatch_once_with(store, policy, ProcessRunner, context)
+    dispatch_once_with_workspace(store, policy, ProcessRunner, &GitWorkspacePreparer, context)
 }
 
 pub fn dispatch_once_with<R: CommandRunner + Clone>(
     store: &mut Store,
     policy: &RepositoryPolicy,
     runner: R,
+    context: DispatchCycleContext<'_>,
+) -> Result<DispatchCycleResult, DispatchCycleError> {
+    dispatch_once_inner(store, policy, runner, None, context)
+}
+
+pub fn dispatch_once_with_workspace<R: CommandRunner + Clone, W: WorkspacePreparer>(
+    store: &mut Store,
+    policy: &RepositoryPolicy,
+    runner: R,
+    workspace: &W,
+    context: DispatchCycleContext<'_>,
+) -> Result<DispatchCycleResult, DispatchCycleError> {
+    dispatch_once_inner(store, policy, runner, Some(workspace), context)
+}
+
+fn dispatch_once_inner<R: CommandRunner + Clone>(
+    store: &mut Store,
+    policy: &RepositoryPolicy,
+    runner: R,
+    workspace: Option<&dyn WorkspacePreparer>,
     context: DispatchCycleContext<'_>,
 ) -> Result<DispatchCycleResult, DispatchCycleError> {
     if !policy.dispatch_enabled || policy.intake.paused {
@@ -135,6 +160,9 @@ pub fn dispatch_once_with<R: CommandRunner + Clone>(
     let case = store
         .case(&claimed.case_key)?
         .ok_or_else(|| StoreError::MissingCase(claimed.case_key.clone()))?;
+    if let Some(workspace) = workspace {
+        workspace.prepare(policy, &claimed, &case, store)?;
+    }
     let dispatches = schedule_claimed_dispatch(
         &claimed,
         &case,

@@ -125,7 +125,10 @@ fn planner_and_builder_dispatches_are_blocked_behind_controller_gates() {
     let worker = planner[0].bind_gate("gate-1").unwrap();
     assert_eq!(worker.parent_task_ids, ["gate-1"]);
     assert_eq!(worker.assignee, "planner");
-    assert_eq!(worker.workspace, "dir:/var/lib/pip-v2/worktrees/mdk");
+    assert_eq!(
+        worker.workspace,
+        "worktree:/var/lib/pip-v2/worktrees/mdk/repo-984321-issue-1240-workflow-1"
+    );
     assert_eq!(worker.model, "gpt-5.6-sol");
     assert_eq!(worker.body["state_revision"], 8);
     assert_eq!(worker.body["plan_version"], 1);

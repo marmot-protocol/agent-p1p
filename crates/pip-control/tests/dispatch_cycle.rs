@@ -3,10 +3,14 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 
 use pip_control::{
-    DispatchCycleContext, DispatchCycleResult, dispatch_once_with, load_repository_policy,
+    DispatchCycleContext, DispatchCycleError, DispatchCycleResult, WorkspaceError,
+    WorkspacePreparer, dispatch_once_with, dispatch_once_with_workspace, load_repository_policy,
 };
 use pip_hermes::{CommandOutput, CommandRunner, CommandSpec, HermesError, TaskSnapshot};
-use pip_store::{EffectInput, EventInput, NewCase, PolicyInput, Store, TransitionInput};
+use pip_store::{
+    ClaimedEffect, EffectInput, EventInput, NewCase, PolicyInput, Store, StoredCase,
+    TransitionInput,
+};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -36,6 +40,58 @@ impl CommandRunner for FakeRunner {
         self.commands.borrow_mut().push(spec.clone());
         Ok(self.outputs.borrow_mut().pop_front().unwrap())
     }
+}
+
+#[derive(Clone, Default)]
+struct FakeWorkspace {
+    calls: Rc<RefCell<Vec<String>>>,
+    fail: bool,
+}
+
+impl WorkspacePreparer for FakeWorkspace {
+    fn prepare(
+        &self,
+        _policy: &pip_control::RepositoryPolicy,
+        claimed: &ClaimedEffect,
+        case: &StoredCase,
+        _store: &Store,
+    ) -> Result<(), WorkspaceError> {
+        self.calls
+            .borrow_mut()
+            .push(format!("{}:{}", claimed.effect_id, case.state_revision));
+        if self.fail {
+            Err(WorkspaceError::InvalidCase)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[test]
+fn production_dispatch_boundary_prepares_workspace_before_any_hermes_command() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = seeded_store(directory.path());
+    let runner = FakeRunner::default();
+    let workspace = FakeWorkspace {
+        fail: true,
+        ..FakeWorkspace::default()
+    };
+
+    assert!(matches!(
+        dispatch_once_with_workspace(
+            &mut store,
+            &active_policy(),
+            runner.clone(),
+            &workspace,
+            context("controller-1", 100),
+        ),
+        Err(DispatchCycleError::Workspace(WorkspaceError::InvalidCase))
+    ));
+    assert_eq!(
+        workspace.calls.borrow().as_slice(),
+        ["effect-intake-planner:1"]
+    );
+    assert!(runner.commands.borrow().is_empty());
 }
 
 #[test]

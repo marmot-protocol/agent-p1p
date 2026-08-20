@@ -37,9 +37,28 @@ pub struct ProcessGitRunner;
 
 impl GitRunner for ProcessGitRunner {
     fn run(&self, command: &GitCommand) -> Result<GitOutput, AllocationError> {
+        let mut args = vec![
+            "-c".into(),
+            "core.hooksPath=/dev/null".into(),
+            "-c".into(),
+            "credential.helper=".into(),
+            "-c".into(),
+            "http.proxy=".into(),
+            "-c".into(),
+            "http.extraHeader=".into(),
+            "-c".into(),
+            "http.sslVerify=true".into(),
+        ];
+        args.extend(command.args.iter().cloned());
+        let mut environment = crate::sanitized_environment();
+        environment.insert("GIT_CONFIG_GLOBAL".into(), "/dev/null".into());
+        environment.insert("GIT_CONFIG_NOSYSTEM".into(), "1".into());
+        environment.insert("GIT_TERMINAL_PROMPT".into(), "0".into());
         let mut child = Command::new(&command.program)
-            .args(&command.args)
+            .args(args)
             .current_dir(&command.cwd)
+            .env_clear()
+            .envs(environment)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

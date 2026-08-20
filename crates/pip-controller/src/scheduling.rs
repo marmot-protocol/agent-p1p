@@ -172,7 +172,7 @@ impl WorkflowDispatch {
             title: self.worker_title.clone(),
             body: self.worker_body.clone(),
             assignee: self.profile.clone(),
-            workspace: format!("dir:{}", self.workspace),
+            workspace: format!("worktree:{}", self.workspace),
             skills: self.skills.clone(),
             provider: self.provider.clone(),
             model: self.model.clone(),
@@ -525,7 +525,13 @@ fn dispatch(
         worker_title: format!("Run {role_name} for {}", context.case_id),
         source_effect_id: source_effect_id.into(),
         profile: binding.profile.clone(),
-        workspace: policy.workspace.clone(),
+        workspace: format!(
+            "{}/repo-{}-issue-{}-workflow-{}",
+            policy.workspace.trim_end_matches('/'),
+            context.case_id.repository().get(),
+            context.case_id.issue().get(),
+            context.case_id.workflow().get(),
+        ),
         direct_workspace: format!(
             "{}/repo-{}-issue-{}-workflow-{}",
             policy.workspace.trim_end_matches('/'),
