@@ -111,6 +111,18 @@ fn incomplete_or_unsuccessful_run_cannot_be_consumed_as_a_result() {
 }
 
 #[test]
+fn dispatcher_circuit_breaker_is_a_typed_terminal_failure() {
+    let runner = FakeRunner::default();
+    runner.output(
+        r#"{"task":{"id":"task-1","title":"Plan","status":"blocked","assignee":"planner","created_by":"pip-controller","body":"{}"},"runs":[{"outcome":"spawn_failed","profile":"planner","metadata":{}},{"outcome":"gave_up","profile":"planner","metadata":{"failures":2}}]}"#,
+    );
+    assert!(matches!(
+        reader(runner).show_completed_result("pip-mdk", "task-1"),
+        Err(HermesError::RetryLimitReached)
+    ));
+}
+
+#[test]
 fn malformed_oversized_failed_and_timed_out_commands_fail_closed() {
     let runner = FakeRunner::default();
     runner.output("not-json");

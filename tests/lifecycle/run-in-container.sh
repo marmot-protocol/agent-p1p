@@ -78,7 +78,7 @@ second_target=$(readlink -f /opt/pip-v2/current)
 test "$second_target" != "$first_target"
 test -d "$first_target"
 /opt/pip-v2/current/bin/pip-control status --database /var/lib/pip-v2/ledger.db --now 1787220000 \
-  | jq -e '.ok and .ledger.schema_version == 4' >/dev/null
+  | jq -e '.ok and .ledger.schema_version == 5' >/dev/null
 
 install -d -m 0755 /failure-bin
 touch /run/pip-v2-fail-reload-once

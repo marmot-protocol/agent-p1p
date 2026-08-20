@@ -90,6 +90,30 @@ fn loop_bounds_must_be_positive() {
 }
 
 #[test]
+fn an_external_operational_bound_escalates_every_automated_state() {
+    for state in [
+        CaseState::Planning,
+        CaseState::ReadyToBuild,
+        CaseState::Building,
+        CaseState::WaitingCi,
+        CaseState::Reviewing,
+        CaseState::Remediating,
+        CaseState::FinalReview,
+        CaseState::ReadyToMerge,
+        CaseState::Merging,
+    ] {
+        let decision = transition(
+            state,
+            Event::OperationalBoundReached,
+            TransitionContext::default(),
+        )
+        .unwrap();
+        assert_eq!(decision.next_state, CaseState::Escalated);
+        assert_eq!(decision.effects, [Effect::Escalate]);
+    }
+}
+
+#[test]
 fn unknown_serialized_values_fail_closed() {
     assert!(CaseState::from_str("reviewing").is_err());
     assert!(Event::from_str("AUTO_APPROVE").is_err());

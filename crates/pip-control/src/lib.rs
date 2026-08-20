@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod authorization;
+mod bounds;
 mod ci;
 mod cli;
 mod direct_queue;
@@ -27,6 +28,9 @@ mod workspace;
 pub use authorization::{
     ActiveAuthorization, AuthorizationBlock, AuthorizationError, reconcile_active_authorization,
     verify_active_authorization,
+};
+pub use bounds::{
+    OperationalBound, OperationalBoundsCycle, OperationalBoundsError, enforce_operational_bounds,
 };
 pub use ci::{CiCycle, CiCycleError, PullRequestSource, reconcile_ci_once};
 pub use cli::{CliError, run_cli, run_git_askpass};
@@ -57,7 +61,10 @@ pub use install::{
     HostInstallOptions, InstallError, InstallFault, InstallLayout, InstallOutcome, InstallResult,
     install_host_release, install_release, install_release_pinned,
 };
-pub use intake::{ActiveIntakeError, ActiveIntakeReport, IntakeCandidateResult, reconcile_intake};
+pub use intake::{
+    ActiveIntakeError, ActiveIntakeReport, IntakeCandidateResult, WebhookEnvelope,
+    WebhookIntakeReport, ingest_webhook, reconcile_intake,
+};
 pub use merge::{MergeCycle, MergeCycleError, MergeSource, MergeWriter, reconcile_merge_once};
 pub use plans::{PlanPublicationCycle, PlanPublicationError, PlanWriter, publish_plan_once};
 pub use policy::{

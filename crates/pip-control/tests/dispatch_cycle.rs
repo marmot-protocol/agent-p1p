@@ -129,6 +129,18 @@ fn planner_dispatch_projects_gate_and_worker_then_atomically_acks_outbox() {
             .any(|command| { command.args.iter().any(|argument| argument == "complete") })
     );
     let worker_body = projected_worker_body(&runner);
+    assert_eq!(
+        worker_body["sensitive_scope_categories"],
+        json!([
+            "CRYPTOGRAPHY",
+            "MLS_CGKA",
+            "KEY_HANDLING",
+            "TRUST_ANCHOR",
+            "MEMBERSHIP_AUTHORIZATION",
+            "ADMIN_AUTHORIZATION",
+            "PUSH_PAYLOAD_CONTEXT"
+        ])
+    );
     let bundle = &worker_body["immutable_evidence_bundle"];
     assert_eq!(bundle["schema_version"], 1);
     assert_eq!(bundle["case_key"], "repo:1055628515#1240@2");

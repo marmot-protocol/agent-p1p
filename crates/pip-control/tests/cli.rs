@@ -33,7 +33,7 @@ fn status_reads_an_existing_ledger_without_mutating_it() {
     );
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["ok"], true);
-    assert_eq!(value["ledger"]["schema_version"], 4);
+    assert_eq!(value["ledger"]["schema_version"], 5);
     assert_eq!(value["ledger"]["cases"], serde_json::json!([]));
 
     let missing = directory.path().join("missing.db");
@@ -218,6 +218,71 @@ fn controller_cycle_is_inert_before_credentials_database_or_hermes_when_policy_i
     assert_eq!(value["ok"], true);
     assert_eq!(value["result"], "disabled");
     assert!(!database.exists());
+}
+
+#[test]
+fn webhook_intake_rejects_an_invalid_signature_without_recording_a_delivery() {
+    let directory = tempfile::tempdir().unwrap();
+    let policy_path = directory.path().join("policy.json");
+    let mut policy: serde_json::Value = serde_json::from_slice(include_bytes!(
+        "../../../config/target/repositories/mdk.json"
+    ))
+    .unwrap();
+    policy["intake"]["enabled"] = serde_json::json!(true);
+    policy["intake"]["paused"] = serde_json::json!(false);
+    policy["dispatch_enabled"] = serde_json::json!(true);
+    policy["github"]["automation_actor_id"] = serde_json::json!(202880);
+    policy["github"]["reviewer_general_actor_id"] = serde_json::json!(202881);
+    policy["github"]["reviewer_secperf_actor_id"] = serde_json::json!(202882);
+    fs::write(&policy_path, serde_json::to_vec(&policy).unwrap()).unwrap();
+    let database = directory.path().join("ledger.db");
+    let token = directory.path().join("github.token");
+    let secret = directory.path().join("webhook.secret");
+    let payload = directory.path().join("payload.json");
+    fs::write(&token, b"not-used\n").unwrap();
+    fs::write(&secret, b"webhook-secret\n").unwrap();
+    fs::write(&payload, b"{}\n").unwrap();
+    fs::set_permissions(&token, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::set_permissions(&secret, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let result = pip_control::run_cli(
+        [
+            "webhook-intake",
+            "--policy",
+            policy_path.to_str().unwrap(),
+            "--database",
+            database.to_str().unwrap(),
+            "--github-token",
+            token.to_str().unwrap(),
+            "--webhook-secret",
+            secret.to_str().unwrap(),
+            "--payload",
+            payload.to_str().unwrap(),
+            "--delivery-id",
+            "01234567-89ab-cdef-0123-456789abcdef",
+            "--event",
+            "issues",
+            "--signature",
+            "sha256=00",
+            "--now",
+            "1787220000",
+        ]
+        .into_iter()
+        .map(str::to_owned),
+    );
+
+    assert!(matches!(
+        result,
+        Err(pip_control::CliError::Reconciliation(_))
+    ));
+    assert_eq!(
+        Store::open(&database)
+            .unwrap()
+            .status(0)
+            .unwrap()
+            .webhook_deliveries,
+        0
+    );
 }
 
 #[test]

@@ -113,6 +113,10 @@ pub struct RepositoryPolicy {
     pub dispatch_enabled: bool,
     pub merge: MergeConfiguration,
     pub max_remediation_rounds: u32,
+    pub max_case_elapsed_seconds: u64,
+    pub max_provider_failures: u32,
+    pub max_repeated_finding_fingerprint: u32,
+    pub sensitive_scope_categories: Vec<String>,
     pub required_ci_contexts: Vec<String>,
     pub roles: Vec<RoleConfiguration>,
 }
@@ -159,6 +163,10 @@ impl RepositoryPolicy {
             })
             .collect();
         WorkflowPolicy::new(&self.board, &self.workspace, &self.branch_prefix, roles)
+            .and_then(|workflow| {
+                workflow.with_sensitive_scope_categories(self.sensitive_scope_categories.clone())
+            })
+            .and_then(|workflow| workflow.with_max_provider_failures(self.max_provider_failures))
             .map_err(|error| PolicyError::Dispatch(error.to_string()))
     }
 
@@ -223,6 +231,10 @@ fn validate_policy(policy: &RepositoryPolicy) -> Result<(), PolicyError> {
         .copied()
         .collect::<BTreeSet<_>>();
     let ci = policy.required_ci_contexts.iter().collect::<BTreeSet<_>>();
+    let sensitive_scope = policy
+        .sensitive_scope_categories
+        .iter()
+        .collect::<BTreeSet<_>>();
     let github_actor_ids = [
         policy.github.automation_actor_id,
         policy.github.reviewer_general_actor_id,
@@ -272,6 +284,22 @@ fn validate_policy(policy: &RepositoryPolicy) -> Result<(), PolicyError> {
         && !(policy.merge.is_shadow() && policy.merge.autonomous)
         && matches!(policy.merge.method.as_str(), "merge" | "squash" | "rebase")
         && policy.max_remediation_rounds > 0
+        && policy.max_case_elapsed_seconds > 0
+        && policy.max_provider_failures > 0
+        && policy.max_repeated_finding_fingerprint > 0
+        && sensitive_scope.len() == policy.sensitive_scope_categories.len()
+        && sensitive_scope.iter().all(|category| {
+            matches!(
+                category.as_str(),
+                "CRYPTOGRAPHY"
+                    | "MLS_CGKA"
+                    | "KEY_HANDLING"
+                    | "TRUST_ANCHOR"
+                    | "MEMBERSHIP_AUTHORIZATION"
+                    | "ADMIN_AUTHORIZATION"
+                    | "PUSH_PAYLOAD_CONTEXT"
+            )
+        })
         && reasoning_bindings_valid
         && ci.len() == policy.required_ci_contexts.len()
         && ci.iter().all(|context| valid_text(context, 256));

@@ -41,6 +41,8 @@ pub struct WorkflowPolicy {
     board: String,
     workspace: String,
     branch_prefix: String,
+    sensitive_scope_categories: Vec<String>,
+    max_provider_failures: u32,
     roles: Vec<RolePolicy>,
 }
 
@@ -84,8 +86,36 @@ impl WorkflowPolicy {
             board,
             workspace,
             branch_prefix,
+            sensitive_scope_categories: Vec::new(),
+            max_provider_failures: 1,
             roles,
         })
+    }
+
+    pub fn with_max_provider_failures(
+        mut self,
+        max_provider_failures: u32,
+    ) -> Result<Self, DispatchError> {
+        if max_provider_failures == 0 {
+            return Err(DispatchError::InvalidPolicy);
+        }
+        self.max_provider_failures = max_provider_failures;
+        Ok(self)
+    }
+
+    pub fn with_sensitive_scope_categories(
+        mut self,
+        categories: Vec<String>,
+    ) -> Result<Self, DispatchError> {
+        let unique = categories.iter().collect::<BTreeSet<_>>();
+        if categories.is_empty()
+            || unique.len() != categories.len()
+            || categories.iter().any(|category| !valid_text(category, 128))
+        {
+            return Err(DispatchError::InvalidPolicy);
+        }
+        self.sensitive_scope_categories = categories;
+        Ok(self)
     }
 
     #[must_use]
@@ -130,6 +160,7 @@ pub struct WorkflowDispatch {
     provider: String,
     model: String,
     max_runtime: String,
+    max_retries: u32,
     priority: u32,
     board: String,
 }
@@ -177,6 +208,7 @@ impl WorkflowDispatch {
             provider: self.provider.clone(),
             model: self.model.clone(),
             max_runtime: self.max_runtime.clone(),
+            max_retries: self.max_retries,
             priority: self.priority,
             parent_task_ids: vec![gate_task_id.into()],
         })
@@ -461,6 +493,12 @@ fn dispatch(
     if role == WorkerRole::FinalReviewer {
         body.insert("final_review_round".into(), json!(review_round));
     }
+    if role == WorkerRole::Planner && !policy.sensitive_scope_categories.is_empty() {
+        body.insert(
+            "sensitive_scope_categories".into(),
+            json!(policy.sensitive_scope_categories),
+        );
+    }
     if role == WorkerRole::Builder {
         body.insert(
             "assigned_branch".into(),
@@ -544,6 +582,7 @@ fn dispatch(
         provider: binding.provider.clone(),
         model: binding.model.clone(),
         max_runtime: binding.max_runtime.clone(),
+        max_retries: policy.max_provider_failures,
         priority: binding.priority,
         board: policy.board.clone(),
     })

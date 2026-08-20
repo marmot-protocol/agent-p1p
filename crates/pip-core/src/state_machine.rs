@@ -67,10 +67,11 @@ pub enum Event {
     MergeVerified,
     HumanTookOver,
     AuthorizationRemoved,
+    OperationalBoundReached,
 }
 
 impl Event {
-    pub const ALL: [Self; 37] = [
+    pub const ALL: [Self; 38] = [
         Self::PlanRecorded,
         Self::Proceed,
         Self::WaitingForIssueCreator,
@@ -108,6 +109,7 @@ impl Event {
         Self::MergeVerified,
         Self::HumanTookOver,
         Self::AuthorizationRemoved,
+        Self::OperationalBoundReached,
     ];
 }
 
@@ -215,6 +217,7 @@ string_enum!(Event, "event", {
     "MERGE_VERIFIED" => MergeVerified,
     "HUMAN_TOOK_OVER" => HumanTookOver,
     "AUTHORIZATION_REMOVED" => AuthorizationRemoved,
+    "OPERATIONAL_BOUND_REACHED" => OperationalBoundReached,
 });
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -323,6 +326,9 @@ pub fn transition(
     }
     if event == Event::BlockedUnexpectedModel {
         return decision(CaseState::Blocked, &[Effect::RecordBlock]);
+    }
+    if event == Event::OperationalBoundReached {
+        return decision(CaseState::Escalated, &[Effect::Escalate]);
     }
 
     use CaseState as State;

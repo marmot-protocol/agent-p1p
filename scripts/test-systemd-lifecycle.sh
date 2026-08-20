@@ -48,7 +48,7 @@ docker exec "$container" bash -lc '
   test "$(systemctl is-enabled pip-v2-controller@mdk.timer || true)" = disabled
   test "$(systemctl is-active pip-v2-controller@mdk.timer || true)" = inactive
   /opt/pip-v2/current/bin/pip-control status --database /var/lib/pip-v2/ledger.db --now 1787220001 \
-    | jq -e ".ok and .ledger.schema_version == 4" >/dev/null
+    | jq -e ".ok and .ledger.schema_version == 5" >/dev/null
 '
 
 echo '{"ok":true,"clean_install":true,"reinstall":true,"upgrade":true,"rollback":true,"restart_recovery":true,"timer_enabled":false}'

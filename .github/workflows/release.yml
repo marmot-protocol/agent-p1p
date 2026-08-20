@@ -1,0 +1,65 @@
+name: Signed release cohort
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version recorded in the signed manifest
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-sign:
+    runs-on: ubuntu-latest
+    environment: pip-release
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify exact source and supply-chain pins
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          scripts/check-supply-chain-pins.sh
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+          cargo test --workspace --locked
+      - name: Materialize protected signing inputs
+        env:
+          SIGNING_KEY_BASE64: ${{ secrets.PIP_RELEASE_SIGNING_KEY_BASE64 }}
+          RELEASE_PUBLIC_KEY: ${{ secrets.PIP_RELEASE_PUBLIC_KEY }}
+        run: |
+          test -n "$SIGNING_KEY_BASE64"
+          test -n "$RELEASE_PUBLIC_KEY"
+          umask 077
+          printf '%s' "$SIGNING_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/release-signing.key"
+          printf '%s\n' "$RELEASE_PUBLIC_KEY" > "$RUNNER_TEMP/release-public.key"
+      - name: Build and verify signed cohort
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          built_at=$(git show -s --format=%cI "$GITHUB_SHA")
+          scripts/build-rust-release.sh \
+            --output "$RUNNER_TEMP/pip-v2-release" \
+            --version "$RELEASE_VERSION" \
+            --built-at "$built_at" \
+            --builder-identity "github-actions:${GITHUB_REPOSITORY}@${GITHUB_SHA}" \
+            --signing-key "$RUNNER_TEMP/release-signing.key" \
+            --public-key "$RUNNER_TEMP/release-public.key"
+          source_date_epoch=$(git show -s --format=%ct "$GITHUB_SHA")
+          tar --sort=name --mtime="@$source_date_epoch" --owner=0 --group=0 --numeric-owner \
+            -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/pip-v2-release.tar.gz" pip-v2-release
+          sha256sum "$RUNNER_TEMP/pip-v2-release.tar.gz" > "$RUNNER_TEMP/SHA256SUMS"
+      - name: Upload immutable cohort envelope
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pip-v2-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/pip-v2-release.tar.gz
+            ${{ runner.temp }}/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0

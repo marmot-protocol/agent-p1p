@@ -1,14 +1,17 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
+use hmac::{Hmac, KeyInit, Mac};
 use pip_control::{
-    ActiveIntakeError, IntakeSource, RepositoryPolicy, load_repository_policy, reconcile_intake,
+    ActiveIntakeError, IntakeSource, RepositoryPolicy, WebhookEnvelope, ingest_webhook,
+    load_repository_policy, reconcile_intake,
 };
 use pip_github::{
     GitHubError, IntakeSnapshot, IssueContentSnapshot, IssueSnapshot, LabelEvent,
     RepositorySnapshot,
 };
 use pip_store::Store;
+use sha2::Sha256;
 use tempfile::tempdir;
 
 struct FixtureSource {
@@ -139,6 +142,87 @@ fn repository_or_discovery_drift_creates_no_case() {
     }
 }
 
+#[test]
+fn signed_label_webhook_routes_one_issue_and_replays_by_delivery_id() {
+    let directory = tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("cases.db")).unwrap();
+    let policy = active_policy(1, 1);
+    let source = source(&[42]);
+    let payload = webhook_payload(42, "pip-ok", 1_055_628_515);
+    let signature = signature(b"webhook-secret", &payload);
+    let envelope = WebhookEnvelope {
+        delivery_id: "01234567-89ab-cdef-0123-456789abcdef",
+        event_name: "issues",
+        signature: &signature,
+        payload: &payload,
+    };
+
+    let first = ingest_webhook(
+        &source,
+        &policy,
+        &mut store,
+        envelope,
+        b"webhook-secret",
+        100,
+        false,
+    )
+    .unwrap();
+    assert_eq!(first.delivery, "APPLIED");
+    assert_eq!(first.candidate.unwrap().decision, "ELIGIBLE");
+    assert!(store.case("repo:1055628515#42@2").unwrap().is_some());
+
+    let replay = ingest_webhook(
+        &source,
+        &policy,
+        &mut store,
+        envelope,
+        b"webhook-secret",
+        101,
+        false,
+    )
+    .unwrap();
+    assert_eq!(replay.delivery, "REPLAYED");
+    assert_eq!(replay.candidate.unwrap().decision, "INELIGIBLE");
+    assert_eq!(store.status(101).unwrap().webhook_deliveries, 1);
+}
+
+#[test]
+fn webhook_fails_closed_before_recording_or_fetching_on_bad_signature_or_repository() {
+    let policy = active_policy(1, 1);
+    for (payload, signature) in [
+        (
+            webhook_payload(42, "pip-ok", 1_055_628_515),
+            "sha256=00".into(),
+        ),
+        {
+            let payload = webhook_payload(42, "pip-ok", 9);
+            let signature = signature(b"webhook-secret", &payload);
+            (payload, signature)
+        },
+    ] {
+        let directory = tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("cases.db")).unwrap();
+        let result = ingest_webhook(
+            &source(&[42]),
+            &policy,
+            &mut store,
+            WebhookEnvelope {
+                delivery_id: "01234567-89ab-cdef-0123-456789abcdef",
+                event_name: "issues",
+                signature: &signature,
+                payload: &payload,
+            },
+            b"webhook-secret",
+            100,
+            false,
+        );
+        assert!(result.is_err());
+        let status = store.status(100).unwrap();
+        assert_eq!(status.webhook_deliveries, 0);
+        assert!(status.cases.is_empty());
+    }
+}
+
 fn active_policy(repository_limit: u32, global_limit: u32) -> RepositoryPolicy {
     let mut policy = load_repository_policy(include_bytes!(
         "../../../config/target/repositories/mdk.json"
@@ -203,4 +287,34 @@ fn issue(number: u64) -> IssueSnapshot {
         is_pull_request: false,
         labels: BTreeSet::from(["pip-ok".into()]),
     }
+}
+
+fn webhook_payload(issue: u64, label: &str, repository_id: u64) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "action": "labeled",
+        "repository": {
+            "id": repository_id,
+            "full_name": "marmot-protocol/mdk"
+        },
+        "issue": {
+            "id": 500 + issue,
+            "number": issue
+        },
+        "label": {"name": label},
+        "sender": {"id": 202880}
+    }))
+    .unwrap()
+}
+
+fn signature(secret: &[u8], payload: &[u8]) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret).unwrap();
+    mac.update(payload);
+    format!(
+        "sha256={}",
+        mac.finalize()
+            .into_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
 }

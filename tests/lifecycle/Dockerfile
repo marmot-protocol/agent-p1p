@@ -1,4 +1,4 @@
-FROM rust:1.96.1-bookworm
+FROM rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
 
 ENV container=docker
 ENV DEBIAN_FRONTEND=noninteractive

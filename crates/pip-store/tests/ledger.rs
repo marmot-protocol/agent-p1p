@@ -3,7 +3,7 @@ use std::path::Path;
 use pip_store::{
     ApplyResult, DirectAttemptStatus, EffectInput, EventInput, EvidenceInput, FaultPoint,
     FindingInput, NewCase, PolicyInput, RunInput, Store, StoreError, TaskProjectionInput,
-    TransitionInput,
+    TransitionInput, WebhookDeliveryInput,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -81,9 +81,40 @@ fn transition() -> TransitionInput {
 #[test]
 fn migration_creates_hardened_authoritative_schema() {
     let (_directory, store) = open();
-    assert_eq!(store.schema_version().unwrap(), 4);
+    assert_eq!(store.schema_version().unwrap(), 5);
     assert!(store.foreign_keys_enabled().unwrap());
     assert_eq!(store.journal_mode().unwrap(), "wal");
+}
+
+#[test]
+fn webhook_deliveries_are_immutable_idempotent_intake_evidence() {
+    let (_directory, mut store) = open();
+    let delivery = WebhookDeliveryInput {
+        delivery_id: "01234567-89ab-cdef-0123-456789abcdef".into(),
+        repository_id: 984_321,
+        event_name: "issues".into(),
+        action: "labeled".into(),
+        received_at: 1_787_000_000,
+        payload_sha256: "a".repeat(64),
+    };
+
+    assert_eq!(
+        store.record_webhook_delivery(&delivery).unwrap(),
+        ApplyResult::Applied
+    );
+    assert_eq!(
+        store.record_webhook_delivery(&delivery).unwrap(),
+        ApplyResult::Replayed
+    );
+    let mut conflict = delivery.clone();
+    conflict.payload_sha256 = "b".repeat(64);
+    assert!(matches!(
+        store.record_webhook_delivery(&conflict),
+        Err(StoreError::IdempotencyConflict { .. })
+    ));
+
+    let status = store.status(1_787_000_001).unwrap();
+    assert_eq!(status.webhook_deliveries, 1);
 }
 
 #[test]
@@ -241,7 +272,7 @@ fn operator_status_separates_pending_leased_and_delivered_work() {
         .unwrap();
 
     let status = store.status(110).unwrap();
-    assert_eq!(status.schema_version, 4);
+    assert_eq!(status.schema_version, 5);
     assert_eq!(status.cases.len(), 1);
     assert_eq!(status.cases[0].case_key, "repo:984321#1240@1");
     assert_eq!(status.events, 1);
@@ -642,6 +673,7 @@ fn schema_one_upgrades_forward_without_losing_existing_projections() {
     connection
         .execute_batch(
             "PRAGMA foreign_keys = OFF;
+             DROP TABLE webhook_deliveries;
              DROP TABLE direct_attempts;
              DROP INDEX outbox_dispatchable;
              ALTER TABLE outbox DROP COLUMN superseded_by_event_id;
@@ -666,7 +698,7 @@ fn schema_one_upgrades_forward_without_losing_existing_projections() {
     drop(connection);
 
     let upgraded = Store::open(&path).unwrap();
-    assert_eq!(upgraded.schema_version().unwrap(), 4);
+    assert_eq!(upgraded.schema_version().unwrap(), 5);
     assert_eq!(
         upgraded
             .task_projection("legacy-projection")

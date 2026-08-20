@@ -23,6 +23,7 @@ pub struct TaskCreateSpec {
     pub provider: String,
     pub model: String,
     pub max_runtime: String,
+    pub max_retries: u32,
     pub priority: u32,
     pub parent_task_ids: Vec<String>,
 }
@@ -161,7 +162,7 @@ impl<R: CommandRunner> HermesProjector<R> {
             "--max-runtime".into(),
             max_runtime,
             "--max-retries".into(),
-            "1".into(),
+            spec.max_retries.to_string(),
             "--priority".into(),
             spec.priority.to_string(),
         ];
@@ -223,6 +224,7 @@ fn validate_spec(spec: &TaskCreateSpec) -> Result<(), ProjectionError> {
         && spec.provider != "cursor"
         && valid_id(&spec.model)
         && hermes_runtime(&spec.max_runtime).is_some()
+        && spec.max_retries > 0
         && spec.parent_task_ids.iter().all(|parent| valid_id(parent));
     if !valid {
         return Err(ProjectionError::InvalidSpec);

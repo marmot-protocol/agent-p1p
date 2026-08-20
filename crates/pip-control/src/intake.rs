@@ -7,9 +7,13 @@ use pip_core::{
     ActorId, CaseId, CaseState, IntakeDecision, IssueNumber, IssueObservation, RepositoryId,
     WorkflowVersion, evaluate_intake,
 };
-use pip_store::{ApplyResult, EffectInput, EventInput, NewCase, PolicyInput, Store, StoreError};
-use serde::Serialize;
+use pip_store::{
+    ApplyResult, EffectInput, EventInput, NewCase, PolicyInput, Store, StoreError,
+    WebhookDeliveryInput,
+};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 
 use crate::{IntakeSource, RepositoryPolicy, ShadowError};
 
@@ -33,6 +37,26 @@ pub struct ActiveIntakeReport {
     pub candidates: Vec<IntakeCandidateResult>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct WebhookEnvelope<'a> {
+    pub delivery_id: &'a str,
+    pub event_name: &'a str,
+    pub signature: &'a str,
+    pub payload: &'a [u8],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct WebhookIntakeReport {
+    pub report_format: u32,
+    pub observed_at: u64,
+    pub repository_id: u64,
+    pub repository: String,
+    pub delivery_id: String,
+    pub delivery: String,
+    pub mutation_count: u64,
+    pub candidate: Option<IntakeCandidateResult>,
+}
+
 #[derive(Debug)]
 pub enum ActiveIntakeError {
     ActivationDisabled,
@@ -40,6 +64,7 @@ pub enum ActiveIntakeError {
     Store(StoreError),
     Serialization(String),
     InvalidIdentity,
+    InvalidWebhook(&'static str),
 }
 
 impl fmt::Display for ActiveIntakeError {
@@ -52,6 +77,7 @@ impl fmt::Display for ActiveIntakeError {
             Self::Store(error) => error.fmt(formatter),
             Self::Serialization(error) => write!(formatter, "intake serialization failed: {error}"),
             Self::InvalidIdentity => formatter.write_str("intake evidence has an invalid identity"),
+            Self::InvalidWebhook(message) => write!(formatter, "invalid webhook: {message}"),
         }
     }
 }
@@ -104,6 +130,146 @@ pub fn reconcile_intake<S: IntakeSource>(
         }
         validated_evidence.push(evidence);
     }
+    reconcile_validated_evidence(
+        policy,
+        store,
+        observed_at,
+        global_paused,
+        validated_evidence,
+    )
+}
+
+pub fn ingest_webhook<S: IntakeSource>(
+    source: &S,
+    policy: &RepositoryPolicy,
+    store: &mut Store,
+    envelope: WebhookEnvelope<'_>,
+    secret: &[u8],
+    observed_at: u64,
+    global_paused: bool,
+) -> Result<WebhookIntakeReport, ActiveIntakeError> {
+    if !policy.intake.enabled || policy.intake.paused || !policy.dispatch_enabled || global_paused {
+        return Err(ActiveIntakeError::ActivationDisabled);
+    }
+    if secret.is_empty() || secret.len() > 1024 {
+        return Err(ActiveIntakeError::InvalidWebhook("invalid secret"));
+    }
+    if envelope.payload.is_empty() || envelope.payload.len() > 4 * 1024 * 1024 {
+        return Err(ActiveIntakeError::InvalidWebhook("invalid payload size"));
+    }
+    if envelope.event_name != "issues"
+        || !pip_github::verify_webhook(secret, envelope.payload, envelope.signature)
+    {
+        return Err(ActiveIntakeError::InvalidWebhook(
+            "event or signature rejected",
+        ));
+    }
+    let payload: IssuesWebhook = serde_json::from_slice(envelope.payload)
+        .map_err(|_| ActiveIntakeError::InvalidWebhook("malformed issues event"))?;
+    if payload.repository.id != policy.repository.id
+        || payload.repository.full_name != policy.repository.full_name()
+        || payload.issue.id == 0
+        || payload.issue.number == 0
+        || payload.action != "labeled"
+        || payload.label.name != policy.intake.label
+        || payload.sender.id == 0
+    {
+        return Err(ActiveIntakeError::InvalidWebhook(
+            "event is not an eligible repository label event",
+        ));
+    }
+    let digest = Sha256::digest(envelope.payload)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let delivery = store.record_webhook_delivery(&WebhookDeliveryInput {
+        delivery_id: envelope.delivery_id.into(),
+        repository_id: policy.repository.id,
+        event_name: envelope.event_name.into(),
+        action: payload.action.clone(),
+        received_at: observed_at,
+        payload_sha256: digest,
+    })?;
+    let evidence = source
+        .intake(
+            &policy.repository.owner,
+            &policy.repository.name,
+            payload.issue.number,
+        )
+        .map_err(|error| ActiveIntakeError::Evidence(ShadowError::Evidence(error.to_string())))?;
+    let latest_event = evidence
+        .label_events
+        .iter()
+        .filter(|event| event.label == policy.intake.label)
+        .max_by_key(|event| (&event.created_at, event.id));
+    if evidence.repository.id != policy.repository.id
+        || evidence.repository.full_name != policy.repository.full_name()
+        || evidence.repository.default_branch != policy.repository.default_branch
+        || evidence.issue.id != payload.issue.id
+        || evidence.issue.number != payload.issue.number
+        || latest_event
+            .filter(|event| event.labeled)
+            .map(|event| event.actor_id)
+            != Some(payload.sender.id)
+    {
+        return Err(ActiveIntakeError::Evidence(ShadowError::DiscoveryDrift));
+    }
+    let report =
+        reconcile_validated_evidence(policy, store, observed_at, global_paused, vec![evidence])?;
+    Ok(WebhookIntakeReport {
+        report_format: 1,
+        observed_at,
+        repository_id: policy.repository.id,
+        repository: policy.repository.full_name(),
+        delivery_id: envelope.delivery_id.into(),
+        delivery: match delivery {
+            ApplyResult::Applied => "APPLIED",
+            ApplyResult::Replayed => "REPLAYED",
+        }
+        .into(),
+        mutation_count: report.mutation_count + u64::from(delivery == ApplyResult::Applied),
+        candidate: report.candidates.into_iter().next(),
+    })
+}
+
+#[derive(Deserialize)]
+struct IssuesWebhook {
+    action: String,
+    repository: WebhookRepository,
+    issue: WebhookIssue,
+    label: WebhookLabel,
+    sender: WebhookSender,
+}
+
+#[derive(Deserialize)]
+struct WebhookRepository {
+    id: u64,
+    full_name: String,
+}
+
+#[derive(Deserialize)]
+struct WebhookIssue {
+    id: u64,
+    number: u64,
+}
+
+#[derive(Deserialize)]
+struct WebhookLabel {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct WebhookSender {
+    id: u64,
+}
+
+fn reconcile_validated_evidence(
+    policy: &RepositoryPolicy,
+    store: &mut Store,
+    observed_at: u64,
+    global_paused: bool,
+    validated_evidence: Vec<pip_github::IntakeSnapshot>,
+) -> Result<ActiveIntakeReport, ActiveIntakeError> {
     let policy_value = serde_json::to_value(policy)
         .map_err(|error| ActiveIntakeError::Serialization(error.to_string()))?;
     let policy_result = store.record_policy(&PolicyInput {

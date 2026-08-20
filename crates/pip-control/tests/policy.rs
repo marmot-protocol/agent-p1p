@@ -23,6 +23,10 @@ fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
     assert!(policy.merge.is_shadow());
     assert!(!policy.merge.autonomous);
     assert_eq!(policy.merge.method, "squash");
+    assert_eq!(policy.max_case_elapsed_seconds, 86_400);
+    assert_eq!(policy.max_provider_failures, 3);
+    assert_eq!(policy.max_repeated_finding_fingerprint, 2);
+    assert_eq!(policy.sensitive_scope_categories.len(), 7);
     assert_eq!(policy.workflow_policy().unwrap().roles().len(), 5);
     assert_eq!(policy.roles[0].reasoning_effort.as_deref(), Some("xhigh"));
     assert_eq!(policy.roles[1].reasoning_effort, None);
@@ -94,6 +98,19 @@ fn policy_rejects_unknown_fields_model_fallback_and_shadow_merge_authority() {
         load_repository_policy(&serde_json::to_vec(&value).unwrap()),
         Err(PolicyError::Invalid)
     ));
+
+    for field in [
+        "max_case_elapsed_seconds",
+        "max_provider_failures",
+        "max_repeated_finding_fingerprint",
+    ] {
+        let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+        value[field] = serde_json::json!(0);
+        assert!(matches!(
+            load_repository_policy(&serde_json::to_vec(&value).unwrap()),
+            Err(PolicyError::Invalid)
+        ));
+    }
 
     for field in ["checkout", "workspace", "artifacts"] {
         let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();

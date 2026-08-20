@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: u32 = 4;
+const SCHEMA_VERSION: u32 = 5;
 
 const MIGRATION_1: &str = r#"
 CREATE TABLE schema_migrations (
@@ -245,6 +245,37 @@ CREATE TRIGGER direct_attempts_no_delete BEFORE DELETE ON direct_attempts BEGIN
 END;
 "#;
 
+const MIGRATION_5: &str = r#"
+CREATE TABLE webhook_deliveries (
+    delivery_id TEXT PRIMARY KEY,
+    repository_id INTEGER NOT NULL CHECK (repository_id > 0),
+    event_name TEXT NOT NULL,
+    action TEXT NOT NULL,
+    received_at INTEGER NOT NULL,
+    payload_sha256 TEXT NOT NULL
+) STRICT;
+
+CREATE INDEX webhook_deliveries_repository
+    ON webhook_deliveries(repository_id, received_at, delivery_id);
+
+CREATE TRIGGER webhook_deliveries_no_update BEFORE UPDATE ON webhook_deliveries BEGIN
+    SELECT RAISE(ABORT, 'webhook deliveries are immutable');
+END;
+CREATE TRIGGER webhook_deliveries_no_delete BEFORE DELETE ON webhook_deliveries BEGIN
+    SELECT RAISE(ABORT, 'webhook deliveries are immutable');
+END;
+"#;
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct WebhookDeliveryInput {
+    pub delivery_id: String,
+    pub repository_id: u64,
+    pub event_name: String,
+    pub action: String,
+    pub received_at: u64,
+    pub payload_sha256: String,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct EventInput {
     pub event_id: String,
@@ -454,6 +485,7 @@ pub struct LedgerStatus {
     pub direct_attempts_running: u64,
     pub direct_attempts_complete: u64,
     pub direct_attempts_failed: u64,
+    pub webhook_deliveries: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -627,6 +659,63 @@ impl Store {
                 payload_json,
                 payload_hash,
                 sql_u64(input.accepted_at)?,
+            ],
+        )?;
+        Ok(ApplyResult::Applied)
+    }
+
+    pub fn record_webhook_delivery(&mut self, input: &WebhookDeliveryInput) -> Result<ApplyResult> {
+        self.ensure_writable()?;
+        if !valid_identifier(&input.delivery_id, 128)
+            || input.repository_id == 0
+            || !valid_identifier(&input.event_name, 64)
+            || !valid_identifier(&input.action, 64)
+            || !valid_sha256(&input.payload_sha256)
+        {
+            return Err(StoreError::InvalidInput(
+                "valid webhook delivery identity, repository, event, action, and digest are required",
+            ));
+        }
+        let existing: Option<(i64, String, String, i64, String)> = self
+            .connection
+            .query_row(
+                "SELECT repository_id, event_name, action, received_at, payload_sha256
+                 FROM webhook_deliveries WHERE delivery_id = ?1",
+                [&input.delivery_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()?;
+        if let Some((repository_id, event_name, action, _received_at, payload_sha256)) = existing {
+            if unsigned(repository_id) == input.repository_id
+                && event_name == input.event_name
+                && action == input.action
+                && payload_sha256 == input.payload_sha256
+            {
+                return Ok(ApplyResult::Replayed);
+            }
+            return Err(StoreError::IdempotencyConflict {
+                id: format!("webhook:{}", input.delivery_id),
+            });
+        }
+        self.connection.execute(
+            "INSERT INTO webhook_deliveries(
+                delivery_id, repository_id, event_name, action, received_at, payload_sha256
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                input.delivery_id,
+                sql_u64(input.repository_id)?,
+                input.event_name,
+                input.action,
+                sql_u64(input.received_at)?,
+                input.payload_sha256,
             ],
         )?;
         Ok(ApplyResult::Applied)
@@ -861,6 +950,18 @@ impl Store {
 
     pub fn case(&self, case_key: &str) -> Result<Option<StoredCase>> {
         query_case(&self.connection, case_key)
+    }
+
+    pub fn case_created_at(&self, case_key: &str) -> Result<Option<u64>> {
+        self.connection
+            .query_row(
+                "SELECT created_at FROM cases WHERE case_key = ?1",
+                [case_key],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(|value| u64::try_from(value).map_err(|_| StoreError::InvalidInteger))
+            .transpose()
     }
 
     pub fn reconstruct_case(&self, case_key: &str) -> Result<Option<StoredCase>> {
@@ -1151,6 +1252,7 @@ impl Store {
             direct_attempts_running: unsigned(attempts_running),
             direct_attempts_complete: unsigned(attempts_complete),
             direct_attempts_failed: unsigned(attempts_failed),
+            webhook_deliveries: count(&self.connection, "webhook_deliveries")?,
         })
     }
 
@@ -1532,6 +1634,19 @@ impl Store {
 
     pub fn direct_attempt_count(&self) -> Result<u64> {
         count(&self.connection, "direct_attempts")
+    }
+
+    pub fn failed_direct_attempt_count_for_case(&self, case_key: &str) -> Result<u64> {
+        if case_key.trim().is_empty() {
+            return Err(StoreError::InvalidInput("case key is required"));
+        }
+        let value: i64 = self.connection.query_row(
+            "SELECT COUNT(*) FROM direct_attempts
+             WHERE case_key = ?1 AND status = 'FAILED'",
+            [case_key],
+            |row| row.get(0),
+        )?;
+        Ok(unsigned(value))
     }
 
     pub fn release_effect(&mut self, effect_id: &str, owner: &str) -> Result<()> {
@@ -1975,6 +2090,17 @@ fn migrate(connection: &mut Connection) -> Result<()> {
         transaction.commit()?;
         version = 4;
     }
+    if version == 4 {
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Exclusive)?;
+        transaction.execute_batch(MIGRATION_5)?;
+        transaction.execute(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (5, 0)",
+            [],
+        )?;
+        transaction.pragma_update(None, "user_version", 5)?;
+        transaction.commit()?;
+        version = 5;
+    }
     if version != SCHEMA_VERSION {
         return Err(StoreError::UnsupportedSchema(version));
     }
@@ -1997,6 +2123,21 @@ fn validate_common(case_key: &str, event: &EventInput) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn valid_identifier(value: &str, max: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn sql_u64(value: u64) -> Result<i64> {
@@ -2330,6 +2471,7 @@ fn count(connection: &Connection, table: &str) -> Result<u64> {
         "evidence" => "SELECT COUNT(*) FROM evidence",
         "findings" => "SELECT COUNT(*) FROM findings",
         "task_projections" => "SELECT COUNT(*) FROM task_projections",
+        "webhook_deliveries" => "SELECT COUNT(*) FROM webhook_deliveries",
         _ => return Err(StoreError::InvalidInput("unknown count table")),
     };
     let value: i64 = connection.query_row(sql, [], |row| row.get(0))?;

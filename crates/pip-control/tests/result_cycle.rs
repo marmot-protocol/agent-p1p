@@ -39,7 +39,8 @@ fn completed_hermes_result_is_bound_to_the_owned_projection_and_ingested_once() 
     let runner = FakeRunner::default();
     runner.json(completed_planner("planner", planner_result()));
 
-    let first = ingest_completed_once_with(&mut store, &active_policy(), runner, "hermes").unwrap();
+    let first =
+        ingest_completed_once_with(&mut store, &active_policy(), runner, "hermes", 10).unwrap();
     assert_eq!(
         first,
         ResultCycle::Ingested {
@@ -60,6 +61,7 @@ fn completed_hermes_result_is_bound_to_the_owned_projection_and_ingested_once() 
             &active_policy(),
             FakeRunner::default(),
             "hermes",
+            11,
         )
         .unwrap(),
         ResultCycle::Idle
@@ -81,7 +83,7 @@ fn wrong_profile_or_self_described_model_never_mutates_the_case() {
         runner.json(completed_planner(profile, result));
 
         assert!(
-            ingest_completed_once_with(&mut store, &active_policy(), runner, "hermes").is_err()
+            ingest_completed_once_with(&mut store, &active_policy(), runner, "hermes", 10).is_err()
         );
         assert_eq!(store.run_count().unwrap(), 0);
         assert_eq!(
@@ -89,6 +91,44 @@ fn wrong_profile_or_self_described_model_never_mutates_the_case() {
             "PLANNING"
         );
     }
+}
+
+#[test]
+fn a_hermes_circuit_breaker_escalates_the_case_once() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    project_planner(&mut store);
+    let runner = FakeRunner::default();
+    runner.json(json!({
+        "task": {
+            "id": "planner-1",
+            "title": "Run planner",
+            "status": "blocked",
+            "assignee": "planner",
+            "created_by": "pip-controller",
+            "body": serde_json::to_string(&json!({
+                "projection_key": "repo:984321#1240@1:planner:round:1:revision:1:worker"
+            })).unwrap()
+        },
+        "runs": [
+            {"outcome":"spawn_failed","profile":"planner","metadata":{}},
+            {"outcome":"spawn_failed","profile":"planner","metadata":{}},
+            {"outcome":"gave_up","profile":"planner","metadata":{"failures":3}}
+        ]
+    }));
+
+    assert_eq!(
+        ingest_completed_once_with(&mut store, &active_policy(), runner, "hermes", 50).unwrap(),
+        ResultCycle::ProviderFailureEscalated {
+            task_id: "planner-1".into()
+        }
+    );
+    let case = store.case("repo:984321#1240@1").unwrap().unwrap();
+    assert_eq!(case.state, "ESCALATED");
+    assert_eq!(
+        store.latest_event_type(&case.case_key).unwrap().as_deref(),
+        Some("OPERATIONAL_BOUND_REACHED")
+    );
 }
 
 fn project_planner(store: &mut Store) {
@@ -136,6 +176,7 @@ fn project_planner(store: &mut Store) {
         provider: "openai-codex".into(),
         model: "gpt-5.6-sol".into(),
         max_runtime: "PT30M".into(),
+        max_retries: 3,
         priority: 50,
         parent_task_ids: vec!["gate-1".into()],
     };

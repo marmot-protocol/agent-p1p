@@ -182,6 +182,7 @@ pub enum HermesError {
     MalformedJson(String),
     IncompleteTask,
     IncompleteRun,
+    RetryLimitReached,
     InvalidRunMetadata,
     Process(String),
 }
@@ -203,6 +204,9 @@ impl fmt::Display for HermesError {
             Self::MalformedJson(error) => write!(formatter, "malformed Hermes JSON: {error}"),
             Self::IncompleteTask => formatter.write_str("Hermes task is not durably complete"),
             Self::IncompleteRun => formatter.write_str("Hermes task has no successful latest run"),
+            Self::RetryLimitReached => {
+                formatter.write_str("Hermes task reached its configured retry limit")
+            }
             Self::InvalidRunMetadata => {
                 formatter.write_str("Hermes run metadata is not a JSON object")
             }
@@ -359,7 +363,15 @@ impl<R: CommandRunner> HermesReader<R> {
             task_id.into(),
             "--json".into(),
         ])?;
-        if detail.task.id != task_id || detail.task.status != "done" {
+        if detail.task.id != task_id {
+            return Err(HermesError::IncompleteTask);
+        }
+        if detail.task.status == "blocked"
+            && detail.runs.last().and_then(|run| run.outcome.as_deref()) == Some("gave_up")
+        {
+            return Err(HermesError::RetryLimitReached);
+        }
+        if detail.task.status != "done" {
             return Err(HermesError::IncompleteTask);
         }
         let run = detail.runs.last().ok_or(HermesError::IncompleteRun)?;

@@ -19,6 +19,9 @@ pub enum ResultCycle {
         task_id: String,
         transition_count: u32,
     },
+    ProviderFailureEscalated {
+        task_id: String,
+    },
 }
 
 #[derive(Debug)]
@@ -72,8 +75,15 @@ pub fn ingest_completed_once(
     store: &mut Store,
     policy: &RepositoryPolicy,
     hermes_program: &str,
+    observed_at: u64,
 ) -> Result<ResultCycle, ResultCycleError> {
-    ingest_completed_once_with(store, policy, ProcessRunner::default(), hermes_program)
+    ingest_completed_once_with(
+        store,
+        policy,
+        ProcessRunner::default(),
+        hermes_program,
+        observed_at,
+    )
 }
 
 pub fn ingest_completed_once_with<R: CommandRunner>(
@@ -81,6 +91,7 @@ pub fn ingest_completed_once_with<R: CommandRunner>(
     policy: &RepositoryPolicy,
     runner: R,
     hermes_program: &str,
+    observed_at: u64,
 ) -> Result<ResultCycle, ResultCycleError> {
     let reader = HermesReader::new(
         runner,
@@ -98,9 +109,57 @@ pub fn ingest_completed_once_with<R: CommandRunner>(
         let desired: TaskCreateSpec = serde_json::from_value(projection.desired.clone())
             .map_err(|_| ResultCycleError::InvalidProjection)?;
         validate_projection(&projection.task_id, &desired, policy)?;
+        let desired_body = desired
+            .body
+            .as_object()
+            .ok_or(ResultCycleError::InvalidProjection)?;
+        let case_key = text(desired_body, "case_key")?;
+        let case = store
+            .case(case_key)?
+            .ok_or(ResultCycleError::InvalidProjection)?;
+        if case.state_revision != number(desired_body, "state_revision")?
+            || matches!(
+                case.state.as_str(),
+                "ESCALATED" | "BLOCKED" | "ABANDONED" | "COMPLETED" | "TAKEN_OVER"
+            )
+        {
+            continue;
+        }
         let completed = match reader.show_completed_result(&policy.board, &projection.task_id) {
             Ok(completed) => completed,
             Err(HermesError::IncompleteTask | HermesError::IncompleteRun) => continue,
+            Err(HermesError::RetryLimitReached) => {
+                let configured = policy
+                    .workflow_policy()
+                    .map_err(|_| ResultCycleError::InvalidProjection)?
+                    .roles()
+                    .iter()
+                    .find(|configured| configured.profile == desired.assignee)
+                    .cloned()
+                    .ok_or(ResultCycleError::InvalidProjection)?;
+                crate::bounds::escalate_case_for_bound(
+                    store,
+                    policy,
+                    case_key,
+                    observed_at,
+                    crate::bounds::BoundObservation {
+                        bound: crate::OperationalBound::ProviderFailures,
+                        observed: u64::from(policy.max_provider_failures),
+                        limit: u64::from(policy.max_provider_failures),
+                        details: serde_json::json!({
+                            "source": "hermes-circuit-breaker",
+                            "task_id": projection.task_id,
+                            "profile": desired.assignee,
+                            "provider": configured.provider,
+                            "model": configured.model,
+                        }),
+                    },
+                )
+                .map_err(|error| ResultCycleError::MalformedResult(error.to_string()))?;
+                return Ok(ResultCycle::ProviderFailureEscalated {
+                    task_id: projection.task_id,
+                });
+            }
             Err(error) => return Err(error.into()),
         };
         if completed.profile != desired.assignee

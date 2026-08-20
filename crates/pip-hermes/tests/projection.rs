@@ -41,6 +41,7 @@ fn spec() -> TaskCreateSpec {
         provider: "openai-codex".into(),
         model: "gpt-5.6-sol".into(),
         max_runtime: "PT30M".into(),
+        max_retries: 3,
         priority: 10,
         parent_task_ids: Vec::new(),
     }
@@ -101,6 +102,12 @@ fn missing_projection_creates_one_blocked_idempotent_task() {
             .args
             .windows(2)
             .any(|pair| pair == ["--max-runtime", "30m"])
+    );
+    assert!(
+        command
+            .args
+            .windows(2)
+            .any(|pair| pair == ["--max-retries", "3"])
     );
     assert!(!command.args.iter().any(|arg| arg == "PT30M"));
     assert!(!command.args.iter().any(|arg| arg == "complete"));
