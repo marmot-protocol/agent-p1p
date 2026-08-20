@@ -1,5 +1,6 @@
 //! Deterministic worktree allocation.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::io::Read;
@@ -18,6 +19,7 @@ pub struct GitCommand {
     pub args: Vec<String>,
     pub timeout: Duration,
     pub max_output_bytes: usize,
+    pub environment: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -51,6 +53,7 @@ impl GitRunner for ProcessGitRunner {
         ];
         args.extend(command.args.iter().cloned());
         let mut environment = crate::sanitized_environment();
+        environment.extend(command.environment.clone());
         environment.insert("GIT_CONFIG_GLOBAL".into(), "/dev/null".into());
         environment.insert("GIT_CONFIG_NOSYSTEM".into(), "1".into());
         environment.insert("GIT_TERMINAL_PROMPT".into(), "0".into());
@@ -394,6 +397,7 @@ impl<R: GitRunner> WorktreeAllocator<R> {
             args,
             timeout: self.timeout,
             max_output_bytes: self.max_output_bytes,
+            environment: BTreeMap::new(),
         })?;
         if output.timed_out {
             return Err(AllocationError::TimedOut);

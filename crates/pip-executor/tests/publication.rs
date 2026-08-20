@@ -1,5 +1,7 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 use std::rc::Rc;
@@ -346,6 +348,61 @@ fn successful_retry_is_a_noop_and_remote_race_never_pushes() {
             .iter()
             .any(|command| command.args.iter().any(|argument| argument == "push"))
     );
+}
+
+#[test]
+fn authenticated_publication_passes_only_credential_paths_to_git() {
+    let tmp = tempfile::tempdir().unwrap();
+    let askpass = tmp.path().join("pip-control");
+    let credential = tmp.path().join("github.token");
+    fs::write(&askpass, b"fixture\n").unwrap();
+    fs::set_permissions(&askpass, fs::Permissions::from_mode(0o555)).unwrap();
+    fs::write(&credential, b"never-in-command-environment\n").unwrap();
+    fs::set_permissions(&credential, fs::Permissions::from_mode(0o400)).unwrap();
+    let runner = FakeGit::default();
+    runner.push(0, format!("{}\n", sha('b')));
+    runner.push(0, b"pip/v2/repo-984321/issue-1240/workflow-2\n".to_vec());
+    runner.push(0, Vec::new());
+    runner.push(
+        0,
+        format!(
+            "{}\trefs/heads/pip/v2/repo-984321/issue-1240/workflow-2\n",
+            sha('b')
+        ),
+    );
+    let publisher = publisher(runner.clone())
+        .with_askpass(&askpass, &credential)
+        .unwrap();
+    let askpass = askpass.canonicalize().unwrap();
+    let credential = credential.canonicalize().unwrap();
+
+    assert_eq!(
+        publisher
+            .publish(&spec(tmp.path(), Some(sha('a'))))
+            .unwrap(),
+        PublicationResult::Existing
+    );
+    for command in runner.commands.borrow().iter() {
+        assert_eq!(
+            command.environment.get("GIT_ASKPASS").unwrap(),
+            askpass.to_str().unwrap()
+        );
+        assert_eq!(
+            command.environment.get("PIP_V2_GIT_TOKEN_FILE").unwrap(),
+            credential.to_str().unwrap()
+        );
+        assert_eq!(
+            command.environment.get("GIT_ASKPASS_REQUIRE").unwrap(),
+            "force"
+        );
+        assert_eq!(command.environment.get("PIP_V2_GIT_ASKPASS").unwrap(), "1");
+        assert!(
+            !command
+                .environment
+                .values()
+                .any(|value| value.contains("never-in-command-environment"))
+        );
+    }
 }
 
 #[test]

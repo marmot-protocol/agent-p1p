@@ -28,7 +28,7 @@ pub use authorization::{
     verify_active_authorization,
 };
 pub use ci::{CiCycle, CiCycleError, PullRequestSource, reconcile_ci_once};
-pub use cli::{CliError, run_cli};
+pub use cli::{CliError, run_cli, run_git_askpass};
 pub use direct_worker::{
     CursorDirectRuntime, DirectWorkerCycle, DirectWorkerCycleContext, DirectWorkerError,
     DirectWorkerRuntime, DirectWorkerRuntimeError, recommended_direct_lease_seconds,

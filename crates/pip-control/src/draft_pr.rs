@@ -2,6 +2,7 @@
 
 use std::fmt;
 use std::num::{NonZeroU32, NonZeroU64};
+use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
@@ -159,6 +160,8 @@ pub fn publish_draft_pull_request_once<W: DraftPullRequestWriter>(
     writer: &W,
     policy: &RepositoryPolicy,
     store: &mut Store,
+    git_askpass: &Path,
+    github_token_file: &Path,
     now: u64,
     owner: &str,
     lease_seconds: u64,
@@ -169,7 +172,8 @@ pub fn publish_draft_pull_request_once<W: DraftPullRequestWriter>(
         "git",
         Duration::from_secs(30),
         1024 * 1024,
-    )?;
+    )?
+    .with_askpass(git_askpass, github_token_file)?;
     publish_draft_pull_request_once_with(
         writer,
         &publisher,

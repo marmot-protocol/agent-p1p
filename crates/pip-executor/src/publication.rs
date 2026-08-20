@@ -1,7 +1,9 @@
 //! Race-safe publication of controller-owned Git branches.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
@@ -194,6 +196,7 @@ pub struct GitPublisher<R> {
     program: String,
     timeout: Duration,
     max_output_bytes: usize,
+    environment: BTreeMap<String, String>,
 }
 
 impl<R: GitRunner> GitPublisher<R> {
@@ -212,7 +215,36 @@ impl<R: GitRunner> GitPublisher<R> {
             program,
             timeout,
             max_output_bytes,
+            environment: BTreeMap::new(),
         })
+    }
+
+    pub fn with_askpass(
+        mut self,
+        askpass: impl AsRef<Path>,
+        credential: impl AsRef<Path>,
+    ) -> Result<Self, PublicationError> {
+        let askpass = authenticated_file(askpass.as_ref(), true, 16 * 1024 * 1024)?;
+        let credential = authenticated_file(credential.as_ref(), false, 1024)?;
+        self.environment.insert(
+            "GIT_ASKPASS".into(),
+            askpass
+                .to_str()
+                .ok_or(PublicationError::InvalidConfiguration)?
+                .into(),
+        );
+        self.environment
+            .insert("GIT_ASKPASS_REQUIRE".into(), "force".into());
+        self.environment
+            .insert("PIP_V2_GIT_ASKPASS".into(), "1".into());
+        self.environment.insert(
+            "PIP_V2_GIT_TOKEN_FILE".into(),
+            credential
+                .to_str()
+                .ok_or(PublicationError::InvalidConfiguration)?
+                .into(),
+        );
+        Ok(self)
     }
 
     pub fn publish(
@@ -388,6 +420,7 @@ impl<R: GitRunner> GitPublisher<R> {
                 args: safe_args,
                 timeout: self.timeout,
                 max_output_bytes: self.max_output_bytes,
+                environment: self.environment.clone(),
             })
             .map_err(|error| PublicationError::Process(error.to_string()))?;
         if output.timed_out {
@@ -403,6 +436,31 @@ impl<R: GitRunner> GitPublisher<R> {
         }
         Ok(output)
     }
+}
+
+fn authenticated_file(
+    input: &Path,
+    executable: bool,
+    maximum_size: u64,
+) -> Result<PathBuf, PublicationError> {
+    if !input.is_absolute() {
+        return Err(PublicationError::InvalidConfiguration);
+    }
+    let metadata = fs::symlink_metadata(input)
+        .map_err(|error| PublicationError::Filesystem(error.to_string()))?;
+    let mode = metadata.permissions().mode() & 0o7777;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.len() == 0
+        || metadata.len() > maximum_size
+        || mode & 0o022 != 0
+        || (executable && mode & 0o111 == 0)
+    {
+        return Err(PublicationError::InvalidConfiguration);
+    }
+    input
+        .canonicalize()
+        .map_err(|error| PublicationError::Filesystem(error.to_string()))
 }
 
 fn valid_remote(value: &str) -> bool {

@@ -193,6 +193,8 @@ fn controller_cycle_is_inert_before_credentials_database_or_hermes_when_policy_i
                 .join("missing-secperf-token")
                 .to_str()
                 .unwrap(),
+            "--git-askpass",
+            directory.path().join("missing-askpass").to_str().unwrap(),
             "--hermes",
             "/missing/hermes",
             "--owner",
@@ -214,6 +216,44 @@ fn controller_cycle_is_inert_before_credentials_database_or_hermes_when_policy_i
     assert_eq!(value["ok"], true);
     assert_eq!(value["result"], "disabled");
     assert!(!database.exists());
+}
+
+#[test]
+fn git_askpass_reads_the_systemd_credential_without_json_or_token_environment() {
+    let directory = tempfile::tempdir().unwrap();
+    let credential = directory.path().join("github.token");
+    fs::write(&credential, b"github-secret-token\n").unwrap();
+    fs::set_permissions(&credential, fs::Permissions::from_mode(0o400)).unwrap();
+
+    let username = Command::new(env!("CARGO_BIN_EXE_pip-control"))
+        .env_clear()
+        .env("PIP_V2_GIT_ASKPASS", "1")
+        .env("PIP_V2_GIT_TOKEN_FILE", &credential)
+        .arg("Username for 'https://github.com': ")
+        .output()
+        .unwrap();
+    assert!(username.status.success());
+    assert_eq!(username.stdout, b"x-access-token\n");
+
+    let password = Command::new(env!("CARGO_BIN_EXE_pip-control"))
+        .env_clear()
+        .env("PIP_V2_GIT_ASKPASS", "1")
+        .env("PIP_V2_GIT_TOKEN_FILE", &credential)
+        .arg("Password for 'https://x-access-token@github.com': ")
+        .output()
+        .unwrap();
+    assert!(password.status.success());
+    assert_eq!(password.stdout, b"github-secret-token\n");
+
+    let rejected = Command::new(env!("CARGO_BIN_EXE_pip-control"))
+        .env_clear()
+        .env("PIP_V2_GIT_ASKPASS", "1")
+        .env("PIP_V2_GIT_TOKEN_FILE", &credential)
+        .arg("Unexpected prompt")
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    assert!(rejected.stdout.is_empty());
 }
 
 fn digest(bytes: &[u8]) -> String {

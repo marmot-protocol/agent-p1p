@@ -1,4 +1,14 @@
 fn main() {
+    if std::env::var("PIP_V2_GIT_ASKPASS").as_deref() == Ok("1") {
+        match pip_control::run_git_askpass(std::env::args().skip(1)) {
+            Ok(value) => println!("{value}"),
+            Err(error) => {
+                eprintln!("pip-control askpass: {error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     match pip_control::run_cli(std::env::args().skip(1)) {
         Ok(value) => {
             if let Err(error) = serde_json::to_writer(std::io::stdout().lock(), &value) {

@@ -87,6 +87,30 @@ pub fn run_cli(arguments: impl IntoIterator<Item = String>) -> Result<Value, Cli
     }
 }
 
+pub fn run_git_askpass(arguments: impl IntoIterator<Item = String>) -> Result<String, CliError> {
+    if std::env::var("PIP_V2_GIT_ASKPASS").as_deref() != Ok("1") {
+        return Err(CliError::InvalidArgument("askpass mode".into()));
+    }
+    let arguments = arguments.into_iter().collect::<Vec<_>>();
+    let [prompt] = arguments.as_slice() else {
+        return Err(CliError::InvalidArgument("askpass prompt".into()));
+    };
+    let credential_path = std::env::var_os("PIP_V2_GIT_TOKEN_FILE")
+        .ok_or_else(|| CliError::InvalidArgument("askpass credential".into()))?;
+    let credential = read_secret(Path::new(&credential_path), 1024)?;
+    let credential = std::str::from_utf8(&credential)
+        .map_err(|_| CliError::InvalidArgument("askpass credential".into()))?
+        .trim();
+    if credential.is_empty() || credential.chars().any(char::is_control) {
+        return Err(CliError::InvalidArgument("askpass credential".into()));
+    }
+    match prompt.trim_end() {
+        "Username for 'https://github.com':" => Ok("x-access-token".into()),
+        "Password for 'https://x-access-token@github.com':" => Ok(credential.into()),
+        _ => Err(CliError::InvalidArgument("askpass prompt".into())),
+    }
+}
+
 fn bootstrap_runtime(arguments: &[String]) -> Result<Value, CliError> {
     let options = options(
         arguments,
@@ -129,6 +153,7 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
             "--github-token",
             "--github-reviewer-general-token",
             "--github-reviewer-secperf-token",
+            "--git-askpass",
             "--hermes",
             "--owner",
             "--skills-commit-file",
@@ -281,6 +306,8 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         &writer,
         &policy,
         &mut store,
+        Path::new(required(&options, "--git-askpass")?),
+        Path::new(required(&options, "--github-token")?),
         now,
         required(&options, "--owner")?,
         lease_seconds,
