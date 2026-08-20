@@ -1,168 +1,146 @@
 # agent-p1p
 
-Canonical source for Pip v2: repository-scoped boards, deterministic orchestration contracts, direct Cursor worker adapters, versioned role skills, and the MDK pilot configuration.
+`agent-p1p` is the source repository for Pip v2: a repository-scoped,
+deterministic control plane that turns authorized GitHub issues into planned,
+built, independently reviewed, and finally adjudicated pull requests through
+Hermes Kanban boards.
 
 ## Status
 
-Runtime foundation and an inert MDK shadow pilot. The empty `pip-mdk` board is archived so Hermes cannot dispatch it. New intake and dispatch remain disabled. The legacy `pip` board still owns existing work, and MDK autonomous merge remains forbidden.
+The repository is beginning a documentation-first migration from a Python
+single-issue prototype to the target Rust control plane.
 
-## Runtime roles
+The Python implementation is useful as a safety prototype and behavioral
+reference, but it is not the target runtime and must not be installed from the
+current branch. At the migration baseline (`2607004`), upstream CI was red and
+the route-DAG upgrade was incomplete. The existing MDK automation remains a
+shadow, human-merge-only canary.
 
-| Role | Runtime | Model |
-|---|---|---|
-| `planner` | fresh Hermes profile | `openai-codex/gpt-5.6-sol`, `xhigh` |
-| `builder-grok` | direct Cursor adapter | `composer-2.5` |
-| `reviewer-general` | fresh Hermes profile | `openai-codex/gpt-5.6-sol`, `high` |
-| `reviewer-secperf` | direct Cursor adapter | `claude-opus-4-8-thinking-high` |
-| `final-reviewer` | fresh Hermes profile | `openai-codex/gpt-5.6-sol`, `xhigh` |
+The documentation distinguishes three things explicitly:
 
-The two Cursor roles use the existing v1 `cursor-fixer` and `cursor-reviewer` Hermes profiles as orchestration shells. Each shell launches one fresh direct Cursor session with the exact requested model. This is cooperative same-UID orchestration, not hostile-worker containment.
+- **Target architecture:** the generic Rust system we intend to build.
+- **Legacy prototype:** the current Python implementation, including its
+  hard-coded `marmot-protocol/mdk#1240` behavior.
+- **Activation policy:** the operational controls that limit a generic engine
+  to one deliberately tagged canary issue without encoding that issue in code.
 
-## Skill composition
+## Documentation
 
-`related_skills` metadata is not treated as dependency injection. Runtime composition is explicit and ordered:
+- [`docs/pip-v2-architecture-plan.md`](docs/pip-v2-architecture-plan.md) —
+  canonical target architecture and invariants.
+- [`docs/current-python-canary.md`](docs/current-python-canary.md) — accurate
+  inventory of the legacy Python prototype and its gaps.
+- [`docs/control-flow.md`](docs/control-flow.md) — target event, state, task,
+  review-loop, and recovery flow.
+- [`docs/adr/0001-rust-control-plane.md`](docs/adr/0001-rust-control-plane.md) —
+  decision to implement the target runtime in Rust.
+- [`docs/adr/0002-authoritative-ledger.md`](docs/adr/0002-authoritative-ledger.md) —
+  decision that the control-plane ledger is authoritative and Hermes is the
+  execution queue and operator UI.
+- [`docs/runbooks/deployment.md`](docs/runbooks/deployment.md) — target build,
+  provenance, install, rollback, and canary-activation contract.
+- [`docs/migration-roadmap.md`](docs/migration-roadmap.md) — incremental Python
+  reference-to-Rust migration with exit criteria.
 
-1. `skills/shared/workflow-contract/SKILL.md`
-2. the role-specific `skills/<role>/SKILL.md`
-3. immutable task input and repository policy
-4. the required result schema
+## Target roles
 
-Hermes role profiles symlink both canonical skills. The two existing Cursor runner profiles receive the matching v2 role contract plus the established v1 Cursor workflow skill. Cursor invocations save their rendered prompt and invocation metadata with the run artifacts.
+Role names express responsibilities, not implementation language or provider
+marketing names. Exact provider/model bindings live in versioned policy.
 
-Hermes Pip profiles use the host account home for subprocesses, so role workers share the existing `agent-p1p` GitHub CLI authentication rather than maintaining copied credentials. One-issue intake stages the planner task as blocked, attaches the configured gateway-owned human-attention subscription, and only then unblocks it for dispatch. This prevents a fast terminal event from racing notification setup; workers never receive Telegram credentials.
+| Role | Responsibility |
+|---|---|
+| `planner` | Validate the issue and root cause; produce an authorized plan. |
+| `builder` | Implement the active plan, add regression coverage, and create/update a draft PR. |
+| `reviewer-general` | Independently review correctness, integration, tests, and maintainability. |
+| `reviewer-secperf` | Independently review security, privacy, concurrency, and performance. |
+| `final-reviewer` | Reconstruct the complete case and decide its next disposition. |
 
-The exact `mdk#1240` canary has a separate decision reconciler. `pip-v2-decision.timer` reads the issue every five minutes with a systemd-delivered, repository-scoped read credential. It verifies numeric GitHub identities, parses the latest versioned planner comment and its outcome, writes the disposition into the protected case, and emits a group-readable evidence-bound route at `/run/pip-v2/decision-route.json`. A separate `pip-v2-route-consumer.timer` revalidates issue authorization and exact planner evidence immediately before activation, then maps active routes into the existing Hermes Kanban board. Kanban idempotency keys prevent accidental duplicate tasks; there is no parallel route ledger, worktree manager, or subprocess scheduler.
+Every reasoning run starts in a fresh agent session. The deterministic Rust
+engine owns workflow state and never uses an LLM to choose transitions.
 
-- planner outcome `PROCEED` → automatically advance the protected case to `BUILDING` and emit one seven-task builder/review/remediation/re-review/final-review DAG;
-- planner human-wait outcome → hold until an authoritative decision resolves the concrete ambiguity;
-- `Pip: approve exact scope` → advance a held plan to `BUILDING`;
-- `Pip: narrow scope — <one-line scope>` → return to planning with the supplied boundary;
-- `Pip: reject` → abandon the case and route no work.
-
-The plan's base SHA is an evidence snapshot, not an activation lock. The builder starts from current `master`, records its actual base, and adapts the plan to ordinary upstream movement. It returns to planning only for a concrete incompatibility that makes the authorized scope unsafe or unimplementable. Target-branch movement alone never requires replanning or another approval.
-
-For approval and rejection, the reconciler also accepts the complete-comment
-aliases `approve`, `approved`, `reject`, and `rejected`, optionally prefixed by
-`@agent-p1p`, with case ignored. Extra prose or multiline comments remain
-unrecognized. Narrowing retains the canonical prefix because its scope text is
-an authorization boundary.
-
-A narrowing decision invalidates its planner version. Dispatch resumes only after a newer planner comment binds the exact narrowing evidence; a `PROCEED` replan then dispatches automatically without redundant approval. The final task verifies same-head CI and two independent same-head re-reviews, then notifies JG. It never merges.
-
-No `@agent-p1p` mention is needed. Wrong actors are ignored; ambiguous text remains held; deletion or invalidation of accepted approval blocks an active build. The public control socket remains restricted to `ensure_canary` and `status`; only the network-enabled oneshot reconciler writes decision evidence.
-
-## Layout
+## Target system boundary
 
 ```text
-config/boards/          Inert board policy
-config/repositories/    Repository and pilot policy
-manifests/roles/        Declarative runtime/model/tool/skill definitions
-docs/                   Architecture and implementation plan
-schemas/                Versioned worker/case JSON contracts
+GitHub webhook/reconciler
+          |
+          v
+authoritative Rust case ledger
+          |
+          v
+deterministic transition engine
+          |
+          v
+repository Hermes board
+          |
+          v
+fresh planner/builder/reviewer task
+          |
+          +---- validated immutable result ----> ledger
+```
+
+Hermes Kanban is the repository-scoped queue and operational view. It is not a
+second workflow database. A Kanban completion cannot release downstream work
+until the control plane has independently validated and committed it.
+
+## Canary policy
+
+The engine must not contain a canary issue number, comment ID, PR number,
+personal notification destination, or repository-specific scope rule.
+
+The MDK canary is constrained by policy instead:
+
+- one configured repository and board;
+- `pip-ok` applied by a trusted actor;
+- intake and dispatch explicitly enabled;
+- at most one active case;
+- only one issue deliberately carries the label during the trial;
+- shadow disposition and human merge only;
+- no autonomous merge until JG explicitly changes policy.
+
+Removing authorization, taking over the PR, pausing the repository, or changing
+the exact reviewed head fails closed.
+
+## Repository layout during migration
+
+```text
+docs/                   Canonical architecture, ADRs, migration, and runbooks
 skills/                 Canonical shared and role-specific skills
-src/pip_agent/          Contracts, bootstrap, adapters, intake, case store, state machine
-tests/                  Contract, runtime, package, and offline E2E tests
+schemas/                Legacy JSON contracts retained as migration inputs
+manifests/              Legacy role manifests retained as migration inputs
+src/pip_agent/          Legacy Python reference implementation
+tests/                  Legacy behavioral and safety tests
+scripts/                Legacy Python-prototype installer
+crates/                 Future Rust workspace (not created in the docs-only pass)
 ```
 
-## Commands
+Canonical skills remain under `skills/`; runtime profile directories must
+symlink to their installed, content-addressed copies.
+
+## Legacy prototype diagnostics
+
+These commands inspect the Python reference implementation. They are not a
+production deployment procedure.
 
 ```bash
-# Show the three Hermes profiles that bootstrap would manage
-uv run pip-v2-bootstrap --repo-root "$PWD"
-
-# Apply profile configuration and canonical skill links
-uv run pip-v2-bootstrap --repo-root "$PWD" --apply
-
-# Run a direct Cursor role from immutable task input
-uv run pip-v2-cursor builder-grok \
-  --repo-root "$PWD" \
-  --task /path/to/task.json \
-  --worktree /path/to/assigned/worktree \
-  --artifacts /path/to/new/run-artifacts
-
-# Exercise planner → build → parallel reviews → join → final shadow decision
-uv run pip-v2-fixture
-
-# Inspect one pip-ok issue without creating a case or task
-uv run pip-v2-intake \
-  --config config/repositories/mdk.json \
-  --issue NUMBER
-
-# Development checks
+uv run --locked pip-v2-bootstrap --repo-root "$PWD"
+uv run --locked pip-v2-fixture
 uv run --locked --dev pytest -q
+uv build --wheel
 ```
 
-The Cursor adapter refuses to reuse an artifact directory, always starts a new CLI session, requests Cursor sandboxing, does not auto-approve MCPs, verifies the pinned model is advertised exactly once, captures stdout/stderr, validates immutable task bindings and the returned role schema, and fails closed when the returned model identity differs. The installed Cursor CLI does **not** expose the actually routed model in its result envelope, so the adapter records that limitation rather than claiming cryptographic proof against an upstream silent substitution.
+Do not run `scripts/install-control-plane.sh` from the current migration branch.
+The legacy installer and runtime remain issue-specific and the migration
+baseline does not have green CI or cryptographically bound source provenance.
 
-## Storage trust boundary
+## Non-negotiable invariants
 
-“Immutable runs” means append-only through the control-plane API, with SQLite
-triggers and connection-scoped guards catching accidental direct-SQL mutation.
-It is not cryptographic tamper evidence against the owner of the SQLite file: a
-process with arbitrary write access can replace the database, drop triggers, or
-register replacement SQLite functions. `CaseStore` creates the database as
-mode `0600`, rejects symlinked or foreign-owned files, and the production state
-directory must be exclusively writable by the deterministic control-plane OS
-identity. Worker roles must never receive filesystem access to that path.
-
-`pip-v2-control` provides the first activation slice. A dedicated systemd user
-owns `/var/lib/pip-v2` and exposes a bounded Unix socket. The public protocol has
-only two operations: idempotently create the single root-configured canary case,
-and read its status. Callers cannot supply a repository, issue number, state,
-run, transition, PR, or merge decision. This deliberately makes same-UID worker
-access to the socket non-authoritative: it cannot select new work or mutate the
-workflow. Worker lifecycle/result submission through the protected service
-remains disabled until a later control plane can validate evidence independently.
-Human-decision reconciliation runs
-as a separate root-owned oneshot, and a caller-owned oneshot translates only
-its fixed, plan-bound route file into deterministic v1 Kanban tasks. Kanban
-retains worker artifacts and parent results; it does not gain a generic socket
-operation for mutating the protected case database.
-
-Copy and verify the installer as root before executing it; do not run the
-user-writable checkout script directly:
-
-```bash
-sudo bash -c '
-  set -euo pipefail
-  src=$1; installer_sha=$2; shift 2
-  pinned=$(mktemp /root/pip-v2-installer.XXXXXX)
-  trap "rm -f -- $pinned" EXIT
-  install -o root -g root -m 0700 "$src" "$pinned"
-  printf "%s  %s\\n" "$installer_sha" "$pinned" | sha256sum -c -
-  "$pinned" --installer-sha256 "$installer_sha" "$@"
-' bash \
-  /home/jeff/code/agent-p1p/scripts/install-control-plane.sh \
-  <verified-installer-sha256> \
-  --wheel /home/jeff/code/agent-p1p/dist/agent_p1p-0.1.0-py3-none-any.whl \
-  --sha256 <verified-wheel-sha256> \
-  --source-commit <reviewed-40-character-git-commit> \
-  --caller jeff \
-  --issue 1240
-```
-
-The installer requires the existing v1 `cursor-fixer` and `cursor-reviewer`
-profile directories. It creates the system identity, installs a root-owned
-wheel release, links only the packaged Cursor role contracts as the caller,
-writes an exact shadow/human-merge-only policy, installs the hardened control,
-decision, and route-consumer units, starts them, and verifies the caller can
-reach the status endpoint. Root never creates, changes ownership of, or changes
-mode on caller workspace paths. The installer does not activate the `pip-mdk`
-board or enqueue a task.
-
-## MDK pilot
-
-The first target is `marmot-protocol/mdk` on board `pip-mdk` using intake label `pip-ok`. The pilot remains inert until an explicit activation step:
-
-- `intake_enabled: false`
-- `dispatch_enabled: false`
-- `archived_until_activation: true`
-- `merge_mode: shadow`
-- `autonomous_merge: false`
-- existing MDK work remains on the legacy board
-
-No issue is eligible merely because the label exists; intake must also be explicitly enabled later. A shadow-ready result is a recommendation to JG, not merge authority.
-
-Intake additionally verifies that `pip-ok` was applied by a configured trusted actor, rejects pull requests and explicitly held issue numbers, and uses a deterministic Kanban idempotency key. `--enqueue` is refused while `new_intake_enabled` is false.
-
-See [`docs/pip-v2-architecture-plan.md`](docs/pip-v2-architecture-plan.md).
+- Orchestration is deterministic and token-free.
+- Models are explicitly pinned; substitution blocks the run.
+- CI and both mandatory reviews bind to the exact PR head.
+- Completed runs and accepted external evidence are append-only.
+- Builders never broaden scope or edit another repository opportunistically.
+- Credentials never enter this repository, prompts, task bodies, logs, or run
+  artifacts.
+- MDK remains in shadow merge mode until JG explicitly changes it.
+- A release artifact must be cryptographically bound to its reviewed source
+  and immutable manifest before installation.

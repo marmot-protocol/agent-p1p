@@ -1,263 +1,219 @@
-# Pip v2: Repository-Scoped Autonomous Fix Pipeline
+# Pip v2 target architecture
 
-**Status:** Runtime foundation implemented; MDK pilot archived and disabled pending explicit activation
-**Audience:** JG, Pip, and future implementers
-**Purpose:** Provide one durable reference for the agreed target architecture, unresolved policy decisions, pilot rollout, and acceptance criteria.
+**Status:** Approved direction; Rust migration not yet implemented
 
-> This document records the design agreed in discussion. It does not authorize changes to the current Pip pipeline, repository policies, human-held PRs, or protected worktrees. Implementation begins only after JG explicitly requests it.
+**Scope:** Full multi-repository target, beginning with an MDK shadow canary
 
----
+**Audience:** JG, Pip maintainers, operators, and future implementers
+
+This is the canonical target architecture required by `AGENTS.md`. It defines
+the system we intend to build, not the behavior of the legacy Python canary.
+See [`current-python-canary.md`](current-python-canary.md) for current reality
+and [`migration-roadmap.md`](migration-roadmap.md) for the transition.
+
+The MDK pilot remains shadow and human-merge-only until JG explicitly changes
+that policy. This document does not authorize production activation or merge.
 
 ## 1. Goal
 
-Build a durable, conservative autonomous issue-fixing system that:
+Build a durable control plane that:
 
-1. Validates an issue and identifies its actual root cause before code is written.
-2. Produces a versioned implementation plan that is readable by humans and machine-consumable.
-3. Uses Cursor Grok 4.6 High as the builder.
-4. Requires independent general and security/performance reviews of the same exact PR head.
-5. Iterates through immutable build and review rounds until the work converges or reaches a bounded escalation condition.
-6. Performs a final holistic GPT-5.6-Sol review of the complete issue-to-PR history.
-7. Merges only after deterministic exact-head revalidation.
-8. Isolates each watched repository on its own Kanban board while retaining a lightweight global control plane.
-9. Detects provider authentication, quota, and model failures quickly without retry storms or silent model substitution.
-10. Preserves a complete, auditable record of plans, builds, findings, resolutions, model assignments, and decisions.
+1. discovers explicitly authorized GitHub issues;
+2. validates the issue and its root cause before implementation;
+3. produces a versioned, human-readable and machine-consumable plan;
+4. creates or updates one Pip-owned draft PR;
+5. requires two independent reviews of the same exact PR head;
+6. repeats remediation and same-head review until convergence or escalation;
+7. performs a fresh holistic final review of the complete case;
+8. stops at a human-held recommendation in shadow mode;
+9. optionally performs a guarded merge only when repository policy explicitly
+   permits it; and
+10. preserves enough immutable evidence to reconstruct every decision.
 
----
+One configurable engine serves all repository boards. Canary limitations are
+policy, not special-purpose code.
 
-## 2. Design principles
+## 2. Non-negotiable principles
 
-- **Plan before implementation.** Validate the issue and root cause first.
-- **Human intent is authoritative.** Product, protocol, design, and ambiguous API decisions return to trusted humans.
-- **Repository scope is a boundary.** A builder never opportunistically edits another repository.
-- **One reasoning role per worker.** Cursor roles run directly through Cursor adapters rather than through an unnecessary outer GPT agent.
-- **Fresh context per task.** No long-running planner, builder, or reviewer sessions.
-- **Immutable run history.** A permanent case owns immutable plan/build/review runs.
-- **Exact-head evidence.** CI and reviews are valid only for the PR SHA they evaluated.
-- **Deterministic orchestration.** Scripts move state; models reason about issues and code.
-- **No silent fallback.** A role runs its pinned model or blocks.
-- **Conservative convergence.** Uncertainty returns to planning, review, or a human rather than being guessed through.
-- **Least privilege.** Builders build, reviewers review, and only a guarded deterministic transaction merges.
-- **Observable failure.** Auth, quota, model, CI, and workflow failures produce explicit states and actionable alerts.
+- **Deterministic orchestration.** Models reason about issues and code; Rust
+  code validates evidence and chooses transitions.
+- **One authoritative ledger.** The control-plane database owns case state,
+  accepted evidence, immutable runs, and dispatch intent.
+- **Hermes as queue and UI.** A board presents and executes work but is not a
+  second workflow database.
+- **Plan before implementation.** The builder never invents missing product or
+  protocol intent.
+- **Fresh reasoning sessions.** Durable context comes from case artifacts, not
+  prior model conversation state.
+- **Exact-head evidence.** CI and reviews are valid only for the PR head they
+  examined.
+- **No silent model fallback.** A missing or substituted model blocks the run.
+- **Repository scope is a boundary.** A worker cannot opportunistically edit a
+  dependency repository.
+- **Append-only history.** Accepted external evidence and completed runs are
+  never edited in place.
+- **Least privilege.** Worker capabilities match their role. Merge authority is
+  separate from planning, building, and review.
+- **Fail closed, recover deterministically.** Ambiguous, stale, missing, or
+  conflicting evidence cannot release downstream work.
+- **No embedded pilot identity.** Repository, issue, actor, notification, PR,
+  and branch values come from validated policy and live evidence.
 
----
-
-## 3. Target architecture
+## 3. System context
 
 ```text
-                           GLOBAL CONTROL PLANE
-                 provider health / quotas / dependencies
-                  concurrency / alerts / pause / reports
+                         GLOBAL POLICY AND HEALTH
+              repository registry / provider capacity / pause
                                   |
-             +--------------------+--------------------+
-             |                    |                    |
-         pip-mdk            pip-transponder       pip-goggles ...
-             |                    |                    |
-             +-------- repository-scoped cases -------+
+               +------------------+------------------+
+               |                  |                  |
+            pip-mdk          pip-goggles       pip-client-...
+               |                  |                  |
+               +------ repository-scoped cases -----+
                                   |
                                   v
-                      ISSUE INTAKE: pip-ok
+                      AUTHORITATIVE RUST LEDGER
+                       events / cases / runs
                                   |
                                   v
-                  PHASE 1: PLAN AND VALIDATE
-                      planner / GPT-5.6-Sol xhigh
+                    DETERMINISTIC WORKFLOW ENGINE
                                   |
-            +---------------------+----------------------+
-            |                     |                      |
-     clarification         cross-repo dependency    approved plan
-            |                     |                      |
-       trusted human        linked board/case             v
-                                                   PHASE 2: BUILD
-                                               builder-grok / Cursor
-                                               Grok 4.6 High
-                                                        |
-                                              draft PR + green CI
-                                                        |
-                                    +-------------------+-------------------+
-                                    |                                       |
-                         reviewer-general                         reviewer-secperf
-                         GPT-5.6-Sol High                         Cursor Kimi K3 High
-                                    |                                       |
-                                    +-------------+-------------------------+
-                                                  |
-                                     deterministic join barrier
-                                                  |
-                                  findings -------+------- exact-head approved
-                                      |                           |
-                                  builder loop                    v
-                                                     PHASE 3: FINAL REVIEW
-                                                     GPT-5.6-Sol xhigh
-                                                                  |
-                   +----------------+----------------+-------------+---------+
-                   |                |                |                       |
-             return build     return review    return planning        MERGE decision
-                                                                          |
-                                                        deterministic merge transaction
+                       +----------+----------+
+                       |                     |
+                  GitHub adapter        Hermes adapter
+                       |                     |
+                       |              repository board
+                       |                     |
+                       +---- fresh role workers
 ```
 
----
+The global layer owns only cross-board policy and resources. It does not
+interpret code, summarize away evidence, override a verdict, or select a
+different model.
 
-## 4. Boards and global control plane
+## 4. Rust workspace boundary
 
-### 4.1 Repository boards
-
-Create one board per watched repository, for example:
+The target implementation is a Rust workspace with dependency direction toward
+a pure core:
 
 ```text
-pip-mdk
-pip-marmot
-pip-whitenoise-android
-pip-whitenoise-mac
-pip-goggles
-pip-transponder
-pip-darkmatter-linux
+crates/
+  pip-core/       domain types, state machine, policy, transition decisions
+  pip-contracts/  versioned worker and evidence contracts
+  pip-store/      SQLite events, cases, immutable runs, dispatch outbox
+  pip-github/     authenticated GitHub reads/writes and webhook verification
+  pip-hermes/     board capability probe and task/result adapter
+  pip-executor/   direct provider process adapters and worktree bindings
+  pip-control/    daemon, reconciler, CLI, health, and systemd entry points
 ```
 
-Each repository board owns:
+`pip-core` must not depend on network, subprocess, wall-clock, filesystem,
+SQLite, Hermes, GitHub, or model-provider code. Tests provide explicit events,
+policy, and time. The core returns transition decisions and required effects.
 
-- issue intake and case state;
-- plan artifacts;
-- worktree and branch references;
-- PR lifecycle;
-- build, review, and final-review rounds;
-- exact-head evidence;
-- blockers and human clarifications;
-- repository-specific backlog and retention.
+Adapters perform effects and return attributable evidence. An outbox records
+the intent before any external side effect so restart recovery is idempotent.
 
-Separate boards must not become separate, duplicated orchestration implementations. One configurable workflow engine should operate across all boards.
+## 5. Boards, repositories, and cases
 
-### 4.2 Lightweight global control plane
+Each watched repository has one Hermes board and one repository policy. A board
+contains task projections for cases owned by that repository.
 
-The global control plane is deterministic and token-free. It owns only cross-board concerns:
+A permanent case identity is `(repository_id, issue_number, workflow_version)`.
+The ledger records:
 
-- repository and board registry;
-- global OpenAI and Cursor concurrency;
-- provider authentication, quota, and model health;
-- cross-repository dependency graph;
-- duplicate issue/PR prevention;
-- trusted-actor registry;
-- global emergency pause;
-- human-held PR registry;
-- worker watchdog and retry suppression;
-- aggregate reporting and audit;
-- global resource limits;
-- provider recovery probes.
+- current state and state revision;
+- active plan version and authorization evidence;
+- branch, worktree, PR, and exact head;
+- build, review, remediation, and final-review rounds;
+- active and resolved findings;
+- dependencies and human decisions;
+- provider/model and skill versions;
+- dispatch outbox entries and Hermes task projections;
+- append-only events and immutable run payloads.
 
-It does not interpret code, override model verdicts, summarize away evidence, choose fixes, or silently change models.
+Hermes task status is observed evidence. It does not directly mutate case state.
+The engine validates a completed result, commits the run and transition, and
+then publishes the next task projection.
 
----
+## 6. Repository policy
 
-## 5. Profiles, models, and reasoning
+Policy is versioned, schema-validated, and installed separately from secrets.
+It includes:
 
-| Profile | Execution path | Model | Reasoning |
-|---|---|---|---|
-| `planner` | Fresh Hermes session | OpenAI/Codex GPT-5.6-Sol | `xhigh` |
-| `builder-grok` | Direct Cursor worker adapter | `composer-2.5` | High |
-| `reviewer-general` | Fresh Hermes session | OpenAI/Codex GPT-5.6-Sol | High |
-| `reviewer-secperf` | Direct Cursor worker adapter | `claude-opus-4-8-thinking-high` | High |
-| `final-reviewer` | Fresh Hermes session | OpenAI/Codex GPT-5.6-Sol | `xhigh` |
+- repository and default branch;
+- Hermes board;
+- intake label and trusted label actors;
+- issue exclusions and human-held work;
+- enabled roles and exact provider/model/reasoning bindings;
+- required CI and mergeability rules;
+- branch ownership rules;
+- sensitive-scope escalation categories;
+- loop, elapsed-time, concurrency, and retry bounds;
+- shadow or guarded-merge disposition;
+- notification destination references, not credentials;
+- global and repository pause state.
 
-The Cursor model identifiers above were verified as available on the current Cursor Ultra account during design.
+Changing policy creates a new policy revision. An active case retains its
+accepted revision unless a change is explicitly declared immediately
+restrictive, such as pause, authorization removal, or merge disablement.
 
-### 5.1 No nested reasoning for Cursor roles
+## 7. Intake and authorization
 
-The current Pip Cursor lane uses an outer GPT-powered Hermes profile to invoke an inner Cursor agent. Pip v2 should avoid that arrangement.
+Primary intake comes from signed GitHub webhooks. A bounded periodic reconciler
+recovers missed deliveries. Delivery IDs and canonical event fingerprints are
+idempotency keys.
 
-A Cursor adapter should be a deterministic process that:
+An issue becomes eligible only when:
 
-1. Loads the task and canonical artifacts.
-2. Builds the role prompt from versioned skills.
-3. Sets the exact repository worktree.
-4. Invokes Cursor CLI with the pinned model.
-5. Captures JSON output and logs.
-6. Verifies requested versus actual model.
-7. Validates the output schema.
-8. Records usage and completion or failure.
+- it is open and is not a pull request;
+- the configured label is currently present;
+- the latest relevant label event came from a trusted numeric GitHub actor;
+- it is not excluded, held, duplicated, or already owned by another workflow;
+- repository intake is enabled and global/repository pause is clear; and
+- repository and global active-case limits allow it.
 
-It performs no independent LLM reasoning.
+The controller creates the case before it dispatches a planner. Losing
+authorization prevents new worker activation and moves active work to a durable
+hold according to policy.
 
-### 5.2 Fresh sessions
+## 8. Roles and execution
 
-Every run starts a new session. No profile carries a long-running issue conversation across tasks. Durable context comes from:
+| Role | Target responsibility | Write authority |
+|---|---|---|
+| `planner` | Validate issue, root cause, scope, dependencies, and test plan. | Issue plan comment and plan artifacts only. |
+| `builder` | Manage the assigned worktree, implement the active plan, test, commit, push, and create/update a draft PR. | Assigned Pip branch and draft PR. |
+| `reviewer-general` | Correctness, integration, errors, concurrency, tests, maintenance. | Review evidence/comments only. |
+| `reviewer-secperf` | Security, privacy, authorization, abuse, resource bounds, performance. | Review evidence/comments only. |
+| `final-reviewer` | Reconstruct the complete case and determine the next disposition. | Final evidence/comment only. |
 
-- current GitHub issue and comments;
-- versioned plan artifacts;
-- permanent case state;
-- prior immutable run results;
-- current PR and exact head;
-- current CI and review evidence;
-- repository context files and canonical skills.
+Exact models are policy values rather than role names. A provider adapter must:
 
----
+1. probe the required model and authentication path;
+2. render a complete prompt from immutable inputs and versioned skills;
+3. start a fresh session in the assigned workspace;
+4. capture bounded output and durable artifacts;
+5. record requested and reported model identity;
+6. reject mismatch or unverifiable required fields; and
+7. return a versioned contract without choosing a workflow transition.
 
-## 6. Permanent case and immutable runs
+Provider-side model routing may not be cryptographically attestable. The run
+must record the precise assurance available rather than claim more.
 
-Create one permanent case per issue. Never repeatedly reopen one mutable task to represent the whole workflow.
+## 9. Planning contract
 
-Here, immutable means append-only through the control-plane API. SQLite guards
-detect accidental bypass but are not a security boundary against the database
-file owner, who can replace the file or schema. Before activation, the state
-directory must be exclusively writable by the control-plane OS identity and
-must not be filesystem-accessible to planner, builder, or reviewer roles.
-The initial activation service exposes only root-policy-bound `ensure_canary`
-and read-only `status` operations over a bounded Unix socket. It accepts no
-caller-selected issue, transition, run, PR, head, or merge fields. This makes
-socket calls from same-UID Hermes workers harmless for the initial planning
-canary while keeping lifecycle mutations disabled until independently verified
-evidence reconciliation exists.
+The planner establishes:
 
-Example:
+- whether the behavior is real and still present on the current default branch;
+- whether the issue describes the root cause or a symptom;
+- whether another change already fixed or duplicated it;
+- repository-local scope and explicit non-scope;
+- cross-repository prerequisites;
+- product, protocol, privacy, trust, persistence, UX, or API ambiguities;
+- regression coverage and repository-native verification; and
+- a planned-base SHA as evidence context, not a checkout lock.
 
-```text
-case: whitenoise-android#1234
-  plan-v1
-  build-r1
-  general-review-r1
-  secperf-review-r1
-  build-r2
-  general-review-r2
-  secperf-review-r2
-  final-review-r1
-```
-
-The case stores current pointers and state:
-
-```yaml
-case_id: whitenoise-android#1234
-workflow_version: 2
-phase: review
-plan_version: 1
-build_round: 2
-review_round: 2
-final_review_round: 0
-pr_number: 1500
-current_pr_head: abc123
-blockers: []
-dependencies: []
-```
-
-Completed runs are immutable. New evidence creates a new run. This preserves an auditable timeline and makes loop detection reliable.
-
----
-
-## 7. Phase 1: planning and validation
-
-### 7.1 Responsibilities
-
-The `planner` must answer:
-
-1. Is the reported behavior reproducible or otherwise established by evidence?
-2. Is it still present on current `master`?
-3. Has another change already fixed it?
-4. Is the issue describing the defect or only a symptom?
-5. What is the root cause?
-6. Is the root cause inside this repository?
-7. Does the correct fix require broader scope than the issue describes?
-8. Are there product, protocol, design, or API decisions that code inspection cannot answer?
-9. What regression test proves the defect and intended fix?
-10. What repository-native checks must the builder run?
-
-### 7.2 Outcomes
+Planner outcomes are typed. At minimum:
 
 ```text
 PROCEED
@@ -269,683 +225,215 @@ CROSS_REPO_DEPENDENCY
 WAITING_FOR_ISSUE_CREATOR
 NEEDS_HUMAN_SCOPE_DECISION
 ABANDON
+BLOCKED
 ```
 
-The planner must not silently turn a narrow issue into a broad architectural rewrite.
+`PROCEED` requires a complete repository-local plan with no unresolved decision.
+Each plan version has a GitHub comment, structured ledger record, and immutable
+Markdown/JSON artifact. A trusted clarification creates another planning run;
+it never releases the builder directly.
 
-### 7.3 Human clarification
+## 10. Build and draft-PR contract
 
-When code inspection cannot determine product, protocol, design, UX, or API intent, the planner posts a focused issue comment explaining:
+The controller, not the model, assigns the repository, branch namespace,
+worktree path, active plan, and expected base context. The builder:
 
-- what it validated;
-- the specific ambiguity;
-- why code inspection cannot resolve it;
-- concrete options or questions;
-- consequences of each option;
-- that implementation is paused.
+1. verifies the plan still applies to the current default branch;
+2. returns to planning only for a concrete incompatibility;
+3. implements only the authorized scope;
+4. adds regression coverage and runs required local checks;
+5. inspects the full diff;
+6. creates signed Pip-attributed commits;
+7. pushes only the assigned Pip branch;
+8. opens or updates the case's draft PR; and
+9. reports the exact head and CI evidence.
 
-The case enters `WAITING_FOR_ISSUE_CREATOR` or `NEEDS_HUMAN_SCOPE_DECISION`.
+The engine independently reads GitHub before accepting those claims. Clean
+default-branch movement does not force a rebase. A conflict, branch-protection
+requirement, or material plan invalidation does. Any new head invalidates all
+head-bound review and CI evidence.
 
-Only comments from authoritative actors can resume planning. The trusted-actor policy must include at least JG, the issue creator where appropriate, repository maintainers, and explicitly trusted agents. Arbitrary comments cannot redefine scope.
+## 11. Review convergence
 
-A trusted reply creates a new planning run. It never wakes the builder directly.
+After the accepted builder head has required green CI, the engine dispatches
+both mandatory reviewers independently against that same SHA. Neither review
+is a parent summary of the other.
 
-### 7.4 Cross-repository dependencies
+Every blocking finding has a stable identity, origin role, reviewed head,
+defect, consequence, corrective direction, and required resolution evidence.
 
-A builder must not edit another repository to satisfy its issue. The planner records and links the prerequisite.
+If either reviewer requests changes:
 
-Pip may automatically create a dependency issue only when the required contract is technically unambiguous, such as exposing an existing field or operation through an established binding. Product, protocol, persistence, privacy, trust, or public-API decisions require human input first.
+1. the engine unions the mandatory findings;
+2. dispatches one builder remediation run;
+3. independently validates the new PR head and required CI;
+4. invalidates both earlier approvals;
+5. dispatches both reviewers again on the new exact head; and
+6. requires the originating reviewer to confirm each applicable resolution.
 
-Cross-board dependency metadata:
+This is a dynamic loop, not a pre-created fixed two-round DAG. Policy bounds
+rounds, elapsed time, repeated finding fingerprints, and provider failures.
+Crossing a bound creates a durable escalation; it never silently approves.
 
-```yaml
-source_board: pip-whitenoise-android
-source_issue: 1234
-dependency_board: pip-mdk
-dependency_issue: 1400
-dependency_type: blocking
-required_artifact: MarmotKit binding for timeline date seek
-required_before: build
-```
-
-Creating a dependency issue does not unblock the source issue. The source unblocks only when the artifact is consumable.
-
-### 7.5 Plan artifacts
-
-A successful planning run creates three synchronized artifacts:
-
-1. **Readable GitHub issue comment** — human audit and discussion.
-2. **Structured case metadata** — orchestration and validation.
-3. **Versioned plan files** — complete builder handoff.
-
-Suggested artifact location:
-
-```text
-<board-state>/artifacts/<case-id>/plan-v1.md
-<board-state>/artifacts/<case-id>/plan-v1.json
-```
-
-The local artifact is not the only durable copy. The GitHub comment must contain enough information to reconstruct the plan.
-
-Suggested plan sections:
-
-- validation evidence;
-- root cause;
-- scope and non-scope;
-- dependencies;
-- ordered implementation steps;
-- regression coverage;
-- verification commands;
-- risks and invariants;
-- open decisions;
-- planned base SHA.
-
----
-
-## 8. Phase 2: build and review convergence
-
-### 8.1 Builder
-
-`builder-grok` receives the issue, approved plan, plan version, current repository state, and any unresolved findings.
-
-It must:
-
-1. Confirm the approved plan still applies.
-2. Stop and return to planning if it discovers a material plan flaw.
-3. Create or reuse the case worktree safely.
-4. Implement the approved plan.
-5. Add the required regression coverage.
-6. Run local repository checks.
-7. Inspect its own diff.
-8. Create a signed commit attributed to `agent-p1p`.
-9. Push a Pip-owned branch.
-10. Open or update a draft PR.
-11. Record the exact head SHA.
-12. Wait for CI on that exact head.
-13. Remain in builder remediation until the initial CI pass is green.
-
-Review fan-out begins only after initial exact-head CI is green.
-
-### 8.2 Parallel reviewers
-
-Both reviewers independently inspect the same exact head.
-
-`reviewer-general` focuses on:
-
-- root-cause correctness;
-- implementation versus plan;
-- edge cases and error paths;
-- concurrency and state transitions;
-- regression coverage;
-- maintainability and scope;
-- changelog and release hygiene.
-
-`reviewer-secperf` focuses on:
-
-- security and privacy boundaries;
-- untrusted input and authorization;
-- credential and secret exposure;
-- resource exhaustion and denial of service;
-- locking, retries, loops, and backpressure;
-- algorithmic and I/O cost;
-- pathological workloads;
-- missing adversarial tests.
-
-Reviewers must explain what is wrong, why it matters, a likely corrective direction, and what evidence should prove resolution. Suggestions guide the builder but are not blindly authoritative.
-
-### 8.3 CodeRabbit
-
-CodeRabbit is advisory and optional:
-
-- rate limiting or unavailability does not block convergence;
-- skipped/rate-limited output is recorded as unavailable, not green;
-- concrete findings, when present, enter the remediation loop;
-- CodeRabbit never substitutes for either mandatory internal reviewer.
-
-### 8.4 Findings and remediation
-
-Every finding has a stable identifier:
-
-```text
-GENERAL-R2-001
-SECPERF-R2-003
-CODERABBIT-abc123
-FINAL-R1-002
-```
-
-Builder remediation records the resolution commit, explanation, and tests. The originating reviewer confirms resolution on the new exact head. A builder cannot clear a reviewer blocker by assertion.
-
-Any new commit invalidates both prior approvals and creates fresh reviewer runs.
-
-### 8.5 Deterministic join barrier
-
-The token-free join barrier requires:
+The exact-head join requires:
 
 ```text
 current PR head = X
-general reviewer APPROVE at X
-security/performance reviewer APPROVE at X
-required CI green at X
-no unresolved mandatory finding
-no unresolved blocking thread
-Pip owns the PR and branch
+builder result and CI bind to X
+general reviewer APPROVE binds to X
+security/performance reviewer APPROVE binds to X
+all mandatory findings are resolved and origin-confirmed at X
+no blocking GitHub review or thread remains
+Pip still owns the PR and branch
 issue authorization remains valid
-GitHub reports the PR mergeable without conflict
+GitHub reports clean mergeability
 ```
 
-It must reject stale approvals, earlier-head CI, hollow/rate-limited external checks, and unconfirmed fixes.
+Optional external review is advisory. Its concrete findings may enter the loop,
+but absence, rate limiting, or failure never substitutes for a mandatory review.
 
-Possible outcomes:
+## 12. Final review and disposition
 
-```text
-READY_FOR_FINAL_REVIEW
-RETURN_TO_BUILDER
-WAITING_FOR_GENERAL_REVIEW
-WAITING_FOR_SECURITY_REVIEW
-WAITING_FOR_CI
-BLOCKED_BY_CONFLICT
-BLOCKED_BY_AUTHORIZATION
-```
+The final reviewer receives immutable references to:
 
----
+- the issue and authoritative clarifications;
+- every plan and the active plan;
+- dependency evidence;
+- every build and remediation run;
+- both complete review histories;
+- finding resolutions and confirmations;
+- the current diff, exact-head CI, and mergeability evidence; and
+- authorization and ownership evidence.
 
-## 9. Phase 3: final holistic review
-
-`final-reviewer` independently reads:
-
-- original issue and human clarifications;
-- all plan versions and the active plan;
-- cross-repository dependencies;
-- final PR diff;
-- every build round;
-- both review histories;
-- CodeRabbit findings when present;
-- each resolution and confirming review;
-- regression tests and exact-head CI;
-- join-barrier evidence.
-
-It asks whether the system solved the right problem, not merely whether the diff looks plausible.
-
-Outcomes:
+It asks whether the final PR solved the correct problem. Typed outcomes include:
 
 ```text
-MERGE
+READY
 RETURN_TO_BUILD
 RETURN_TO_REVIEW
 RETURN_TO_PLANNING
-WAIT_FOR_ISSUE_CREATOR
+WAIT_FOR_HUMAN
 BLOCKED
 ABANDON
 ```
 
-A final-review rejection becomes a tracked finding. If code changes, CI and both specialized reviews run again before another final review. If the root-cause plan was wrong, planning produces a new version before building resumes.
+In shadow mode, `READY` becomes `SHADOW_READY` and produces a human-held
+notification. It cannot merge. In explicitly authorized guarded-merge mode,
+`READY` permits the deterministic merge transaction to begin.
 
-### 9.1 Merge authority
+## 13. Guarded merge
 
-The final reviewer should return a structured `MERGE` decision but should not directly invoke a free-form merge command. The deterministic orchestrator performs the guarded merge transaction:
+Merge is a deterministic external transaction, never a free-form model action.
+Immediately before merge it re-fetches and verifies:
 
-1. Fetch current PR head.
-2. Confirm it matches the final reviewed SHA.
-3. Confirm both mandatory approvals match that SHA.
-4. Confirm required CI remains green.
-5. Confirm no new blocking review or comment appeared.
-6. Confirm GitHub still reports clean mergeability.
-7. Confirm issue authorization remains active.
-8. Merge.
-9. Fetch and confirm the PR is merged.
-10. Record the merge commit SHA.
+- the current PR head and ownership;
+- both mandatory exact-head approvals;
+- all required CI attempts and required status contexts;
+- absence of blocking reviews, threads, or new commits;
+- current authorization and policy revision;
+- clean mergeability; and
+- final-review evidence bound to the same SHA.
 
-Any changed state aborts the transaction and returns the case to the appropriate phase.
+Any change aborts. Success records the merge commit and verifies GitHub reports
+the PR merged. MDK remains shadow-only until JG explicitly changes its policy.
 
----
+## 14. Global control plane
 
-## 10. CI and base-branch policy
+After the generic single-repository engine is proven, the global layer may own:
 
-### 10.1 CI history
+- repository/board registry and concurrency;
+- provider authentication, model availability, quota state, and cooldown;
+- dependency graph and duplicate-case prevention;
+- global emergency pause and human-held PR registry;
+- bounded recovery probes and retry suppression;
+- aggregate audit and operational reporting.
 
-Historical red CI does not permanently poison a PR. The requirement is:
+Provider state is tracked per provider/model path. A failure pauses only roles
+that require that path. Recovery requires a controlled successful probe and
+emits one recovery event.
 
-```text
-The final exact PR head has green required CI before merge.
-```
+## 15. Security and trust boundaries
 
-Failures caused by the PR return to the builder. Infrastructure failures retry with bounded backoff. Unrelated base failures should normally become a separate prerequisite issue/PR rather than broadening the current PR.
+- The ledger directory is writable only by the control-plane service identity.
+- Worker processes cannot open the ledger or control socket mutation API.
+- GitHub credentials are role-scoped where practical and never copied into
+  prompts or task bodies.
+- Builders cannot merge; reviewers cannot push; the final reviewer cannot
+  merge; the merge transaction cannot reason about code.
+- Worktrees live under a controller-owned root and are assigned by exact path.
+- All external payloads are size-bounded, schema-validated, and attributable.
+- Accepted evidence records numeric actor/repository identity and immutable
+  content digests.
+- Technical host access does not imply workflow authorization.
+- Human takeover freezes automation and suppresses future dispatch.
 
-### 10.2 Master drift
+## 16. Release and provenance
 
-Do not continuously rebase because `master` advanced.
+A release consists of a Rust binary, installed skills/contracts, and an
+immutable release manifest. The manifest binds at least:
 
-- If GitHub reports clean mergeability, work may continue.
-- Rebase only when a conflict, branch-protection requirement, or material plan invalidation requires it.
-- Never merge `master` into a PR branch.
-- A rebase creates a new head and invalidates all reviews.
-- Avoid repeated rebases during active review.
+- exact reviewed source commit;
+- lockfile digest;
+- binary and resource digests;
+- target triple and compiler/toolchain identity;
+- workflow/contract versions; and
+- build identity and timestamp.
 
----
+Trusted CI produces and signs the manifest. Installation verifies the signature
+and every digest before mutation. An operator-supplied source SHA alone is not
+provenance. See [`runbooks/deployment.md`](runbooks/deployment.md).
 
-## 11. Loop termination
+## 17. Canary activation
 
-Track:
-
-- planning version;
-- build round;
-- review round;
-- final-review round;
-- elapsed time;
-- repeated finding fingerprints;
-- provider/tool failures;
-- repeated unresolved objections.
-
-Initial proposed policy, subject to JG approval:
-
-- repeated mechanical findings may iterate normally;
-- the same blocker surviving three remediation rounds escalates;
-- two final-review rejections for the same architectural reason return to planning;
-- planner/builder scope disagreement returns to a human;
-- reviewer disagreement on security implications returns to a human;
-- external dependencies enter durable blocked state rather than retrying endlessly.
-
-Exact thresholds remain an open policy decision.
-
----
-
-## 12. Skills and versioning
-
-Maintain one canonical, version-controlled workflow repository, proposed:
-
-```text
-/home/jeff/code/pip-workflow/
-  skills/
-    shared/
-    planner/
-    builder-grok/
-    reviewer-general/
-    reviewer-secperf/
-    final-reviewer/
-```
-
-Profile skill directories symlink to canonical skills. Shared policies are authored once and reused by all roles.
-
-Each run records:
+The generic MDK policy begins with:
 
 ```yaml
-workflow_version: 2
-skills_repository_commit: abc123
-role_skill_version: 1.0.0
+intake_enabled: false
+dispatch_enabled: false
+max_active_cases: 1
+merge_mode: shadow
+autonomous_merge: false
 ```
 
-Retain the rendered prompt/instruction artifact with each run so historical behavior is reconstructable even after a symlink target changes.
-
-No credentials belong in the skills repository.
-
----
-
-## 13. GitHub events and trusted humans
-
-Use signed GitHub webhooks for immediate issue and PR events. Store delivery IDs for idempotency. Add a periodic reconciler to recover missed events.
-
-Webhook events can:
-
-- resume planning after an authoritative clarification;
-- add reviewer or CodeRabbit findings;
-- detect human takeover;
-- detect issue closure or authorization removal;
-- detect new commits or review state changes.
-
-The reconciler is insurance, not the primary path.
-
-Trusted actors must be centrally configured and tested. Unknown actors fail closed.
-
----
-
-## 14. Provider, model, and quota monitoring
-
-### 14.1 Required provider paths
-
-```text
-OpenAI/Codex → GPT-5.6-Sol
-Cursor → composer-2.5
-Cursor → claude-opus-4-8-thinking-high
-```
-
-No silent fallback is permitted. Every run records requested and actual model. A mismatch blocks the result.
-
-### 14.2 Global provider states
-
-```text
-HEALTHY
-DEGRADED
-LIKELY_NEAR_LIMIT
-EXHAUSTED
-AUTH_REQUIRED
-MODEL_UNAVAILABLE
-COOLDOWN
-UNKNOWN
-```
-
-Track each provider/model path independently.
-
-### 14.3 Monitoring layers
-
-1. **Pre-dispatch gate:** auth, model, usable credential, cooldown, and concurrency.
-2. **Token-free check every 5–10 minutes:** Cursor status/model availability, Codex credential state, and recent provider errors.
-3. **Conditional or hourly end-to-end probe:** one minimal real inference per provider path when recent production traffic has not already proven health.
-4. **Immediate failure classifier:** 401/auth, 402/credits, 429/quota, unavailable model, or unexpected model substitution.
-
-Provider failure pauses only affected roles, preserves queued tasks, suppresses retries, and immediately alerts JG. Recovery requires one controlled successful inference probe and emits one recovery notification.
-
-### 14.4 Usage records
-
-Record when available:
-
-```yaml
-provider: cursor
-requested_model: composer-2.5
-actual_model: composer-2.5
-started_at: ...
-completed_at: ...
-duration_seconds: ...
-input_tokens: ...
-output_tokens: ...
-cached_tokens: ...
-reported_cost: ...
-case_id: ...
-task_id: ...
-repository: ...
-role: builder-grok
-```
-
-Aggregate by repository, role, model, day, review round, and case. Estimated near-limit warnings must be labeled estimates unless the provider supplies an exact balance.
-
-### 14.5 Credentials
-
-Prefer one canonical shared credential pool where Hermes safely supports it. Otherwise verify all profile-local pools are synchronized and usable. Report profile-specific drift as `PROFILE_AUTH_MISMATCH`, not global provider exhaustion.
-
----
-
-## 15. Canonical output contracts
-
-All role outputs use strict versioned schemas. Missing or malformed required fields block transition; the orchestrator never guesses intent.
-
-Minimum common fields:
-
-```yaml
-schema_version: 1
-workflow_version: 2
-case_id: ...
-task_id: ...
-role: ...
-outcome: ...
-requested_model: ...
-actual_model: ...
-skills_repository_commit: ...
-started_at: ...
-completed_at: ...
-evidence: ...
-```
-
-Role-specific fields include plan version, base SHA, PR number, exact head SHA, findings, resolutions, test evidence, CI evidence, review URL, and final decision.
-
-The implementation must publish JSON Schemas and validate every worker result before state transition.
-
----
-
-## 16. GitHub identities and permissions
-
-Initial implementation may use `agent-p1p` with role-stamped exact-head attestations:
-
-```text
-Pip General Review — APPROVE — SHA abc123
-Pip Security/Performance Review — APPROVE — SHA abc123
-```
-
-Longer-term structural separation may use distinct GitHub Apps/tokens so:
-
-- planner can read and comment on issues;
-- builder can push Pip branches and manage draft PRs but cannot merge;
-- reviewers can read and comment but cannot push or merge;
-- the deterministic merge transaction alone can merge.
-
-Separate GitHub identities are not required for the first pilot but remain a recommended hardening step.
-
----
-
-## 17. Pilot coexistence with current Pip
-
-Do not replace the existing pipeline initially.
-
-1. Leave the existing `pip` board and profiles in place.
-2. Build the five new profiles/worker definitions.
-3. Build the deterministic global controller and repository workflow engine.
-4. Create one pilot repository board.
-5. Route only new eligible issues for that repository to Pip v2.
-6. Leave existing issues and PRs on the old board until they finish or are explicitly migrated.
-7. Ensure only one intake path owns each issue.
-8. Route comments according to PR workflow provenance.
-9. Keep all other repositories on the old pipeline.
-
-Recommended provenance metadata:
-
-```text
-Pip-Workflow: v2
-Pip-Board: <board>
-Pip-Case: <case-id>
-Plan-ID: <plan-id>
-```
-
-### 17.1 Shadow merge mode
-
-The initial pilot should execute the entire workflow but stop after a final `MERGE` recommendation. JG approves the actual merge.
-
-Evaluate:
-
-- planner root-cause quality;
-- agreement between JG and final reviewer;
-- missed findings;
-- unnecessary review loops;
-- false blockers;
-- CI and webhook reliability;
-- provider usage and latency;
-- state-machine recovery after interruption.
-
-Enable autonomous guarded merge only after pilot evidence justifies it.
-
-### 17.2 Pilot repository
-
-The selected pilot repository is `marmot-protocol/mdk`, using board `pip-mdk`.
-
-MDK was selected because it has a large actionable issue backlog and is highly verifiable by agents without a mobile-device or platform-specific UI test loop. The pilot begins in shadow merge mode. Existing MDK tasks and PRs remain on the legacy board, and the current MDK human-merge-only policy remains active until JG explicitly changes it after evaluating the pilot.
-
----
-
-## 18. Implementation workstreams
-
-### Workstream A: Design freeze and schemas
-
-- Finalize state names and transitions.
-- Define case and immutable-run database schema.
-- Define JSON Schemas for every role.
-- Define finding and resolution records.
-- Define trusted-human and takeover events.
-- Define loop limits.
-- Define exact-head join evidence.
-- Write state-machine tests before worker integration.
-
-### Workstream B: Canonical workflow repository
-
-- Create `/home/jeff/code/pip-workflow`.
-- Add canonical shared and role-specific skills.
-- Add schema files, prompt templates, adapters, and tests.
-- Add version metadata and rendered-prompt retention.
-- Configure symlinks from role profiles.
-
-### Workstream C: Role profiles and adapters
-
-- Create `planner` at GPT-5.6-Sol `xhigh`.
-- Create direct Cursor `builder-grok` adapter using `composer-2.5`.
-- Create `reviewer-general` at GPT-5.6-Sol High.
-- Create direct Cursor `reviewer-secperf` adapter using `claude-opus-4-8-thinking-high`.
-- Create `final-reviewer` at GPT-5.6-Sol `xhigh`.
-- Enforce fresh session per run.
-- Enforce requested/actual model match.
-
-### Workstream D: Repository workflow engine
-
-- Implement permanent cases and immutable runs.
-- Implement phase transitions.
-- Implement parallel review fan-out.
-- Implement deterministic join barrier.
-- Implement remediation and replanning loops.
-- Implement bounded escalation.
-- Implement exact-head merge transaction.
-
-### Workstream E: Global control plane
-
-- Add board registry and global concurrency.
-- Add cross-board dependencies.
-- Add provider-state store and monitors.
-- Add immediate alerts and recovery messages.
-- Add emergency pause and human-held suppression.
-- Add aggregate reports and audit.
-
-### Workstream F: GitHub integration
-
-- Add signed webhook processing and idempotency.
-- Add periodic reconciliation.
-- Add authoritative-actor handling.
-- Add plan/review/final comment templates.
-- Add provenance markers.
-- Add exact-head and mergeability queries.
-
-### Workstream G: Pilot
-
-- Create the `pip-mdk` board.
-- Establish the MDK intake cutover boundary.
-- Run one controlled issue manually.
-- Enable limited `pip-ok` intake.
-- Operate in shadow merge mode.
-- Compare outcomes with JG.
-- Enable guarded autonomous merge only after approval.
-
----
-
-## 19. Verification strategy
-
-The workflow itself requires tests, not only live trial runs.
-
-### State-machine tests
-
-- successful plan-to-merge path;
-- clarification and planner resumption;
-- cross-board dependency blocking/unblocking;
-- builder CI failure and remediation;
-- one reviewer blocks while the other approves;
-- new commit invalidates both approvals;
-- final reviewer returns to build;
-- final reviewer returns to planning;
-- repeated blocker reaches escalation limit;
-- human takeover freezes the case;
-- provider outage pauses only affected roles;
-- provider recovery resumes exactly once;
-- webhook replay is idempotent;
-- missed webhook is recovered by reconciliation;
-- merge transaction aborts when head changes;
-- clean master movement does not cause needless rebase;
-- conflicting base movement returns to builder.
-
-### Adapter tests
-
-- exact Cursor model invocation;
-- actual-model mismatch rejection;
-- malformed result rejection;
-- timeout and process cleanup;
-- read-only enforcement for reviewer adapter;
-- usage and log capture;
-- no secret leakage in artifacts.
-
-### Pilot acceptance criteria
-
-- No duplicate PRs from old and new intake.
-- Every run starts fresh and records its skill/model versions.
-- Every approval is bound to an exact SHA.
-- No stale approval crosses the join barrier.
-- Provider failures alert quickly and do not retry storm.
-- Human clarification reliably resumes planning.
-- The complete case can be reconstructed after restart.
-- Final reviewer and JG show acceptable agreement during shadow mode.
-- The old pipeline remains operational for non-pilot repositories.
-
----
-
-## 20. Safety and ownership invariants
-
-Until explicitly changed, implementation must preserve existing ownership and hold boundaries:
-
-- Never touch a human-owned/non-`pip/*` PR without explicit authorization.
-- Human takeover freezes active and queued work and suppresses future automation.
-- No task may revive a human-held PR.
-- Crypto, MLS, CGKA, key handling, and trust-anchor work remains subject to the active Pip charter and escalation rules.
-- MDK and other current human-merge-only policies remain in force until JG explicitly changes them during rollout.
-- Technical host access does not imply authorization.
-- Never expose provider credentials or tokens in logs, artifacts, comments, or alerts.
-
-The pilot does not implicitly alter these rules.
-
----
-
-## 21. Open decisions before implementation
-
-1. Approve exact loop and escalation thresholds.
-2. Finalize authoritative actors for issue clarification.
-3. Decide which technically unambiguous cross-repository issues Pip may create automatically.
-4. Decide when each repository may leave shadow merge mode.
-5. Decide whether initial reviewer attestations share `agent-p1p` or use separate identities.
-6. Confirm shared credential-pool support and design.
-7. Finalize the exact state/result JSON Schemas.
-8. Decide provider probe cadence and reminder intervals.
-9. Decide retention and archival policy for immutable runs and rendered prompts.
-10. Decide whether and when current human-merge-only repository policies change.
-
-These decisions do not prevent building the schemas, adapters, state machine, profiles, or shadow-mode pilot. They must be resolved before unrestricted autonomous merge.
-
----
-
-## 22. Recommended rollout order
-
-```text
-Stage 0 — Approve this design and resolve pre-build schema decisions
-Stage 1 — Create canonical workflow repository and schemas
-Stage 2 — Create role profiles and direct Cursor adapters
-Stage 3 — Build and test deterministic state machine
-Stage 4 — Add global provider/control plane
-Stage 5 — Add GitHub webhook and reconciliation integration
-Stage 6 — Create one pilot board and manually run one controlled case
-Stage 7 — Enable pilot repo intake in shadow merge mode
-Stage 8 — Evaluate against JG decisions and tune
-Stage 9 — Enable guarded autonomous merge for the pilot if approved
-Stage 10 — Expand one repository at a time
-```
-
----
-
-## 23. Definition of done for Pip v2 pilot
-
-The pilot is complete when:
-
-- one repository has an isolated board;
-- the old pipeline still handles all non-pilot work;
-- new pilot issues cannot enter both pipelines;
-- planning validates root cause and produces all three artifacts;
-- trusted-human clarification resumes planning through webhook/reconciliation;
-- Grok builds directly through the Cursor adapter;
-- initial exact-head CI is green before review fan-out;
-- GPT and Kimi independently review the same exact head;
-- findings produce immutable remediation and re-review rounds;
-- CodeRabbit findings are consumed when present but outages do not block;
-- the join barrier rejects stale evidence;
-- final GPT review reconstructs the complete case;
-- the deterministic merge transaction aborts safely on changed state;
-- provider/auth failures alert JG quickly and pause only affected roles;
-- case state survives process and gateway restarts;
-- shadow-mode decisions are auditable and comparable with JG’s verdict;
-- autonomous merge remains disabled until JG explicitly approves it.
+Activation requires a reviewed release and explicit operator action to enable
+intake/dispatch. The operator deliberately places `pip-ok` on one suitable
+issue and ensures no other issue is eligible. The engine discovers that issue
+through the same generic path future cases will use.
+
+There is no canary issue constant, pinned comment ID, special PR number, or
+canary-specific DAG in the binary.
+
+## 18. Verification
+
+The target test ladder includes:
+
+1. pure state-machine and policy tests;
+2. contract and serialization compatibility tests;
+3. SQLite transaction, migration, crash, and outbox tests;
+4. GitHub/Hermes adapter fixtures and adversarial payload tests;
+5. process cleanup, timeout, and model-mismatch tests;
+6. offline end-to-end case simulations with restart injection;
+7. disposable-systemd install, upgrade, failure, and rollback tests;
+8. Python-reference/Rust decision-parity fixtures during migration;
+9. non-dispatching live reconciliation shadow; and
+10. one explicitly activated MDK shadow case.
+
+CI, local tests, systemd lifecycle validation, live shadow evidence, and
+production activation are distinct gates and must be reported separately.
+
+## 19. Definition of done
+
+Pip v2 is ready to expand beyond the MDK canary when:
+
+- repository/issue identity is policy-driven rather than compiled in;
+- the Rust ledger is the sole workflow authority;
+- every accepted worker result is immutable and reconstructable;
+- dynamic remediation converges or escalates within policy bounds;
+- restart/replay cannot duplicate a worker, branch, PR, or merge;
+- exact-head CI and both mandatory reviews are independently revalidated;
+- provider/model failure blocks without substitution or retry storms;
+- deployment provenance binds the binary to reviewed source;
+- installer lifecycle and rollback pass in a disposable systemd environment;
+- the full MDK case completes in shadow mode and agrees acceptably with JG;
+- the legacy Python service is stopped and recoverably retained; and
+- autonomous merge remains disabled unless separately authorized.
