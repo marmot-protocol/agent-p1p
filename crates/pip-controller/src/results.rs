@@ -14,6 +14,7 @@ use pip_core::{
 };
 use pip_store::{EvidenceInput, FindingInput, RunInput, Store, StoreError, StoredCase};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::{ControllerError, LedgerController, WorkflowCommand};
 
@@ -94,17 +95,16 @@ pub fn ingest_worker_result(
     }
 
     let case_id = case_id(binding)?;
-    let mut stored = store
+    let stored = store
         .case(&case_id.to_string())?
         .ok_or(IngestError::InvalidBinding)?;
     validate_case_binding(&stored, binding, policy)?;
-    let mut transition_count = 0;
     if matches!(result, WorkerResult::Builder(_)) && stored.state == "READY_TO_BUILD" {
         let synthetic = workflow(
             &stored,
             case_id,
             Event::BuilderDispatched,
-            &format!("event-dispatch-{}", binding.task_id),
+            &result_event_id("dispatch", &binding.task_id),
             result.common().started_at_unix,
             json!({"task_id": binding.task_id, "role": "builder"}),
             None,
@@ -112,14 +112,35 @@ pub fn ingest_worker_result(
             None,
             Vec::new(),
         )?;
-        LedgerController::apply(store, policy, &synthetic)?;
-        transition_count += 1;
-        stored = store
-            .case(&case_id.to_string())?
-            .ok_or(IngestError::InvalidBinding)?;
+        let mut building = stored.clone();
+        building.state = "BUILDING".into();
+        building.state_revision = building
+            .state_revision
+            .checked_add(1)
+            .ok_or(IngestError::InvalidState)?;
+        let result_command = result_workflow(store, &building, case_id, binding, result, payload)?;
+        LedgerController::apply_batch(store, policy, &[synthetic, result_command])?;
+        return Ok(IngestResult::Applied {
+            transition_count: 2,
+        });
     }
 
-    let mapped = map_event(store, &stored, result)?;
+    let command = result_workflow(store, &stored, case_id, binding, result, payload)?;
+    LedgerController::apply(store, policy, &command)?;
+    Ok(IngestResult::Applied {
+        transition_count: 1,
+    })
+}
+
+fn result_workflow(
+    store: &Store,
+    stored: &StoredCase,
+    case_id: CaseId,
+    binding: &WorkerBinding,
+    result: &WorkerResult,
+    payload: Value,
+) -> Result<WorkflowCommand, IngestError> {
+    let mapped = map_event(store, stored, result)?;
     let findings = findings(result)?;
     let run = RunInput {
         run_id: format!("run-{}", binding.task_id),
@@ -134,10 +155,10 @@ pub fn ingest_worker_result(
         payload: Value::Object(result.common().evidence.clone()),
     }];
     let command = workflow(
-        &stored,
+        stored,
         case_id,
         mapped.event,
-        &format!("event-result-{}", binding.task_id),
+        &result_event_id("result", &binding.task_id),
         result.common().completed_at_unix,
         payload,
         Some(run),
@@ -145,16 +166,10 @@ pub fn ingest_worker_result(
         next_binding(mapped.next_pr_number, mapped.next_head_sha.as_deref()),
         evidence,
     )?;
-    LedgerController::apply(
-        store,
-        policy,
-        &WorkflowCommand {
-            findings,
-            ..command
-        },
-    )?;
-    transition_count += 1;
-    Ok(IngestResult::Applied { transition_count })
+    Ok(WorkflowCommand {
+        findings,
+        ..command
+    })
 }
 
 struct MappedEvent {
@@ -393,6 +408,15 @@ fn workflow(
 
 fn next_binding(pr: Option<u64>, head: Option<&str>) -> Option<(u64, &str)> {
     pr.zip(head)
+}
+
+fn result_event_id(kind: &str, task_id: &str) -> String {
+    let digest = Sha256::digest(task_id.as_bytes());
+    let hex = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("event-{kind}-{hex}")
 }
 
 fn role_name(role: WorkerRole) -> &'static str {

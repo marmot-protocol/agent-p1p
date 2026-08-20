@@ -748,3 +748,90 @@ fn direct_worker_enqueue_and_dispatch_ack_are_atomic_and_retry_safe() {
     assert_eq!(job.effect_id, "effect-planner-1:direct:builder");
     assert_eq!(job.payload["task_id"], "direct-builder-1");
 }
+
+#[test]
+fn consecutive_builder_dispatch_and_result_transitions_commit_atomically() {
+    let (_directory, mut store) = open();
+    let mut case = new_case();
+    case.initial_state = "READY_TO_BUILD".into();
+    case.effects = vec![EffectInput {
+        effect_id: "effect-run-direct-builder".into(),
+        effect_type: "RUN_DIRECT_WORKER".into(),
+        payload: json!({"task_id": "builder-1"}),
+    }];
+    store.create_case(&case).unwrap();
+    let transitions = [
+        TransitionInput {
+            case_key: case.case_key.clone(),
+            expected_revision: 1,
+            next_state: "BUILDING".into(),
+            remediation_round: 0,
+            plan_version: 1,
+            pr_number: None,
+            head_sha: None,
+            observed_at: 100,
+            event: EventInput {
+                event_id: "event-builder-dispatched".into(),
+                event_type: "BUILDER_DISPATCHED".into(),
+                payload: json!({"task_id": "builder-1"}),
+            },
+            run: None,
+            evidence: Vec::new(),
+            findings: Vec::new(),
+            effects: Vec::new(),
+        },
+        TransitionInput {
+            case_key: case.case_key.clone(),
+            expected_revision: 2,
+            next_state: "BUILDING".into(),
+            remediation_round: 0,
+            plan_version: 1,
+            pr_number: None,
+            head_sha: None,
+            observed_at: 101,
+            event: EventInput {
+                event_id: "event-build-recorded".into(),
+                event_type: "BUILD_RECORDED".into(),
+                payload: json!({"head_sha": "b".repeat(40)}),
+            },
+            run: Some(RunInput {
+                run_id: "run-builder-1".into(),
+                task_id: "builder-1".into(),
+                role: "builder".into(),
+                payload: json!({"outcome": "REVIEW_READY"}),
+            }),
+            evidence: Vec::new(),
+            findings: Vec::new(),
+            effects: vec![EffectInput {
+                effect_id: "effect-publish-draft".into(),
+                effect_type: "PUBLISH_DRAFT_PULL_REQUEST".into(),
+                payload: json!({"task_id": "builder-1"}),
+            }],
+        },
+    ];
+
+    assert!(matches!(
+        store.apply_transition_batch(&transitions, Some(FaultPoint::BetweenTransitions)),
+        Err(StoreError::InjectedFault(FaultPoint::BetweenTransitions))
+    ));
+    assert_eq!(
+        store.case(&case.case_key).unwrap().unwrap().state_revision,
+        1
+    );
+    assert_eq!(store.event_count().unwrap(), 1);
+    assert_eq!(store.run_count().unwrap(), 0);
+    assert_eq!(store.status(101).unwrap().outbox_pending, 1);
+
+    assert_eq!(
+        store.apply_transition_batch(&transitions, None).unwrap(),
+        ApplyResult::Applied
+    );
+    let stored = store.case(&case.case_key).unwrap().unwrap();
+    assert_eq!(stored.state, "BUILDING");
+    assert_eq!(stored.state_revision, 3);
+    assert_eq!(store.event_count().unwrap(), 3);
+    assert_eq!(store.run_count().unwrap(), 1);
+    let status = store.status(101).unwrap();
+    assert_eq!(status.outbox_superseded, 1);
+    assert_eq!(status.outbox_pending, 1);
+}

@@ -5,6 +5,7 @@
 mod authorization;
 mod ci;
 mod cli;
+mod direct_worker;
 mod dispatch;
 mod disposition;
 mod draft_pr;
@@ -26,6 +27,10 @@ pub use authorization::{
 };
 pub use ci::{CiCycle, CiCycleError, PullRequestSource, reconcile_ci_once};
 pub use cli::{CliError, run_cli};
+pub use direct_worker::{
+    DirectWorkerCycle, DirectWorkerCycleContext, DirectWorkerError, DirectWorkerRuntime,
+    DirectWorkerRuntimeError, run_direct_worker_once_with,
+};
 pub use dispatch::{
     DispatchCycleContext, DispatchCycleError, DispatchCycleResult, dispatch_once,
     dispatch_once_with,

@@ -75,100 +75,142 @@ impl LedgerController {
         workflow: &WorkflowCommand,
     ) -> Result<ApplyResult, ControllerError> {
         validate_workflow(store, workflow)?;
-        let snapshot = CaseSnapshot {
-            case_id: workflow.case_id,
-            state: workflow.expected_state,
-            state_revision: workflow.expected_state_revision,
-            policy_revision: workflow.accepted_policy_revision,
-            remediation_round: workflow.remediation_round,
-        };
-        let command = CaseCommand {
-            case_id: workflow.case_id,
-            event_id: workflow.event_id.clone(),
-            observed_at: workflow.observed_at,
-            expected_state_revision: workflow.expected_state_revision,
-            accepted_policy_revision: workflow.accepted_policy_revision,
-            event: workflow.event,
-        };
-        let evaluated = evaluate_case_command(&snapshot, &command, policy)?;
-        let next_plan_version = next_plan_version(workflow)?;
-        let next_remediation_round = if evaluated.transition.next_state == CaseState::Remediating
-            && workflow.expected_state != CaseState::Remediating
-        {
-            workflow
-                .remediation_round
-                .checked_add(1)
-                .ok_or(ControllerError::InvalidCommand(
-                    "remediation round exhausted",
-                ))?
-        } else {
-            workflow.remediation_round
-        };
-        let (next_pr_number, next_head_sha) = next_head_binding(workflow)?;
-        let effects = evaluated
-            .transition
-            .effects
-            .iter()
-            .enumerate()
-            .map(|(index, effect)| EffectInput {
-                effect_id: format!(
-                    "effect-{}-{}-{}",
-                    workflow.event_id,
-                    effect_name(*effect).to_ascii_lowercase(),
-                    index + 1
-                ),
-                effect_type: effect_name(*effect).into(),
-                payload: json!({
-                    "case_key": workflow.case_id.to_string(),
-                    "state_revision": evaluated.to_revision.get(),
-                    "effect": effect_name(*effect),
-                    "remediation_round": next_remediation_round,
-                    "plan_version": next_plan_version,
-                    "pr_number": next_pr_number,
-                    "head_sha": next_head_sha,
-                }),
-            })
-            .collect();
+        let transition = transition_input(policy, workflow)?;
         store
-            .apply_transition(
-                &TransitionInput {
-                    case_key: workflow.case_id.to_string(),
-                    expected_revision: workflow.expected_state_revision.get(),
-                    next_state: evaluated.transition.next_state.to_string(),
-                    remediation_round: next_remediation_round,
-                    plan_version: next_plan_version,
-                    pr_number: next_pr_number,
-                    head_sha: next_head_sha,
-                    observed_at: workflow.observed_at.unix_seconds(),
-                    event: EventInput {
-                        event_id: workflow.event_id.to_string(),
-                        event_type: workflow.event.to_string(),
-                        payload: workflow.event_payload.clone(),
-                    },
-                    run: workflow.run.clone(),
-                    evidence: workflow.evidence.clone(),
-                    findings: workflow.findings.clone(),
-                    effects,
-                },
-                None,
-            )
+            .apply_transition(&transition, None)
+            .map_err(Into::into)
+    }
+
+    pub fn apply_batch(
+        store: &mut Store,
+        policy: &CasePolicy,
+        workflows: &[WorkflowCommand],
+    ) -> Result<ApplyResult, ControllerError> {
+        let first = workflows.first().ok_or(ControllerError::InvalidCommand(
+            "at least one workflow command is required",
+        ))?;
+        validate_workflow(store, first)?;
+        let mut transitions = Vec::with_capacity(workflows.len());
+        for workflow in workflows {
+            validate_workflow_shape(workflow)?;
+            if let Some(previous) = transitions.last() {
+                validate_consecutive(previous, workflow)?;
+            }
+            transitions.push(transition_input(policy, workflow)?);
+        }
+        store
+            .apply_transition_batch(&transitions, None)
             .map_err(Into::into)
     }
 }
 
-fn validate_workflow(store: &Store, workflow: &WorkflowCommand) -> Result<(), ControllerError> {
-    if !workflow.event_payload.is_object() {
-        return Err(ControllerError::InvalidCommand(
-            "workflow event payload must be an object",
-        ));
-    }
-    if workflow.pr_number.is_some() != workflow.head_sha.is_some()
-        || workflow.next_pr_number.is_some() && workflow.next_head_sha.is_none()
+fn transition_input(
+    policy: &CasePolicy,
+    workflow: &WorkflowCommand,
+) -> Result<TransitionInput, ControllerError> {
+    let snapshot = CaseSnapshot {
+        case_id: workflow.case_id,
+        state: workflow.expected_state,
+        state_revision: workflow.expected_state_revision,
+        policy_revision: workflow.accepted_policy_revision,
+        remediation_round: workflow.remediation_round,
+    };
+    let command = CaseCommand {
+        case_id: workflow.case_id,
+        event_id: workflow.event_id.clone(),
+        observed_at: workflow.observed_at,
+        expected_state_revision: workflow.expected_state_revision,
+        accepted_policy_revision: workflow.accepted_policy_revision,
+        event: workflow.event,
+    };
+    let evaluated = evaluate_case_command(&snapshot, &command, policy)?;
+    let next_plan_version = next_plan_version(workflow)?;
+    let next_remediation_round = if evaluated.transition.next_state == CaseState::Remediating
+        && workflow.expected_state != CaseState::Remediating
+    {
+        workflow
+            .remediation_round
+            .checked_add(1)
+            .ok_or(ControllerError::InvalidCommand(
+                "remediation round exhausted",
+            ))?
+    } else {
+        workflow.remediation_round
+    };
+    let (next_pr_number, next_head_sha) = next_head_binding(workflow)?;
+    let effects = evaluated
+        .transition
+        .effects
+        .iter()
+        .enumerate()
+        .map(|(index, effect)| EffectInput {
+            effect_id: format!(
+                "effect-{}-{}-{}",
+                workflow.event_id,
+                effect_name(*effect).to_ascii_lowercase(),
+                index + 1
+            ),
+            effect_type: effect_name(*effect).into(),
+            payload: json!({
+                "case_key": workflow.case_id.to_string(),
+                "state_revision": evaluated.to_revision.get(),
+                "effect": effect_name(*effect),
+                "remediation_round": next_remediation_round,
+                "plan_version": next_plan_version,
+                "pr_number": next_pr_number,
+                "head_sha": next_head_sha,
+            }),
+        })
+        .collect();
+    Ok(TransitionInput {
+        case_key: workflow.case_id.to_string(),
+        expected_revision: workflow.expected_state_revision.get(),
+        next_state: evaluated.transition.next_state.to_string(),
+        remediation_round: next_remediation_round,
+        plan_version: next_plan_version,
+        pr_number: next_pr_number,
+        head_sha: next_head_sha,
+        observed_at: workflow.observed_at.unix_seconds(),
+        event: EventInput {
+            event_id: workflow.event_id.to_string(),
+            event_type: workflow.event.to_string(),
+            payload: workflow.event_payload.clone(),
+        },
+        run: workflow.run.clone(),
+        evidence: workflow.evidence.clone(),
+        findings: workflow.findings.clone(),
+        effects,
+    })
+}
+
+fn validate_consecutive(
+    previous: &TransitionInput,
+    workflow: &WorkflowCommand,
+) -> Result<(), ControllerError> {
+    let expected_revision =
+        previous
+            .expected_revision
+            .checked_add(1)
+            .ok_or(ControllerError::InvalidCommand(
+                "workflow revision overflow",
+            ))?;
+    if workflow.case_id.to_string() != previous.case_key
+        || workflow.expected_state_revision.get() != expected_revision
+        || workflow.expected_state.to_string() != previous.next_state
+        || workflow.remediation_round != previous.remediation_round
+        || workflow.plan_version.map_or(0, PlanVersion::get) != previous.plan_version
+        || workflow.pr_number.map(PullRequestNumber::get) != previous.pr_number
+        || workflow.head_sha.map(|sha| sha.to_string()) != previous.head_sha
     {
         return Err(ControllerError::InvalidCommand(
-            "pull request and exact head bindings must be complete",
+            "workflow batch is not consecutive",
         ));
     }
+    Ok(())
+}
+
+fn validate_workflow(store: &Store, workflow: &WorkflowCommand) -> Result<(), ControllerError> {
+    validate_workflow_shape(workflow)?;
     let stored = store
         .case(&workflow.case_id.to_string())?
         .ok_or(ControllerError::InvalidCommand("case is not in the ledger"))?;
@@ -187,6 +229,22 @@ fn validate_workflow(store: &Store, workflow: &WorkflowCommand) -> Result<(), Co
                 "workflow command does not match the ledger projection",
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_workflow_shape(workflow: &WorkflowCommand) -> Result<(), ControllerError> {
+    if !workflow.event_payload.is_object() {
+        return Err(ControllerError::InvalidCommand(
+            "workflow event payload must be an object",
+        ));
+    }
+    if workflow.pr_number.is_some() != workflow.head_sha.is_some()
+        || workflow.next_pr_number.is_some() && workflow.next_head_sha.is_none()
+    {
+        return Err(ControllerError::InvalidCommand(
+            "pull request and exact head bindings must be complete",
+        ));
     }
     Ok(())
 }

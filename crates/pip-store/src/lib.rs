@@ -334,6 +334,7 @@ pub enum FaultPoint {
     AfterEvidence,
     AfterProjection,
     AfterOutbox,
+    BetweenTransitions,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -610,116 +611,168 @@ impl Store {
         input: &TransitionInput,
         fault: Option<FaultPoint>,
     ) -> Result<ApplyResult> {
+        self.apply_transition_batch(std::slice::from_ref(input), fault)
+    }
+
+    pub fn apply_transition_batch(
+        &mut self,
+        inputs: &[TransitionInput],
+        fault: Option<FaultPoint>,
+    ) -> Result<ApplyResult> {
         self.ensure_writable()?;
-        validate_common(&input.case_key, &input.event)?;
-        let command_hash = hash_serialized(input)?;
-        if let Some(existing) = existing_event(&self.connection, &input.event.event_id)? {
-            return replay_or_conflict(
-                existing,
-                &input.case_key,
-                &command_hash,
-                &input.event.event_id,
-            );
+        if inputs.is_empty() {
+            return Err(StoreError::InvalidInput(
+                "at least one consecutive transition is required",
+            ));
+        }
+        let case_key = inputs[0].case_key.as_str();
+        let mut event_ids = std::collections::BTreeSet::new();
+        for (index, input) in inputs.iter().enumerate() {
+            validate_common(&input.case_key, &input.event)?;
+            if input.case_key != case_key
+                || !event_ids.insert(input.event.event_id.as_str())
+                || index > 0
+                    && input.expected_revision
+                        != inputs[index - 1]
+                            .expected_revision
+                            .checked_add(1)
+                            .ok_or(StoreError::InvalidInteger)?
+            {
+                return Err(StoreError::InvalidInput(
+                    "batch transitions must be unique, consecutive, and for one case",
+                ));
+            }
+        }
+        let command_hashes = inputs
+            .iter()
+            .map(hash_serialized)
+            .collect::<Result<Vec<_>>>()?;
+        let existing = inputs
+            .iter()
+            .map(|input| existing_event(&self.connection, &input.event.event_id))
+            .collect::<Result<Vec<_>>>()?;
+        if existing.iter().all(Option::is_some) {
+            for ((input, command_hash), existing) in
+                inputs.iter().zip(&command_hashes).zip(existing)
+            {
+                replay_or_conflict(
+                    existing.expect("all batch events exist"),
+                    &input.case_key,
+                    command_hash,
+                    &input.event.event_id,
+                )?;
+            }
+            return Ok(ApplyResult::Replayed);
+        }
+        if let Some((index, _)) = existing.iter().enumerate().find(|(_, item)| item.is_some()) {
+            return Err(StoreError::IdempotencyConflict {
+                id: inputs[index].event.event_id.clone(),
+            });
         }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let current = query_case(&transaction, &input.case_key)?
-            .ok_or_else(|| StoreError::MissingCase(input.case_key.clone()))?;
-        if current.state_revision != input.expected_revision {
-            return Err(StoreError::StaleRevision {
-                expected: input.expected_revision,
-                actual: current.state_revision,
-            });
-        }
-        let next_revision = input
-            .expected_revision
-            .checked_add(1)
-            .ok_or(StoreError::InvalidInteger)?;
-        insert_event(
-            &transaction,
-            EventRecord {
-                case_key: &input.case_key,
-                revision: next_revision,
-                observed_at: input.observed_at,
-                event: &input.event,
-                command_hash: &command_hash,
-                previous_state: Some(&current.state),
-                next_state: &input.next_state,
-                policy_revision: current.policy_revision,
-                remediation_round: input.remediation_round,
-                plan_version: input.plan_version,
-                pr_number: input.pr_number,
-                head_sha: input.head_sha.as_deref(),
-            },
-        )?;
-        inject(fault, FaultPoint::AfterEvent)?;
-        if let Some(run) = &input.run {
-            insert_run(
+        for (index, (input, command_hash)) in inputs.iter().zip(command_hashes).enumerate() {
+            let current = query_case(&transaction, &input.case_key)?
+                .ok_or_else(|| StoreError::MissingCase(input.case_key.clone()))?;
+            if current.state_revision != input.expected_revision {
+                return Err(StoreError::StaleRevision {
+                    expected: input.expected_revision,
+                    actual: current.state_revision,
+                });
+            }
+            let next_revision = input
+                .expected_revision
+                .checked_add(1)
+                .ok_or(StoreError::InvalidInteger)?;
+            insert_event(
+                &transaction,
+                EventRecord {
+                    case_key: &input.case_key,
+                    revision: next_revision,
+                    observed_at: input.observed_at,
+                    event: &input.event,
+                    command_hash: &command_hash,
+                    previous_state: Some(&current.state),
+                    next_state: &input.next_state,
+                    policy_revision: current.policy_revision,
+                    remediation_round: input.remediation_round,
+                    plan_version: input.plan_version,
+                    pr_number: input.pr_number,
+                    head_sha: input.head_sha.as_deref(),
+                },
+            )?;
+            inject(fault, FaultPoint::AfterEvent)?;
+            if let Some(run) = &input.run {
+                insert_run(
+                    &transaction,
+                    &input.case_key,
+                    &input.event.event_id,
+                    input.observed_at,
+                    run,
+                )?;
+            }
+            inject(fault, FaultPoint::AfterRun)?;
+            insert_evidence(
                 &transaction,
                 &input.case_key,
-                &input.event.event_id,
                 input.observed_at,
-                run,
+                &input.evidence,
             )?;
+            insert_findings(
+                &transaction,
+                &input.case_key,
+                input.observed_at,
+                &input.findings,
+            )?;
+            inject(fault, FaultPoint::AfterEvidence)?;
+            let updated = transaction.execute(
+                "UPDATE cases SET state = ?1, state_revision = ?2, remediation_round = ?3, plan_version = ?4, pr_number = ?5, head_sha = ?6, updated_at = ?7
+                 WHERE case_key = ?8 AND state_revision = ?9",
+                params![
+                    input.next_state,
+                    sql_u64(next_revision)?,
+                    i64::from(input.remediation_round),
+                    i64::from(input.plan_version),
+                    input.pr_number.map(sql_u64).transpose()?,
+                    input.head_sha.as_deref(),
+                    sql_u64(input.observed_at)?,
+                    input.case_key,
+                    sql_u64(input.expected_revision)?,
+                ],
+            )?;
+            if updated != 1 {
+                return Err(StoreError::StaleRevision {
+                    expected: input.expected_revision,
+                    actual: current.state_revision,
+                });
+            }
+            inject(fault, FaultPoint::AfterProjection)?;
+            transaction.execute(
+                "UPDATE outbox
+                 SET superseded_at = ?1, superseded_by_event_id = ?2,
+                     lease_owner = NULL, lease_until = NULL
+                 WHERE case_key = ?3 AND state_revision < ?4
+                   AND delivered_at IS NULL AND superseded_at IS NULL",
+                params![
+                    sql_u64(input.observed_at)?,
+                    input.event.event_id,
+                    input.case_key,
+                    sql_u64(next_revision)?,
+                ],
+            )?;
+            insert_effects(
+                &transaction,
+                &input.case_key,
+                next_revision,
+                input.observed_at,
+                &input.effects,
+            )?;
+            inject(fault, FaultPoint::AfterOutbox)?;
+            if index + 1 < inputs.len() {
+                inject(fault, FaultPoint::BetweenTransitions)?;
+            }
         }
-        inject(fault, FaultPoint::AfterRun)?;
-        insert_evidence(
-            &transaction,
-            &input.case_key,
-            input.observed_at,
-            &input.evidence,
-        )?;
-        insert_findings(
-            &transaction,
-            &input.case_key,
-            input.observed_at,
-            &input.findings,
-        )?;
-        inject(fault, FaultPoint::AfterEvidence)?;
-        let updated = transaction.execute(
-            "UPDATE cases SET state = ?1, state_revision = ?2, remediation_round = ?3, plan_version = ?4, pr_number = ?5, head_sha = ?6, updated_at = ?7
-             WHERE case_key = ?8 AND state_revision = ?9",
-            params![
-                input.next_state,
-                sql_u64(next_revision)?,
-                i64::from(input.remediation_round),
-                i64::from(input.plan_version),
-                input.pr_number.map(sql_u64).transpose()?,
-                input.head_sha.as_deref(),
-                sql_u64(input.observed_at)?,
-                input.case_key,
-                sql_u64(input.expected_revision)?,
-            ],
-        )?;
-        if updated != 1 {
-            return Err(StoreError::StaleRevision {
-                expected: input.expected_revision,
-                actual: current.state_revision,
-            });
-        }
-        inject(fault, FaultPoint::AfterProjection)?;
-        transaction.execute(
-            "UPDATE outbox
-             SET superseded_at = ?1, superseded_by_event_id = ?2,
-                 lease_owner = NULL, lease_until = NULL
-             WHERE case_key = ?3 AND state_revision < ?4
-               AND delivered_at IS NULL AND superseded_at IS NULL",
-            params![
-                sql_u64(input.observed_at)?,
-                input.event.event_id,
-                input.case_key,
-                sql_u64(next_revision)?,
-            ],
-        )?;
-        insert_effects(
-            &transaction,
-            &input.case_key,
-            next_revision,
-            input.observed_at,
-            &input.effects,
-        )?;
-        inject(fault, FaultPoint::AfterOutbox)?;
         transaction.commit()?;
         Ok(ApplyResult::Applied)
     }
