@@ -8,6 +8,7 @@ use pip_control::{
 use pip_hermes::{CommandOutput, CommandRunner, CommandSpec, HermesError, TaskSnapshot};
 use pip_store::{EffectInput, EventInput, NewCase, PolicyInput, Store};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 #[derive(Clone, Default)]
 struct FakeRunner {
@@ -70,6 +71,32 @@ fn planner_dispatch_projects_gate_and_worker_then_atomically_acks_outbox() {
             .iter()
             .any(|command| { command.args.iter().any(|argument| argument == "complete") })
     );
+    let worker_body = projected_worker_body(&runner);
+    let bundle = &worker_body["immutable_evidence_bundle"];
+    assert_eq!(bundle["schema_version"], 1);
+    assert_eq!(bundle["case_key"], "repo:1055628515#1240@2");
+    assert_eq!(bundle["bound_state_revision"], 1);
+    assert_eq!(
+        bundle["records"]["events"][0]["event_id"],
+        "event-intake-5050325280"
+    );
+    assert_eq!(
+        bundle["records"]["events"][0]["event_type"],
+        "ISSUE_AUTHORIZED"
+    );
+    assert_eq!(
+        bundle["records"]["events"][0]["payload"],
+        json!({"label": "pip-ok"})
+    );
+    let expected_digest = bundle["sha256"].as_str().unwrap();
+    let mut unsigned = bundle.as_object().unwrap().clone();
+    unsigned.remove("sha256");
+    assert_eq!(
+        expected_digest,
+        hex_digest(&Sha256::digest(
+            serde_json::to_vec(&Value::Object(unsigned)).unwrap()
+        ))
+    );
 
     let idle_runner = FakeRunner::default();
     assert_eq!(
@@ -83,6 +110,34 @@ fn planner_dispatch_projects_gate_and_worker_then_atomically_acks_outbox() {
         DispatchCycleResult::Idle
     );
     assert!(idle_runner.commands.borrow().is_empty());
+}
+
+fn projected_worker_body(runner: &FakeRunner) -> Value {
+    runner
+        .commands
+        .borrow()
+        .iter()
+        .find_map(|command| {
+            let assignee = command
+                .args
+                .windows(2)
+                .find(|pair| pair[0] == "--assignee")
+                .map(|pair| pair[1].as_str());
+            if assignee != Some("planner") {
+                return None;
+            }
+            let body = command
+                .args
+                .windows(2)
+                .find(|pair| pair[0] == "--body")?
+                .get(1)?;
+            serde_json::from_str(body).ok()
+        })
+        .expect("planner projection command")
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[test]

@@ -1,7 +1,7 @@
 ---
 name: workflow-contract
 description: Use for every Pip v2 case task. Enforce shared invariants.
-version: 0.2.0
+version: 0.3.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -23,15 +23,16 @@ This is the shared contract for every Pip v2 role. Role-specific skills add resp
 3. Never expose credentials or secrets in output, logs, comments, or artifacts.
 4. Record requested and actual models. If they differ, return `BLOCKED_UNEXPECTED_MODEL`.
 5. Copy the case identity, task ID, role, plan version, requested `provider/model`, skills repository commit, PR number, and expected head exactly from the immutable task binding. Never reconstruct or normalize them from prose.
-6. Bind CI and review evidence to an exact 40-character PR head SHA.
-7. Do not treat CodeRabbit as mandatory; concrete findings are still actionable. If a CodeRabbit status exists but says the review was rate limited, do not represent it as complete evidence.
-8. A PR that had any red CI attempt is permanently ineligible. A green rerun does not clear that history.
-9. Do not silently broaden scope or edit a dependency repository.
-10. Human takeover or removed authorization stops the case.
-11. Complete the versioned structured result contract before reporting success.
-12. Never merge directly from a planning, building, or review role.
-13. Parent summaries may be truncated. Resolve every declared parent on the task's assigned board, read the full durable run metadata, and dereference declared result artifacts before relying on PR numbers, findings, or remediation evidence.
-14. Return contract version 1 with exactly these common fields plus the role fields: `contract_version`, `workflow_version`, `case` (`repository_id`, `issue_number`, `workflow_version`), `task_id`, `role`, `requested_model`, `actual_model`, `skills_repository_commit`, integer `started_at_unix`, integer `completed_at_unix`, and object `evidence`. Put supplemental artifact paths or diagnostics inside `evidence`. The full field guide is `docs/worker-result-contracts.md` in the source/release documentation.
+6. Require `immutable_evidence_bundle` schema version 1. Verify its `case_key` and `bound_state_revision` equal the task binding, and verify its `sha256` over the compact, lexicographically key-ordered JSON object after removing only the top-level `sha256` field. Treat every record payload and stored `payload_sha256` as immutable input. Missing, malformed, oversized, or mismatched evidence is a blocked result; never replace it with session memory or a parent summary.
+7. Bind CI and review evidence to an exact 40-character PR head SHA.
+8. Do not treat CodeRabbit as mandatory; concrete findings are still actionable. If a CodeRabbit status exists but says the review was rate limited, do not represent it as complete evidence.
+9. A PR that had any red CI attempt is permanently ineligible. A green rerun does not clear that history.
+10. Do not silently broaden scope or edit a dependency repository.
+11. Human takeover or removed authorization stops the case.
+12. Complete the versioned structured result contract before reporting success.
+13. Never merge directly from a planning, building, or review role.
+14. Parent summaries may be truncated. Resolve every declared parent on the task's assigned board, read the full durable run metadata, and dereference declared result artifacts before relying on PR numbers, findings, or remediation evidence.
+15. Return contract version 1 with exactly these common fields plus the role fields: `contract_version`, `workflow_version`, `case` (`repository_id`, `issue_number`, `workflow_version`), `task_id`, `role`, `requested_model`, `actual_model`, `skills_repository_commit`, integer `started_at_unix`, integer `completed_at_unix`, and object `evidence`. Put supplemental artifact paths or diagnostics inside `evidence`. The full field guide is `docs/worker-result-contracts.md` in the source/release documentation.
 
 ## Ownership
 

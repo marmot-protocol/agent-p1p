@@ -15,14 +15,15 @@ exist. It is not evidence of live-host installation or a completed canary.
 |---|---|---|
 | Deterministic workflow | Exhaustive Rust states, events, effects, exact-head joins, bounded remediation, and shadow-only MDK disposition | Workspace tests and frozen fixtures |
 | Authoritative storage | SQLite schema v3, immutable events/evidence/runs/findings, current-case projection, durable outbox, leases, transactional effect supersession, backup, migration, and crash injection | Workspace and disposable lifecycle tests |
-| Intake reads | Generic label discovery using numeric repository/actor identity, policy validation, bounded pagination, and one-case concurrency | Fixture tests plus a read-only live GitHub observation |
+| Intake reads | Generic label discovery plus bounded issue title/body/comment and label-event snapshots using numeric repository/actor identity, policy validation, and one-case concurrency | Fixture tests plus a read-only live GitHub observation |
 | Hermes reads/projection | Bounded CLI adapter, capability/task/run reads, controller-owned gates, idempotent projections, result metadata ingestion, and restart convergence | Fake-runner and offline integration tests only |
 | Worker contracts | Versioned planner, builder, two reviewer, and final-reviewer results bound to case, task, role, model, skills commit, plan, PR, and exact head | Contract fixtures and ingestion tests |
+| Worker evidence bundles | Every projected worker receives the complete ordered ledger history at the claimed state revision, including record digests and a reproducible root digest; final review includes the atomically committed GitHub preflight | Ledger, scheduling, dispatch-command, and exact-final-preflight tests |
 | CI reconciliation | Independent current and historical check/status evaluation on the ledger-bound PR head | Fixture and controller-cycle tests |
 | GitHub reads/writes | Bounded REST reads plus bounded GraphQL review-thread pagination; idempotent issue comments, controller-owned draft PRs, exact-head reviews, ready-for-review mutation, and guarded merge | Adapter and controller-cycle tests; MDK policy cannot enable the guarded path |
 | Release/install | Signed source-bound release cohort, artifact verification, content-addressed install, rollback, schema migration, hardened shadow timer, and inert active-controller templates | Local tests and disposable systemd container |
 | Active controller | One `controller-cycle` command that ingests completed runs, reconciles CI, performs generic intake, commits authorization removal or foreign-PR takeover, publishes plans and role reviews, verifies the final-review preflight, publishes human-held disposition comments, records local terminal effects, and projects dispatch effects only while fresh gates pass | Local tests; active unit templates are installed but no instance is enabled or started |
-| Final-review preflight | A durable observation effect joins the accepted plan/build/reviewer ledger, exact numeric GitHub actor and role-stamped approvals, current head CI, clean draft-PR ownership/mergeability, and resolved review threads before final-review dispatch | State-machine, adapter, fixture, and restart-safe lease tests |
+| Final-review preflight | A durable observation effect joins the accepted plan/build/reviewer ledger, fresh issue/clarification and authorization evidence, exact numeric GitHub actor and role-stamped approvals, current head CI, clean draft-PR ownership/mergeability, and resolved review threads before final-review dispatch | State-machine, adapter, fixture, drift, and restart-safe lease tests |
 | Review publication | Two distinct controller-held reviewer credentials publish the joined role contracts on the exact head; remediation and final preflight remain blocked until both idempotent reviews exist | Policy, state-machine, mutation, outage/retry, and exact-role fixture tests |
 | Plan publication | Planner results first create a durable `PUBLISH_PLAN` effect; the controller publishes the immutable plan comment and only then applies the typed outcome that releases build, human disposition, or terminal recording | Contract, state-machine, mutation, and outage/retry tests |
 | Draft PR publication | A review-ready builder result records only its pushed commit; a durable controller effect creates or updates the stable case-owned draft PR and only then binds PR/head and releases independent CI observation | Initial/remediation identity, mutation outage/retry, state-machine, and exact-head tests |
@@ -46,14 +47,11 @@ These are implementation gaps, not merely missing operational evidence:
 1. Complete the scoped branch-push execution boundary. Draft PRs, planner
    comments, role-stamped reviews, guarded merge, human-held disposition, and
    terminal recording are now durable controller effects.
-2. Build the complete deterministic final-review bundle from immutable ledger
-   references and fresh GitHub observations. A valid final worker result alone
-   is not sufficient.
-3. Provision and test a compatible Hermes runtime under the dedicated
+2. Provision and test a compatible Hermes runtime under the dedicated
    `pip-v2-control` identity, including repository board, profiles, exact skill
    links, shared authentication, provider probes, and the gateway/dispatcher
    observing the same Hermes root.
-4. Record live Hermes and provider outage/recovery evidence, then seek explicit
+3. Record live Hermes and provider outage/recovery evidence, then seek explicit
    authorization for one MDK shadow case.
 
 ## Runtime topology decision

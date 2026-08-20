@@ -80,6 +80,8 @@ Deliverables:
 - Hermes capability probe, board/task/result reads, and projection comparison.
 - Provider/model/auth health probes with bounded time/output.
 - Normalized external evidence types consumed by `pip-core`.
+- Bounded issue title/body/comment snapshots with numeric authors and body
+  digests for final-review reconstruction.
 
 Exit gate:
 
@@ -97,6 +99,8 @@ Deliverables:
 - Fresh Hermes and direct-provider executor adapters.
 - Bounded process leases, timeouts, cleanup, and artifact retention.
 - Planner, builder, parallel review, remediation, and final-review projections.
+- Revision-bound, digest-addressed immutable evidence bundles on every worker
+  projection, including the accepted GitHub preflight for final review.
 
 Exit gate:
 

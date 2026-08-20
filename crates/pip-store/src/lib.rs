@@ -221,7 +221,46 @@ pub struct StoredRun {
     pub task_id: String,
     pub role: String,
     pub payload: Value,
+    pub payload_sha256: String,
     pub accepted_at: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct StoredEvent {
+    pub event_id: String,
+    pub state_revision: u64,
+    pub observed_at: u64,
+    pub event_type: String,
+    pub payload: Value,
+    pub payload_sha256: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct StoredEvidence {
+    pub evidence_id: String,
+    pub kind: String,
+    pub source: String,
+    pub observed_at: u64,
+    pub payload: Value,
+    pub payload_sha256: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct StoredFinding {
+    pub finding_id: String,
+    pub origin_role: String,
+    pub reviewed_head_sha: String,
+    pub payload: Value,
+    pub payload_sha256: String,
+    pub recorded_at: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ImmutableCaseHistory {
+    pub events: Vec<StoredEvent>,
+    pub runs: Vec<StoredRun>,
+    pub evidence: Vec<StoredEvidence>,
+    pub findings: Vec<StoredFinding>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -775,7 +814,8 @@ impl Store {
     pub fn run_by_task_id(&self, task_id: &str) -> Result<Option<StoredRun>> {
         self.connection
             .query_row(
-                "SELECT run_id, case_key, event_id, task_id, role, payload_json, accepted_at
+                "SELECT run_id, case_key, event_id, task_id, role, payload_json,
+                        payload_sha256, accepted_at
                  FROM runs WHERE task_id = ?1",
                 [task_id],
                 stored_run,
@@ -787,13 +827,110 @@ impl Store {
 
     pub fn runs_for_case(&self, case_key: &str) -> Result<Vec<StoredRun>> {
         let mut statement = self.connection.prepare(
-            "SELECT run_id, case_key, event_id, task_id, role, payload_json, accepted_at
+            "SELECT run_id, case_key, event_id, task_id, role, payload_json,
+                    payload_sha256, accepted_at
              FROM runs WHERE case_key = ?1 ORDER BY accepted_at, run_id",
         )?;
         statement
             .query_map([case_key], stored_run)?
             .map(|row| row.map_err(StoreError::from).and_then(parse_stored_run))
             .collect()
+    }
+
+    pub fn immutable_history_for_case(&self, case_key: &str) -> Result<ImmutableCaseHistory> {
+        if case_key.trim().is_empty() {
+            return Err(StoreError::InvalidInput("case identity is required"));
+        }
+        let mut events = self.connection.prepare(
+            "SELECT event_id, state_revision, observed_at, event_type, payload_json,
+                    payload_sha256
+             FROM events WHERE case_key = ?1 ORDER BY state_revision, event_id",
+        )?;
+        let events = events
+            .query_map([case_key], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            })?
+            .map(|row| {
+                let row = row?;
+                Ok(StoredEvent {
+                    event_id: row.0,
+                    state_revision: unsigned(row.1),
+                    observed_at: unsigned(row.2),
+                    event_type: row.3,
+                    payload: serde_json::from_str(&row.4)?,
+                    payload_sha256: row.5,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let runs = self.runs_for_case(case_key)?;
+        let mut evidence = self.connection.prepare(
+            "SELECT evidence_id, kind, source, observed_at, payload_json, payload_sha256
+             FROM evidence WHERE case_key = ?1 ORDER BY observed_at, evidence_id",
+        )?;
+        let evidence = evidence
+            .query_map([case_key], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            })?
+            .map(|row| {
+                let row = row?;
+                Ok(StoredEvidence {
+                    evidence_id: row.0,
+                    kind: row.1,
+                    source: row.2,
+                    observed_at: unsigned(row.3),
+                    payload: serde_json::from_str(&row.4)?,
+                    payload_sha256: row.5,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut findings = self.connection.prepare(
+            "SELECT finding_id, origin_role, reviewed_head_sha, payload_json,
+                    payload_sha256, recorded_at
+             FROM findings WHERE case_key = ?1 ORDER BY recorded_at, finding_id",
+        )?;
+        let findings = findings
+            .query_map([case_key], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
+                ))
+            })?
+            .map(|row| {
+                let row = row?;
+                Ok(StoredFinding {
+                    finding_id: row.0,
+                    origin_role: row.1,
+                    reviewed_head_sha: row.2,
+                    payload: serde_json::from_str(&row.3)?,
+                    payload_sha256: row.4,
+                    recorded_at: unsigned(row.5),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(ImmutableCaseHistory {
+            events,
+            runs,
+            evidence,
+            findings,
+        })
     }
 
     pub fn outbox_count(&self) -> Result<u64> {
@@ -1677,7 +1814,7 @@ fn query_case(connection: &Connection, case_key: &str) -> Result<Option<StoredCa
         .optional()?)
 }
 
-type StoredRunRow = (String, String, String, String, String, String, i64);
+type StoredRunRow = (String, String, String, String, String, String, String, i64);
 
 fn stored_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredRunRow> {
     Ok((
@@ -1688,6 +1825,7 @@ fn stored_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredRunRow> {
         row.get(4)?,
         row.get(5)?,
         row.get(6)?,
+        row.get(7)?,
     ))
 }
 
@@ -1699,7 +1837,8 @@ fn parse_stored_run(row: StoredRunRow) -> Result<StoredRun> {
         task_id: row.3,
         role: row.4,
         payload: serde_json::from_str(&row.5)?,
-        accepted_at: unsigned(row.6),
+        payload_sha256: row.6,
+        accepted_at: unsigned(row.7),
     })
 }
 

@@ -83,7 +83,8 @@ directly to building.
 
 1. Allocate a case-owned branch and worktree record.
 2. Revalidate plan authorization and current repository policy.
-3. Dispatch one fresh builder with the active plan and assigned paths.
+3. Dispatch one fresh builder with the revision-bound immutable evidence
+   bundle, active plan, and assigned paths.
 4. Validate the returned result and independently fetch the branch/PR/head.
 5. Commit the immutable build run and PR/head binding.
 6. If CI is pending, enter `WAITING_CI` without redispatching the builder.
@@ -120,10 +121,13 @@ reviewer verdicts. Exceeding a bound enters `ESCALATED`.
 
 ## Final review sequence
 
-1. Rebuild the complete case bundle from immutable ledger references.
-2. Re-fetch current GitHub authorization, PR head, CI, reviews, threads,
-   ownership, and mergeability.
-3. Dispatch one fresh final reviewer.
+1. Rebuild the complete case bundle from immutable ledger events, runs,
+   controller evidence, and findings; bind and hash it at the current revision.
+2. Re-fetch and record the original issue and bounded clarification history,
+   current GitHub authorization, PR head, CI, reviews, threads, ownership, and
+   mergeability.
+3. Commit the fresh GitHub preflight evidence and final-review dispatch intent
+   atomically, then dispatch one fresh final reviewer with that exact bundle.
 4. Validate and commit its immutable result.
 5. Route the typed outcome:
    - `READY` -> `SHADOW_READY` or `READY_TO_MERGE` by policy;

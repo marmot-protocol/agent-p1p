@@ -1,7 +1,7 @@
 ---
 name: builder-grok
 description: Use when implementing an approved Pip v2 plan with Grok.
-version: 0.5.0
+version: 0.6.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -18,7 +18,7 @@ The Hermes `cursor-fixer` profile is the v1-style task orchestrator. It delegate
 
 ## Workflow
 
-1. Read the Kanban task contract and the controller-published planner comment for its exact case and plan version. Verify the controller provenance marker, planned base SHA, and execution disposition. Treat that comment and the bound plan artifacts as the authorized plan.
+1. Read and verify the task's `immutable_evidence_bundle`. Select the one accepted planner run for the exact active plan version and its `GITHUB_PLAN_PUBLICATION` evidence, including the controller actor, comment ID, and body digest. Independently fetch that exact comment and verify the provenance marker and digest. Treat the matching run, publication evidence, and bound plan artifacts as the authorized plan.
 2. Clone the exact repository into the scratch workspace and fetch current `master`. Record the actual implementation base. The planned base is context, not a checkout lock: adapt paths and mechanics to ordinary upstream movement. Return to planning only when a concrete upstream change makes the authorized scope unsafe, contradictory, or unimplementable; report that incompatibility precisely.
 3. Verify `composer-2.5` appears in `agent --list-models`.
 4. Invoke Cursor once in a fresh session:

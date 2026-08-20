@@ -215,6 +215,15 @@ pub struct IssueSnapshot {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct IssueContentSnapshot {
+    pub author_id: u64,
+    pub title: String,
+    pub body: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct LabelEvent {
     pub id: u64,
     pub labeled: bool,
@@ -227,7 +236,9 @@ pub struct LabelEvent {
 pub struct IntakeSnapshot {
     pub repository: RepositorySnapshot,
     pub issue: IssueSnapshot,
+    pub issue_content: IssueContentSnapshot,
     pub label_events: Vec<LabelEvent>,
+    pub comments: Vec<IssueCommentSnapshot>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -480,7 +491,7 @@ fn json_bytes(value: &Value) -> Result<Vec<u8>, GitHubError> {
     serde_json::to_vec(value).map_err(|error| GitHubError::MalformedJson(error.to_string()))
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IssueCommentSnapshot {
     pub id: u64,
     pub actor_id: u64,
@@ -512,6 +523,16 @@ struct IssueDto {
     #[serde(default)]
     pull_request: Option<Value>,
     labels: Vec<LabelDto>,
+    #[serde(default)]
+    user: Option<UserDto>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    body: Option<String>,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    updated_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -785,6 +806,19 @@ impl<T: ReadTransport> GitHubReader<T> {
         if issue_dto.id == 0
             || issue_dto.number != issue_number
             || !matches!(issue_dto.state.as_str(), "open" | "closed")
+            || issue_dto.user.as_ref().is_none_or(|user| user.id == 0)
+            || issue_dto
+                .title
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            || issue_dto
+                .created_at
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            || issue_dto
+                .updated_at
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
         {
             return Err(GitHubError::InvalidIdentity);
         }
@@ -813,6 +847,40 @@ impl<T: ReadTransport> GitHubReader<T> {
                 created_at: event.created_at,
             });
         }
+        label_events
+            .sort_by(|left, right| (&left.created_at, left.id).cmp(&(&right.created_at, right.id)));
+        let comment_dtos = self.get_pages::<IssueCommentDto>(&format!(
+            "{root}/issues/{issue_number}/comments?per_page=100&page=1"
+        ))?;
+        let expected_issue_url = format!("{}{root}/issues/{issue_number}", self.base_url);
+        let mut comment_ids = BTreeSet::new();
+        let mut comments = Vec::with_capacity(comment_dtos.len());
+        for comment in comment_dtos {
+            if comment.id == 0
+                || comment.user.id == 0
+                || !comment_ids.insert(comment.id)
+                || comment.issue_url != expected_issue_url
+                || comment.html_url.trim().is_empty()
+                || comment.body.trim().is_empty()
+                || comment.created_at.trim().is_empty()
+                || comment.updated_at.trim().is_empty()
+            {
+                return Err(GitHubError::InvalidIdentity);
+            }
+            let body_sha256 = hex_digest(&Sha256::digest(comment.body.as_bytes()));
+            comments.push(IssueCommentSnapshot {
+                id: comment.id,
+                actor_id: comment.user.id,
+                issue_number,
+                html_url: comment.html_url,
+                body: comment.body,
+                body_sha256,
+                created_at: comment.created_at,
+                updated_at: comment.updated_at,
+            });
+        }
+        comments
+            .sort_by(|left, right| (&left.created_at, left.id).cmp(&(&right.created_at, right.id)));
         Ok(IntakeSnapshot {
             repository: RepositorySnapshot {
                 id: repository_dto.id,
@@ -830,7 +898,15 @@ impl<T: ReadTransport> GitHubReader<T> {
                     .map(|label| label.name)
                     .collect(),
             },
+            issue_content: IssueContentSnapshot {
+                author_id: issue_dto.user.expect("validated issue author").id,
+                title: issue_dto.title.expect("validated issue title"),
+                body: issue_dto.body.unwrap_or_default(),
+                created_at: issue_dto.created_at.expect("validated issue creation time"),
+                updated_at: issue_dto.updated_at.expect("validated issue update time"),
+            },
             label_events,
+            comments,
         })
     }
 

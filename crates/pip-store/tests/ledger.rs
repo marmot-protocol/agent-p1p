@@ -108,6 +108,31 @@ fn case_event_projection_and_outbox_are_one_transaction() {
 }
 
 #[test]
+fn immutable_case_history_returns_ordered_payloads_with_stored_digests() {
+    let (_directory, mut store) = open();
+    store.create_case(&new_case()).unwrap();
+    store.apply_transition(&transition(), None).unwrap();
+
+    let history = store
+        .immutable_history_for_case("repo:984321#1240@1")
+        .unwrap();
+    assert_eq!(history.events.len(), 2);
+    assert_eq!(history.events[0].event_id, "event-intake-1");
+    assert_eq!(history.events[1].event_id, "event-plan-1");
+    assert_eq!(history.events[1].payload, json!({"plan_version": 1}));
+    assert_eq!(history.events[1].payload_sha256.len(), 64);
+    assert_eq!(history.runs.len(), 1);
+    assert_eq!(history.runs[0].run_id, "run-plan-1");
+    assert_eq!(history.runs[0].payload_sha256.len(), 64);
+    assert_eq!(history.evidence.len(), 1);
+    assert_eq!(history.evidence[0].evidence_id, "evidence-plan-comment-1");
+    assert_eq!(history.evidence[0].payload_sha256.len(), 64);
+    assert_eq!(history.findings.len(), 1);
+    assert_eq!(history.findings[0].finding_id, "GENERAL-R1-001");
+    assert_eq!(history.findings[0].payload_sha256.len(), 64);
+}
+
+#[test]
 fn operator_status_separates_pending_leased_and_delivered_work() {
     let (_directory, mut store) = open();
     store.create_case(&new_case()).unwrap();

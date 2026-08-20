@@ -4,7 +4,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use pip_control::{
     ActiveIntakeError, IntakeSource, RepositoryPolicy, load_repository_policy, reconcile_intake,
 };
-use pip_github::{GitHubError, IntakeSnapshot, IssueSnapshot, LabelEvent, RepositorySnapshot};
+use pip_github::{
+    GitHubError, IntakeSnapshot, IssueContentSnapshot, IssueSnapshot, LabelEvent,
+    RepositorySnapshot,
+};
 use pip_store::Store;
 use tempfile::tempdir;
 
@@ -166,6 +169,13 @@ fn source(issue_numbers: &[u64]) -> FixtureSource {
                         full_name: "marmot-protocol/mdk".into(),
                         default_branch: "master".into(),
                     },
+                    issue_content: IssueContentSnapshot {
+                        author_id: 1001,
+                        title: format!("Fixture issue #{}", issue.number),
+                        body: "Fixture body".into(),
+                        created_at: "2026-08-19T00:00:00Z".into(),
+                        updated_at: "2026-08-20T00:00:00Z".into(),
+                    },
                     label_events: vec![LabelEvent {
                         id: 10_000 + issue.number,
                         labeled: true,
@@ -173,6 +183,7 @@ fn source(issue_numbers: &[u64]) -> FixtureSource {
                         label: "pip-ok".into(),
                         created_at: "2026-08-20T12:00:00Z".into(),
                     }],
+                    comments: Vec::new(),
                     issue,
                 },
             )

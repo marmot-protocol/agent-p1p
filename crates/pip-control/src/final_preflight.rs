@@ -21,7 +21,7 @@ use pip_store::{EvidenceInput, Store, StoreError, StoredCase};
 use serde::Serialize;
 use serde_json::json;
 
-use crate::{PullRequestSource, RepositoryPolicy};
+use crate::{IntakeSource, PullRequestSource, RepositoryPolicy};
 
 const OBSERVE_EFFECT: &str = "OBSERVE_FINAL_PREFLIGHT";
 const REVIEW_ROLES: [(WorkerRole, &str); 2] = [
@@ -29,7 +29,7 @@ const REVIEW_ROLES: [(WorkerRole, &str); 2] = [
     (WorkerRole::ReviewerSecperf, "reviewer-secperf"),
 ];
 
-pub trait FinalPreflightSource: PullRequestSource {
+pub trait FinalPreflightSource: PullRequestSource + IntakeSource {
     fn review_threads(
         &self,
         owner: &str,
@@ -171,6 +171,21 @@ pub fn reconcile_final_preflight_once<S: FinalPreflightSource>(
             return Err(error.into());
         }
     };
+    let issue_authorization = match source.intake(
+        &policy.repository.owner,
+        &policy.repository.name,
+        case.issue_number,
+    ) {
+        Ok(evidence) => evidence,
+        Err(error) => {
+            store.release_effect(&claimed.effect_id, owner)?;
+            return Err(error.into());
+        }
+    };
+    if !fresh_issue_authorization(policy, &case, &issue_authorization) {
+        store.release_effect(&claimed.effect_id, owner)?;
+        return Ok(FinalPreflightCycle::AuthorizationBlocked);
+    }
     let blockers = match final_gate_blockers(store, &case, policy, &evidence, &threads, Some(true))
     {
         Ok(blockers) => blockers,
@@ -187,6 +202,7 @@ pub fn reconcile_final_preflight_once<S: FinalPreflightSource>(
         });
     }
     let github_payload = json!({
+        "issue_authorization": issue_authorization,
         "pull_request": evidence,
         "review_threads": threads,
         "automation_actor_id": policy.github.automation_actor_id,
@@ -215,6 +231,29 @@ pub fn reconcile_final_preflight_once<S: FinalPreflightSource>(
         case_key: case.case_key,
         head_sha: head_sha.into(),
     })
+}
+
+fn fresh_issue_authorization(
+    policy: &RepositoryPolicy,
+    case: &StoredCase,
+    evidence: &pip_github::IntakeSnapshot,
+) -> bool {
+    let expected_repository = policy.repository.full_name();
+    let latest_label = evidence
+        .label_events
+        .iter()
+        .filter(|event| event.label == policy.intake.label)
+        .max_by_key(|event| (&event.created_at, event.id));
+    evidence.repository.id == policy.repository.id
+        && evidence.repository.full_name == expected_repository
+        && evidence.repository.default_branch == policy.repository.default_branch
+        && evidence.issue.number == case.issue_number
+        && evidence.issue.open
+        && !evidence.issue.is_pull_request
+        && evidence.issue.labels.contains(&policy.intake.label)
+        && latest_label.is_some_and(|event| {
+            event.labeled && policy.intake.trusted_actor_ids.contains(&event.actor_id)
+        })
 }
 
 fn validate_pull_request(

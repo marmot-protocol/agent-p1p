@@ -1,12 +1,15 @@
+use std::collections::BTreeSet;
+
 use pip_contracts::{WorkerBinding, WorkerResult};
 use pip_control::{
-    CiCycle, FinalPreflightCycle, FinalPreflightSource, PullRequestSource, load_repository_policy,
-    reconcile_ci_once, reconcile_final_preflight_once,
+    CiCycle, FinalPreflightCycle, FinalPreflightSource, IntakeSource, PullRequestSource,
+    load_repository_policy, reconcile_ci_once, reconcile_final_preflight_once,
 };
 use pip_controller::ingest_worker_result;
 use pip_github::{
-    CheckConclusion, CheckRunSnapshot, CheckStatus, CommitStatusState, GitHubError,
-    PullRequestEvidence, PullRequestSnapshot, ReviewSnapshot, ReviewState, ReviewThreadSnapshot,
+    CheckConclusion, CheckRunSnapshot, CheckStatus, CommitStatusState, GitHubError, IntakeSnapshot,
+    IssueCommentSnapshot, IssueContentSnapshot, IssueSnapshot, LabelEvent, PullRequestEvidence,
+    PullRequestSnapshot, RepositorySnapshot, ReviewSnapshot, ReviewState, ReviewThreadSnapshot,
 };
 use pip_store::{EffectInput, EventInput, NewCase, Store, TransitionInput};
 use serde_json::{Value, json};
@@ -15,6 +18,7 @@ use serde_json::{Value, json};
 struct FixtureSource {
     evidence: PullRequestEvidence,
     threads: Vec<ReviewThreadSnapshot>,
+    issue_authorized: bool,
 }
 
 impl PullRequestSource for FixtureSource {
@@ -26,6 +30,69 @@ impl PullRequestSource for FixtureSource {
         _pull_request_number: u64,
     ) -> Result<PullRequestEvidence, GitHubError> {
         Ok(self.evidence.clone())
+    }
+}
+
+impl IntakeSource for FixtureSource {
+    fn discover(
+        &self,
+        _owner: &str,
+        _repository: &str,
+        _label: &str,
+    ) -> Result<Vec<IssueSnapshot>, GitHubError> {
+        Ok(vec![issue_snapshot(self.issue_authorized)])
+    }
+
+    fn intake(
+        &self,
+        _owner: &str,
+        _repository: &str,
+        issue_number: u64,
+    ) -> Result<IntakeSnapshot, GitHubError> {
+        assert_eq!(issue_number, 1240);
+        Ok(IntakeSnapshot {
+            repository: RepositorySnapshot {
+                id: 984_321,
+                full_name: "marmot-protocol/mdk".into(),
+                default_branch: "master".into(),
+            },
+            issue: issue_snapshot(self.issue_authorized),
+            issue_content: IssueContentSnapshot {
+                author_id: 1000,
+                title: "Fix issue #1240".into(),
+                body: "Original issue body.".into(),
+                created_at: "2026-08-19T00:00:00Z".into(),
+                updated_at: "2026-08-20T00:00:00Z".into(),
+            },
+            label_events: vec![LabelEvent {
+                id: 91,
+                labeled: true,
+                actor_id: 202_880,
+                label: "pip-ok".into(),
+                created_at: "2026-08-20T00:00:00Z".into(),
+            }],
+            comments: vec![IssueCommentSnapshot {
+                id: 10001,
+                actor_id: 1000,
+                issue_number: 1240,
+                html_url: "https://github.test/marmot-protocol/mdk/issues/1240#issuecomment-10001"
+                    .into(),
+                body: "Use the exact accepted plan.".into(),
+                body_sha256: "fixture-digest".into(),
+                created_at: "2026-08-20T00:01:00Z".into(),
+                updated_at: "2026-08-20T00:01:00Z".into(),
+            }],
+        })
+    }
+}
+
+fn issue_snapshot(authorized: bool) -> IssueSnapshot {
+    IssueSnapshot {
+        id: 555,
+        number: 1240,
+        open: authorized,
+        is_pull_request: false,
+        labels: BTreeSet::from(["pip-ok".into()]),
     }
 }
 
@@ -67,6 +134,22 @@ fn exact_published_reviews_clean_ci_and_resolved_threads_release_final_review() 
         }
     );
     assert_eq!(store.evidence_count().unwrap(), 6);
+    let history = store
+        .immutable_history_for_case("repo:984321#1240@1")
+        .unwrap();
+    let preflight = history
+        .evidence
+        .iter()
+        .find(|evidence| evidence.kind == "GITHUB_FINAL_PREFLIGHT")
+        .unwrap();
+    assert_eq!(
+        preflight.payload["issue_authorization"]["issue_content"]["title"],
+        "Fix issue #1240"
+    );
+    assert_eq!(
+        preflight.payload["issue_authorization"]["comments"][0]["body"],
+        "Use the exact accepted plan."
+    );
     let effect = store
         .claim_effect_matching("dispatcher", 200, 30, &["DISPATCH_FINAL_REVIEWER"])
         .unwrap()
@@ -160,6 +243,36 @@ fn stale_authorization_never_claims_or_accepts_final_preflight() {
         .unwrap(),
         FinalPreflightCycle::AuthorizationBlocked
     );
+    assert!(
+        store
+            .claim_effect_matching("retry", 200, 30, &["OBSERVE_FINAL_PREFLIGHT"])
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn final_preflight_refetches_issue_authorization_and_fails_closed_on_drift() {
+    let directory = tempfile::tempdir().unwrap();
+    let policy = active_policy();
+    let mut source = accepted_source();
+    source.issue_authorized = false;
+    let mut store = final_review_store(directory.path().join("ledger.db"), &policy, &source);
+
+    assert_eq!(
+        reconcile_final_preflight_once(
+            &source,
+            &policy,
+            &mut store,
+            200,
+            "final-preflight",
+            30,
+            true,
+        )
+        .unwrap(),
+        FinalPreflightCycle::AuthorizationBlocked
+    );
+    assert_eq!(store.evidence_count().unwrap(), 5);
     assert!(
         store
             .claim_effect_matching("retry", 200, 30, &["OBSERVE_FINAL_PREFLIGHT"])
@@ -495,6 +608,7 @@ fn accepted_source() -> FixtureSource {
             is_outdated: false,
             path: "src/lib.rs".into(),
         }],
+        issue_authorized: true,
     }
 }
 

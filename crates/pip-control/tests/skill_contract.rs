@@ -58,6 +58,26 @@ fn shared_skill_requires_every_immutable_common_binding() {
             "shared skill omits required common field {field}"
         );
     }
+    for field in [
+        "immutable_evidence_bundle",
+        "bound_state_revision",
+        "sha256",
+    ] {
+        assert!(
+            shared.contains(&format!("`{field}`")),
+            "shared skill omits immutable task evidence field {field}"
+        );
+    }
+}
+
+#[test]
+fn final_reviewer_requires_the_controller_preflight_from_the_bound_bundle() {
+    let final_reviewer = ROLE_SKILLS
+        .iter()
+        .find_map(|(name, skill)| (*name == "final-reviewer").then_some(*skill))
+        .unwrap();
+    assert!(final_reviewer.contains("`immutable_evidence_bundle`"));
+    assert!(final_reviewer.contains("`GITHUB_FINAL_PREFLIGHT`"));
 }
 
 #[test]

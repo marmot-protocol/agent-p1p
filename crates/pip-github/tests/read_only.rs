@@ -73,7 +73,7 @@ fn intake_read_uses_numeric_identity_authentication_and_bounded_pagination() {
         r#"{"id":984321,"full_name":"marmot-protocol/mdk","default_branch":"main"}"#,
     ));
     transport.push(response(
-        r#"{"id":555,"number":1240,"state":"open","pull_request":null,"labels":[{"name":"bug"},{"name":"pip-ok"}]}"#,
+        r#"{"id":555,"number":1240,"state":"open","pull_request":null,"labels":[{"name":"bug"},{"name":"pip-ok"}],"user":{"id":1000},"title":"Fix exact-head race","body":"Original issue body","created_at":"2026-08-19T00:00:00Z","updated_at":"2026-08-20T00:00:00Z"}"#,
     ));
     let mut first_events = response(
         r#"[{"id":1,"event":"labeled","actor":{"id":1001},"label":{"name":"pip-ok"},"created_at":"2026-08-20T00:00:00Z"}]"#,
@@ -86,6 +86,9 @@ fn intake_read_uses_numeric_identity_authentication_and_bounded_pagination() {
     transport.push(response(
         r#"[{"id":2,"event":"unlabeled","actor":{"id":1002},"label":{"name":"other"},"created_at":"2026-08-20T00:01:00Z"}]"#,
     ));
+    transport.push(response(
+        r#"[{"id":10001,"user":{"id":1001},"issue_url":"https://api.github.test/repos/marmot-protocol/mdk/issues/1240","html_url":"https://github.test/marmot-protocol/mdk/issues/1240#issuecomment-10001","body":"Authoritative clarification","created_at":"2026-08-20T00:02:00Z","updated_at":"2026-08-20T00:02:00Z"}]"#,
+    ));
 
     let snapshot = reader(transport.clone())
         .read_intake("marmot-protocol", "mdk", 1240)
@@ -93,11 +96,15 @@ fn intake_read_uses_numeric_identity_authentication_and_bounded_pagination() {
     assert_eq!(snapshot.repository.id, 984_321);
     assert_eq!(snapshot.issue.id, 555);
     assert!(snapshot.issue.labels.contains("pip-ok"));
+    assert_eq!(snapshot.issue_content.title, "Fix exact-head race");
+    assert_eq!(snapshot.issue_content.body, "Original issue body");
+    assert_eq!(snapshot.comments.len(), 1);
+    assert_eq!(snapshot.comments[0].body, "Authoritative clarification");
     assert_eq!(snapshot.label_events.len(), 2);
     assert_eq!(snapshot.label_events[0].actor_id, 1001);
 
     let requests = transport.requests.borrow();
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 5);
     assert!(requests.iter().all(|request| {
         request.headers.get("authorization").map(String::as_str) == Some("Bearer fixture-token")
             && request.headers.contains_key("x-github-api-version")
@@ -164,7 +171,7 @@ fn pagination_cannot_send_authorization_to_another_origin() {
         r#"{"id":984321,"full_name":"owner/repo","default_branch":"main"}"#,
     ));
     transport.push(response(
-        r#"{"id":555,"number":1,"state":"open","labels":[]}"#,
+        r#"{"id":555,"number":1,"state":"open","labels":[],"user":{"id":1000},"title":"Issue","body":null,"created_at":"2026-08-19T00:00:00Z","updated_at":"2026-08-20T00:00:00Z"}"#,
     ));
     let mut events = response("[]");
     events.headers.insert(
@@ -187,7 +194,7 @@ fn pagination_limit_blocks_unbounded_history() {
         r#"{"id":984321,"full_name":"owner/repo","default_branch":"main"}"#,
     ));
     transport.push(response(
-        r#"{"id":555,"number":1,"state":"open","labels":[]}"#,
+        r#"{"id":555,"number":1,"state":"open","labels":[],"user":{"id":1000},"title":"Issue","body":null,"created_at":"2026-08-19T00:00:00Z","updated_at":"2026-08-20T00:00:00Z"}"#,
     ));
     for page in 1..=3 {
         let mut events = response("[]");

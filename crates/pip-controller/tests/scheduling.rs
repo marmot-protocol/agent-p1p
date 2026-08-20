@@ -96,6 +96,7 @@ fn context() -> DispatchContext {
         pr_number: Some(PullRequestNumber::new(NonZeroU64::new(77).unwrap())),
         head_sha: Some(GitSha::from_str(&"b".repeat(40)).unwrap()),
         skills_repository_commit: GitSha::from_str(&"a".repeat(40)).unwrap(),
+        immutable_evidence_bundle: json!({"schema_version": 1, "sha256": "fixture"}),
     }
 }
 
@@ -251,15 +252,240 @@ fn claimed_outbox_dispatch_is_bound_to_the_current_case_revision() {
     };
 
     let skills_commit = GitSha::from_str(&"a".repeat(40)).unwrap();
-    let dispatches = schedule_claimed_dispatch(&effect, &case, &policy(), skills_commit).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = pip_store::Store::open(directory.path().join("ledger.db")).unwrap();
+    store
+        .record_policy(&pip_store::PolicyInput {
+            repository_id: case.repository_id,
+            revision: case.policy_revision,
+            accepted_at: 1,
+            payload: json!({"fixture": true}),
+        })
+        .unwrap();
+    store
+        .create_case(&pip_store::NewCase {
+            case_key: case.case_key.clone(),
+            repository_id: case.repository_id,
+            issue_number: case.issue_number,
+            workflow_version: case.workflow_version,
+            policy_revision: case.policy_revision,
+            initial_state: "PLANNING".into(),
+            observed_at: 1,
+            event: pip_store::EventInput {
+                event_id: "event-fixture".into(),
+                event_type: "FIXTURE".into(),
+                payload: json!({"fixture": true}),
+            },
+            effects: Vec::new(),
+        })
+        .unwrap();
+    store
+        .apply_transition(
+            &pip_store::TransitionInput {
+                case_key: case.case_key.clone(),
+                expected_revision: 1,
+                next_state: "REVIEWING".into(),
+                remediation_round: case.remediation_round,
+                plan_version: case.plan_version,
+                pr_number: case.pr_number,
+                head_sha: case.head_sha.clone(),
+                observed_at: 2,
+                event: pip_store::EventInput {
+                    event_id: "event-reviewing-fixture".into(),
+                    event_type: "CI_ACCEPTED".into(),
+                    payload: json!({"fixture": true}),
+                },
+                run: None,
+                evidence: Vec::new(),
+                findings: Vec::new(),
+                effects: vec![pip_store::EffectInput {
+                    effect_id: effect.effect_id.clone(),
+                    effect_type: effect.effect_type.clone(),
+                    payload: effect.payload.clone(),
+                }],
+            },
+            None,
+        )
+        .unwrap();
+    let stored_case = store.case(&case.case_key).unwrap().unwrap();
+    let claimed = store
+        .claim_effect_matching("controller-1", 3, 30, &["DISPATCH_REVIEWERS"])
+        .unwrap()
+        .unwrap();
+    let dispatches =
+        schedule_claimed_dispatch(&claimed, &stored_case, &store, &policy(), skills_commit)
+            .unwrap();
     assert_eq!(dispatches.len(), 2);
     assert_eq!(dispatches[0].role, WorkerRole::ReviewerGeneral);
     assert_eq!(dispatches[1].role, WorkerRole::ReviewerSecperf);
 
-    let mut stale = effect;
-    stale.state_revision = 7;
+    let mut invented_case = stored_case.clone();
+    invented_case.state_revision = 3;
+    let mut invented_claim = claimed.clone();
+    invented_claim.state_revision = 3;
     assert_eq!(
-        schedule_claimed_dispatch(&stale, &case, &policy(), skills_commit),
+        schedule_claimed_dispatch(
+            &invented_claim,
+            &invented_case,
+            &store,
+            &policy(),
+            skills_commit,
+        ),
+        Err(DispatchError::InvalidEvidenceBundle)
+    );
+
+    let mut stale = claimed;
+    stale.state_revision = 1;
+    assert_eq!(
+        schedule_claimed_dispatch(&stale, &stored_case, &store, &policy(), skills_commit),
         Err(DispatchError::StaleEffect)
+    );
+}
+
+#[test]
+fn oversized_immutable_history_fails_before_worker_projection() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = pip_store::Store::open(directory.path().join("ledger.db")).unwrap();
+    let case_key = "repo:984321#1240@1";
+    store
+        .record_policy(&pip_store::PolicyInput {
+            repository_id: 984_321,
+            revision: 1,
+            accepted_at: 1,
+            payload: json!({"fixture": true}),
+        })
+        .unwrap();
+    store
+        .create_case(&pip_store::NewCase {
+            case_key: case_key.into(),
+            repository_id: 984_321,
+            issue_number: 1240,
+            workflow_version: 1,
+            policy_revision: 1,
+            initial_state: "PLANNING".into(),
+            observed_at: 1,
+            event: pip_store::EventInput {
+                event_id: "event-intake".into(),
+                event_type: "ISSUE_AUTHORIZED".into(),
+                payload: json!({"oversized": "x".repeat(600 * 1024)}),
+            },
+            effects: vec![pip_store::EffectInput {
+                effect_id: "effect-planner".into(),
+                effect_type: "DISPATCH_PLANNER".into(),
+                payload: json!({"case_key": case_key}),
+            }],
+        })
+        .unwrap();
+    let claimed = store
+        .claim_effect_matching("controller-1", 2, 30, &["DISPATCH_PLANNER"])
+        .unwrap()
+        .unwrap();
+    let case = store.case(case_key).unwrap().unwrap();
+
+    assert_eq!(
+        schedule_claimed_dispatch(
+            &claimed,
+            &case,
+            &store,
+            &policy(),
+            GitSha::from_str(&"a".repeat(40)).unwrap(),
+        ),
+        Err(DispatchError::InvalidEvidenceBundle)
+    );
+}
+
+#[test]
+fn final_reviewer_receives_the_committed_preflight_and_complete_history() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = pip_store::Store::open(directory.path().join("ledger.db")).unwrap();
+    let case_key = "repo:984321#1240@1";
+    store
+        .record_policy(&pip_store::PolicyInput {
+            repository_id: 984_321,
+            revision: 1,
+            accepted_at: 1,
+            payload: json!({"fixture": true}),
+        })
+        .unwrap();
+    store
+        .create_case(&pip_store::NewCase {
+            case_key: case_key.into(),
+            repository_id: 984_321,
+            issue_number: 1240,
+            workflow_version: 1,
+            policy_revision: 1,
+            initial_state: "PLANNING".into(),
+            observed_at: 1,
+            event: pip_store::EventInput {
+                event_id: "event-intake".into(),
+                event_type: "ISSUE_AUTHORIZED".into(),
+                payload: json!({"issue": {"title": "fix it"}}),
+            },
+            effects: Vec::new(),
+        })
+        .unwrap();
+    store
+        .apply_transition(
+            &pip_store::TransitionInput {
+                case_key: case_key.into(),
+                expected_revision: 1,
+                next_state: "FINAL_REVIEW".into(),
+                remediation_round: 2,
+                plan_version: 1,
+                pr_number: Some(77),
+                head_sha: Some("b".repeat(40)),
+                observed_at: 2,
+                event: pip_store::EventInput {
+                    event_id: "event-final-preflight".into(),
+                    event_type: "FINAL_PREFLIGHT_ACCEPTED".into(),
+                    payload: json!({"verdict": "ACCEPTED", "head_sha": "b".repeat(40)}),
+                },
+                run: None,
+                evidence: vec![pip_store::EvidenceInput {
+                    evidence_id: "evidence-final-preflight".into(),
+                    kind: "GITHUB_FINAL_PREFLIGHT".into(),
+                    source: "github-pr-77".into(),
+                    payload: json!({
+                        "pull_request": {"number": 77, "head_sha": "b".repeat(40)},
+                        "review_threads": [],
+                    }),
+                }],
+                findings: Vec::new(),
+                effects: vec![pip_store::EffectInput {
+                    effect_id: "effect-final-review".into(),
+                    effect_type: "DISPATCH_FINAL_REVIEWER".into(),
+                    payload: json!({"case_key": case_key}),
+                }],
+            },
+            None,
+        )
+        .unwrap();
+    let claimed = store
+        .claim_effect_matching("controller-1", 3, 30, &["DISPATCH_FINAL_REVIEWER"])
+        .unwrap()
+        .unwrap();
+    let case = store.case(case_key).unwrap().unwrap();
+
+    let dispatch = schedule_claimed_dispatch(
+        &claimed,
+        &case,
+        &store,
+        &policy(),
+        GitSha::from_str(&"a".repeat(40)).unwrap(),
+    )
+    .unwrap()
+    .remove(0);
+
+    assert_eq!(dispatch.role, WorkerRole::FinalReviewer);
+    let bundle = &dispatch.worker_body["immutable_evidence_bundle"];
+    assert_eq!(bundle["bound_state_revision"], 2);
+    assert_eq!(bundle["records"]["events"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        bundle["records"]["evidence"][0]["kind"],
+        "GITHUB_FINAL_PREFLIGHT"
+    );
+    assert_eq!(
+        bundle["records"]["evidence"][0]["payload"]["pull_request"]["head_sha"],
+        "b".repeat(40)
     );
 }

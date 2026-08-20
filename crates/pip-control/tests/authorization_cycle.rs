@@ -5,7 +5,10 @@ use pip_control::{
     ActiveAuthorization, IntakeSource, load_repository_policy, reconcile_active_authorization,
     verify_active_authorization,
 };
-use pip_github::{GitHubError, IntakeSnapshot, IssueSnapshot, LabelEvent, RepositorySnapshot};
+use pip_github::{
+    GitHubError, IntakeSnapshot, IssueContentSnapshot, IssueSnapshot, LabelEvent,
+    RepositorySnapshot,
+};
 use pip_store::{EventInput, NewCase, Store};
 use serde_json::{Value, json};
 
@@ -227,6 +230,13 @@ fn authorized_snapshot(issue_number: u64) -> IntakeSnapshot {
             is_pull_request: false,
             labels: BTreeSet::from(["pip-ok".into()]),
         },
+        issue_content: IssueContentSnapshot {
+            author_id: 1001,
+            title: format!("Fixture issue #{issue_number}"),
+            body: "Fixture body".into(),
+            created_at: "2026-08-19T00:00:00Z".into(),
+            updated_at: "2026-08-20T00:00:00Z".into(),
+        },
         label_events: vec![LabelEvent {
             id: 11,
             labeled: true,
@@ -234,5 +244,6 @@ fn authorized_snapshot(issue_number: u64) -> IntakeSnapshot {
             label: "pip-ok".into(),
             created_at: "2026-08-20T12:00:00Z".into(),
         }],
+        comments: Vec::new(),
     }
 }

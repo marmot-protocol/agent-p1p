@@ -2,7 +2,10 @@ use std::cell::Cell;
 use std::collections::BTreeSet;
 
 use pip_control::{IntakeSource, load_repository_policy, reconcile_read_only};
-use pip_github::{GitHubError, IntakeSnapshot, IssueSnapshot, LabelEvent, RepositorySnapshot};
+use pip_github::{
+    GitHubError, IntakeSnapshot, IssueContentSnapshot, IssueSnapshot, LabelEvent,
+    RepositorySnapshot,
+};
 
 struct FixtureSource {
     writes: Cell<u64>,
@@ -31,6 +34,13 @@ impl IntakeSource for FixtureSource {
                 default_branch: "master".into(),
             },
             issue: issue(),
+            issue_content: IssueContentSnapshot {
+                author_id: 1001,
+                title: "Fixture issue".into(),
+                body: "Fixture body".into(),
+                created_at: "2026-08-19T00:00:00Z".into(),
+                updated_at: "2026-08-20T00:00:00Z".into(),
+            },
             label_events: vec![LabelEvent {
                 id: 91,
                 labeled: true,
@@ -38,6 +48,7 @@ impl IntakeSource for FixtureSource {
                 label: "pip-ok".into(),
                 created_at: "2026-08-20T12:00:00Z".into(),
             }],
+            comments: Vec::new(),
         })
     }
 }

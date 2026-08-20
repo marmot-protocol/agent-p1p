@@ -137,6 +137,7 @@ pub fn dispatch_once_with<R: CommandRunner + Clone>(
     let dispatches = schedule_claimed_dispatch(
         &claimed,
         &case,
+        store,
         &policy.workflow_policy()?,
         skills_repository_commit,
     )?;

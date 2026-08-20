@@ -8,6 +8,19 @@ stored projection, not the worker result, supplies the immutable assignment.
 The controller rejects task, role, profile, case, plan, PR, head, model, or
 skills-commit drift before writing a run or advancing a case.
 
+Every controller-owned worker projection also carries
+`immutable_evidence_bundle` schema version 1. It is bound to the task's case
+and state revision and contains the deterministically ordered immutable ledger
+events, runs, controller evidence, and findings available when the dispatch
+effect is claimed. Each record retains its stored payload digest. The top-level
+digest is SHA-256 over the compact, lexicographically key-ordered JSON bundle
+after removing only the top-level `sha256` field. Workers fail closed on a
+missing or mismatched bundle; the result contract does not echo the bundle.
+For final review, the atomically preceding `GITHUB_FINAL_PREFLIGHT` record also
+contains the freshly fetched issue title/body, bounded issue comments and body
+digests, trusted authorization event, PR, complete CI history, published
+reviews, and review threads.
+
 The executable definitions are in `crates/pip-contracts/src/lib.rs`. Valid
 examples for every role are frozen in
 `migration/target-v1/worker-results.json`. This document is the worker-facing

@@ -114,6 +114,15 @@ policy, and time. The core returns transition decisions and required effects.
 Adapters perform effects and return attributable evidence. An outbox records
 the intent before any external side effect so restart recovery is idempotent.
 
+Every worker projection contains an `immutable_evidence_bundle` produced from
+the authoritative ledger at the outbox effect's exact case revision. Version 1
+contains deterministically ordered events, accepted worker runs, controller
+evidence, and findings, including each stored payload digest. The controller
+rejects a stale history and caps the encoded bundle at 512 KiB. Its root digest
+is SHA-256 over compact, lexicographically key-ordered JSON after removing only
+the top-level digest field. This makes the complete accepted ledger history
+self-contained and reconstructable without granting a worker ledger access.
+
 ## 5. Boards, repositories, and cases
 
 Each watched repository has one Hermes board and one repository policy. A board
@@ -330,6 +339,13 @@ The final reviewer receives immutable references to:
 - finding resolutions and confirmations;
 - the current diff, exact-head CI, and mergeability evidence; and
 - authorization and ownership evidence.
+
+Those references are delivered in the task's versioned evidence bundle. The
+accepted `GITHUB_FINAL_PREFLIGHT` record includes a newly fetched original issue
+title/body, all bounded issue comments with content digests, the current trusted
+label event, and the exact PR/CI/review/thread observation. It is committed
+atomically with the final-review dispatch effect, so the task cannot be released
+from an earlier or partially observed join.
 
 It asks whether the final PR solved the correct problem. Typed outcomes include:
 

@@ -1,7 +1,7 @@
 ---
 name: final-reviewer
 description: Use for holistic final adjudication of a Pip v2 case.
-version: 0.2.0
+version: 0.3.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -18,13 +18,14 @@ Holistically adjudicate the complete case using GPT-5.6-Sol at `xhigh` reasoning
 
 ## Workflow
 
-1. Re-read the original issue and authoritative clarifications.
-2. Inspect all plan versions and the active authorized plan.
-3. Inspect the final diff and every build/remediation round.
-4. Inspect both review histories, CodeRabbit findings when present, and resolution evidence.
-5. Verify the join bundle binds mandatory approvals and green CI to the current exact head. Independently query all check-run attempts with `filter=all`; any historical red attempt permanently blocks that PR. Permit a skipped check only when it is the exact conditional `Publish wn-agent release` job.
-6. Decide whether the work solves the right root problem with sufficient evidence.
-7. Return `READY`, `RETURN_TO_BUILD`, `RETURN_TO_REVIEW`, `RETURN_TO_PLANNING`, `WAIT_FOR_ISSUE_CREATOR`, `BLOCKED`, `ABANDON`, or `BLOCKED_UNEXPECTED_MODEL`.
+1. Verify the task's `immutable_evidence_bundle`, including its case/revision binding and root digest. It is the authoritative closed-world history for this adjudication; do not substitute parent summaries or session memory.
+2. Re-read the original issue and authoritative clarifications recorded in the bundle, then independently refresh the live issue authorization.
+3. Inspect every bundled plan version and identify the active authorized plan and its controller publication evidence.
+4. Inspect the final diff and every bundled build/remediation round.
+5. Inspect both complete bundled review histories, findings, confirmations, controller-published review evidence, and CodeRabbit findings when present.
+6. Verify the bundled `GITHUB_FINAL_PREFLIGHT` observation binds ownership, mandatory approvals, resolved threads, clean mergeability, and green CI to the task's current exact head. Independently query the current PR and all check-run attempts with `filter=all`; any historical red attempt permanently blocks that PR. Permit a skipped check only when it is the exact conditional `Publish wn-agent release` job.
+7. Decide whether the work solves the right root problem with sufficient evidence.
+8. Return `READY`, `RETURN_TO_BUILD`, `RETURN_TO_REVIEW`, `RETURN_TO_PLANNING`, `WAIT_FOR_ISSUE_CREATOR`, `BLOCKED`, `ABANDON`, or `BLOCKED_UNEXPECTED_MODEL`.
 
 ## Merge separation
 

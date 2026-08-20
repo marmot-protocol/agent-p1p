@@ -11,8 +11,11 @@ use pip_core::{
     StateRevision, WorkflowVersion,
 };
 use pip_hermes::{GateCreateSpec, TaskCreateSpec};
-use pip_store::{ClaimedEffect, StoredCase};
+use pip_store::{ClaimedEffect, Store, StoredCase};
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
+
+const MAX_EVIDENCE_BUNDLE_BYTES: usize = 512 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExecutionKind {
@@ -87,7 +90,7 @@ impl WorkflowPolicy {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DispatchContext {
     pub case_id: CaseId,
     pub state_revision: StateRevision,
@@ -96,6 +99,7 @@ pub struct DispatchContext {
     pub pr_number: Option<PullRequestNumber>,
     pub head_sha: Option<GitSha>,
     pub skills_repository_commit: GitSha,
+    pub immutable_evidence_bundle: Value,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -148,6 +152,7 @@ pub enum DispatchError {
     MissingExactHead,
     InvalidGateTask,
     InvalidStoredCase,
+    InvalidEvidenceBundle,
     StaleEffect,
     UnsupportedEffect,
 }
@@ -162,6 +167,9 @@ impl fmt::Display for DispatchError {
             Self::MissingExactHead => "review dispatch requires an exact head",
             Self::InvalidGateTask => "invalid activation gate task identity",
             Self::InvalidStoredCase => "ledger case cannot form a dispatch binding",
+            Self::InvalidEvidenceBundle => {
+                "worker dispatch requires a bounded immutable evidence bundle"
+            }
             Self::StaleEffect => "outbox effect does not match the current case revision",
             Self::UnsupportedEffect => "outbox effect is not a worker dispatch",
         })
@@ -171,6 +179,7 @@ impl fmt::Display for DispatchError {
 pub fn schedule_claimed_dispatch(
     claimed: &ClaimedEffect,
     case: &StoredCase,
+    store: &Store,
     policy: &WorkflowPolicy,
     skills_repository_commit: GitSha,
 ) -> Result<Vec<WorkflowDispatch>, DispatchError> {
@@ -216,8 +225,40 @@ pub fn schedule_claimed_dispatch(
             .transpose()
             .map_err(|_| DispatchError::InvalidStoredCase)?,
         skills_repository_commit,
+        immutable_evidence_bundle: immutable_evidence_bundle(store, case)?,
     };
     schedule_effect(&claimed.effect_id, effect, &context, policy)
+}
+
+fn immutable_evidence_bundle(store: &Store, case: &StoredCase) -> Result<Value, DispatchError> {
+    let history = store
+        .immutable_history_for_case(&case.case_key)
+        .map_err(|_| DispatchError::InvalidEvidenceBundle)?;
+    if history.events.last().map(|event| event.state_revision) != Some(case.state_revision) {
+        return Err(DispatchError::InvalidEvidenceBundle);
+    }
+    let records =
+        serde_json::to_value(history).map_err(|_| DispatchError::InvalidEvidenceBundle)?;
+    let unsigned = json!({
+        "schema_version": 1,
+        "case_key": case.case_key,
+        "bound_state_revision": case.state_revision,
+        "records": records,
+    });
+    let encoded =
+        serde_json::to_vec(&unsigned).map_err(|_| DispatchError::InvalidEvidenceBundle)?;
+    if encoded.len() > MAX_EVIDENCE_BUNDLE_BYTES {
+        return Err(DispatchError::InvalidEvidenceBundle);
+    }
+    let mut bundle = unsigned
+        .as_object()
+        .cloned()
+        .ok_or(DispatchError::InvalidEvidenceBundle)?;
+    bundle.insert(
+        "sha256".into(),
+        Value::String(hex_digest(&Sha256::digest(encoded))),
+    );
+    Ok(Value::Object(bundle))
 }
 
 impl std::error::Error for DispatchError {}
@@ -291,6 +332,9 @@ fn dispatch(
     policy: &WorkflowPolicy,
 ) -> Result<WorkflowDispatch, DispatchError> {
     let binding = policy.role(role)?;
+    if !context.immutable_evidence_bundle.is_object() {
+        return Err(DispatchError::InvalidEvidenceBundle);
+    }
     let role_name = role_name(role);
     let review_round = context.remediation_round.saturating_add(1);
     let round = match role {
@@ -364,6 +408,10 @@ fn dispatch(
     body.insert(
         "skills_repository_commit".into(),
         json!(context.skills_repository_commit.to_string()),
+    );
+    body.insert(
+        "immutable_evidence_bundle".into(),
+        context.immutable_evidence_bundle.clone(),
     );
 
     Ok(WorkflowDispatch {
@@ -446,4 +494,13 @@ fn valid_text(value: &str, max_len: usize) -> bool {
     !value.trim().is_empty()
         && value.len() <= max_len
         && value.chars().all(|character| !character.is_control())
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(output, "{byte:02x}");
+    }
+    output
 }
