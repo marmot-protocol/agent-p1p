@@ -331,6 +331,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pip-controller"
+version = "0.1.0"
+dependencies = [
+ "pip-contracts",
+ "pip-core",
+ "pip-hermes",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "pip-core"
 version = "0.1.0"
 dependencies = [
