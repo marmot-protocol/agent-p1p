@@ -319,8 +319,16 @@ fn dispatch(
         ("role".into(), json!(role_name)),
         ("remediation_round".into(), json!(context.remediation_round)),
     ]);
-    if let Some(plan_version) = context.plan_version {
-        body.insert("plan_version".into(), json!(plan_version.get()));
+    let result_plan_version = if role == WorkerRole::Planner {
+        context.plan_version.map_or(1, |version| version.get() + 1)
+    } else {
+        context
+            .plan_version
+            .map(PlanVersion::get)
+            .unwrap_or_default()
+    };
+    if result_plan_version > 0 {
+        body.insert("plan_version".into(), json!(result_plan_version));
     }
     if let Some(pr_number) = context.pr_number {
         body.insert("pr_number".into(), json!(pr_number.get()));
@@ -346,6 +354,10 @@ fn dispatch(
     );
     body.insert("provider".into(), json!(binding.provider));
     body.insert("model".into(), json!(binding.model));
+    body.insert(
+        "requested_model".into(),
+        json!(format!("{}/{}", binding.provider, binding.model)),
+    );
 
     Ok(WorkflowDispatch {
         role,

@@ -6,7 +6,7 @@ use std::num::{NonZeroU32, NonZeroU64};
 
 use pip_contracts::WorkerRole;
 use pip_controller::{ExecutionKind, RolePolicy, WorkflowPolicy};
-use pip_core::{ActorId, IntakePolicy, PolicyRevision};
+use pip_core::{ActorId, CasePolicy, IntakePolicy, MergeMode, PolicyRevision};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -139,6 +139,22 @@ impl RepositoryPolicy {
             .collect();
         WorkflowPolicy::new(&self.board, &self.workspace, roles)
             .map_err(|error| PolicyError::Dispatch(error.to_string()))
+    }
+
+    #[must_use]
+    pub fn case_policy(&self) -> CasePolicy {
+        CasePolicy {
+            revision: PolicyRevision::new(
+                NonZeroU64::new(self.revision).expect("validated policy revision"),
+            ),
+            merge_mode: if self.merge.is_shadow() {
+                MergeMode::Shadow
+            } else {
+                MergeMode::Guarded
+            },
+            max_remediation_rounds: NonZeroU32::new(self.max_remediation_rounds)
+                .expect("validated remediation bound"),
+        }
     }
 }
 

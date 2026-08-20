@@ -868,6 +868,40 @@ impl Store {
             .transpose()
     }
 
+    pub fn unconsumed_task_projections(&self) -> Result<Vec<TaskProjectionInput>> {
+        let mut statement = self.connection.prepare(
+            "SELECT p.projection_id, p.effect_id, p.board, p.task_id,
+                    p.desired_json, p.observed_json
+             FROM task_projections p
+             LEFT JOIN runs r ON r.task_id = p.task_id
+             WHERE p.task_id IS NOT NULL AND r.task_id IS NULL
+             ORDER BY p.reconciled_at, p.projection_id",
+        )?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            })?
+            .map(|row| {
+                let (projection_id, effect_id, board, task_id, desired, observed) = row?;
+                Ok(TaskProjectionInput {
+                    projection_id,
+                    effect_id,
+                    board,
+                    task_id,
+                    desired: serde_json::from_str(&desired)?,
+                    observed: serde_json::from_str(&observed)?,
+                })
+            })
+            .collect()
+    }
+
     pub fn claim_effect(
         &mut self,
         owner: &str,

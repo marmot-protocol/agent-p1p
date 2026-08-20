@@ -19,6 +19,7 @@ use std::thread;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use wait_timeout::ChildExt;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -121,6 +122,9 @@ pub enum HermesError {
     CommandFailed(i32),
     InvalidUtf8,
     MalformedJson(String),
+    IncompleteTask,
+    IncompleteRun,
+    InvalidRunMetadata,
     Process(String),
 }
 
@@ -139,6 +143,11 @@ impl fmt::Display for HermesError {
             Self::CommandFailed(status) => write!(formatter, "Hermes command exited with {status}"),
             Self::InvalidUtf8 => formatter.write_str("Hermes output is not UTF-8"),
             Self::MalformedJson(error) => write!(formatter, "malformed Hermes JSON: {error}"),
+            Self::IncompleteTask => formatter.write_str("Hermes task is not durably complete"),
+            Self::IncompleteRun => formatter.write_str("Hermes task has no successful latest run"),
+            Self::InvalidRunMetadata => {
+                formatter.write_str("Hermes run metadata is not a JSON object")
+            }
             Self::Process(error) => write!(formatter, "Hermes process failed: {error}"),
         }
     }
@@ -154,6 +163,27 @@ pub struct TaskSnapshot {
     pub assignee: Option<String>,
     pub created_by: Option<String>,
     pub body: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TaskRunSnapshot {
+    pub outcome: Option<String>,
+    pub profile: Option<String>,
+    pub metadata: Option<Value>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TaskDetail {
+    pub task: TaskSnapshot,
+    #[serde(default)]
+    pub runs: Vec<TaskRunSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CompletedTaskResult {
+    pub task: TaskSnapshot,
+    pub profile: String,
+    pub metadata: Value,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -250,6 +280,53 @@ impl<R: CommandRunner> HermesReader<R> {
             task_id.into(),
             "--json".into(),
         ])
+    }
+
+    pub fn show_completed_result(
+        &self,
+        board: &str,
+        task_id: &str,
+    ) -> Result<CompletedTaskResult, HermesError> {
+        if !valid_id(board) {
+            return Err(HermesError::InvalidBoard);
+        }
+        if !valid_id(task_id) {
+            return Err(HermesError::InvalidTask);
+        }
+        let detail: TaskDetail = self.execute_json(vec![
+            "kanban".into(),
+            "--board".into(),
+            board.into(),
+            "show".into(),
+            task_id.into(),
+            "--json".into(),
+        ])?;
+        if detail.task.id != task_id || detail.task.status != "done" {
+            return Err(HermesError::IncompleteTask);
+        }
+        let run = detail.runs.last().ok_or(HermesError::IncompleteRun)?;
+        if run.outcome.as_deref() != Some("completed") {
+            return Err(HermesError::IncompleteRun);
+        }
+        let profile = run
+            .profile
+            .as_deref()
+            .filter(|profile| valid_id(profile))
+            .ok_or(HermesError::IncompleteRun)?;
+        let metadata = match run.metadata.as_ref() {
+            Some(Value::Object(_)) => run.metadata.clone().expect("matched metadata"),
+            Some(Value::String(encoded)) => serde_json::from_str(encoded)
+                .map_err(|error| HermesError::MalformedJson(error.to_string()))?,
+            _ => return Err(HermesError::InvalidRunMetadata),
+        };
+        if !metadata.is_object() {
+            return Err(HermesError::InvalidRunMetadata);
+        }
+        Ok(CompletedTaskResult {
+            task: detail.task,
+            profile: profile.into(),
+            metadata,
+        })
     }
 
     fn execute_json<T: for<'de> Deserialize<'de>>(

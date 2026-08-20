@@ -119,6 +119,8 @@ fn planner_and_builder_dispatches_are_blocked_behind_controller_gates() {
     assert_eq!(worker.assignee, "planner");
     assert_eq!(worker.model, "gpt-5.6-sol");
     assert_eq!(worker.body["state_revision"], 8);
+    assert_eq!(worker.body["plan_version"], 1);
+    assert_eq!(worker.body["requested_model"], "openai-codex/gpt-5.6-sol");
 
     let builder = schedule_effect(
         "effect-builder-r2",
@@ -129,6 +131,10 @@ fn planner_and_builder_dispatches_are_blocked_behind_controller_gates() {
     .unwrap();
     assert_eq!(builder[0].role, WorkerRole::Builder);
     assert_eq!(builder[0].worker_body["remediation_round"], 2);
+    assert_eq!(
+        builder[0].worker_body["requested_model"],
+        "cursor/composer-2.5"
+    );
     assert!(builder[0].worker_projection_key.contains("round:2"));
 }
 

@@ -69,6 +69,48 @@ fn capability_board_and_task_reads_use_only_read_commands() {
 }
 
 #[test]
+fn completed_result_comes_from_the_latest_durable_run_envelope() {
+    let runner = FakeRunner::default();
+    runner.output(
+        r#"{
+          "task": {"id":"task-1","title":"Plan","status":"done","assignee":"planner","created_by":"pip-controller","body":"{}"},
+          "runs": [
+            {"outcome":"crashed","profile":"planner","metadata":{"ignored":true}},
+            {"outcome":"completed","profile":"planner","metadata":"{\"contract_version\":1,\"task_id\":\"task-1\"}"}
+          ],
+          "events": [{"kind":"created"}]
+        }"#,
+    );
+
+    let completed = reader(runner.clone())
+        .show_completed_result("pip-mdk", "task-1")
+        .unwrap();
+
+    assert_eq!(completed.task.id, "task-1");
+    assert_eq!(completed.profile, "planner");
+    assert_eq!(completed.metadata["contract_version"], 1);
+    assert_eq!(completed.metadata["task_id"], "task-1");
+    assert_eq!(runner.commands.borrow().len(), 1);
+}
+
+#[test]
+fn incomplete_or_unsuccessful_run_cannot_be_consumed_as_a_result() {
+    for payload in [
+        r#"{"task":{"id":"task-1","title":"Plan","status":"in_progress","assignee":"planner","created_by":"pip-controller","body":"{}"},"runs":[]}"#,
+        r#"{"task":{"id":"task-1","title":"Plan","status":"done","assignee":"planner","created_by":"pip-controller","body":"{}"},"runs":[]}"#,
+        r#"{"task":{"id":"task-1","title":"Plan","status":"done","assignee":"planner","created_by":"pip-controller","body":"{}"},"runs":[{"outcome":"crashed","profile":"planner","metadata":{}}]}"#,
+    ] {
+        let runner = FakeRunner::default();
+        runner.output(payload);
+        assert!(
+            reader(runner)
+                .show_completed_result("pip-mdk", "task-1")
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn malformed_oversized_failed_and_timed_out_commands_fail_closed() {
     let runner = FakeRunner::default();
     runner.output("not-json");
