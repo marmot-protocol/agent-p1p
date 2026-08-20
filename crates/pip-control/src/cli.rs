@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use pip_executor::{BoundedProcessRunner, sanitized_environment};
 use pip_github::{GitHubReader, GitHubWriter, UreqTransport};
 use pip_store::Store;
 use serde_json::{Value, json};
@@ -97,7 +98,14 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
             "--owner",
             "--skills-commit-file",
         ],
-        &["--now", "--lease-seconds", "--global-paused"],
+        &[
+            "--now",
+            "--lease-seconds",
+            "--global-paused",
+            "--cursor",
+            "--git",
+            "--skills-root",
+        ],
     )?;
     let policy_bytes = read_bounded(Path::new(required(&options, "--policy")?), 1024 * 1024)?;
     let policy = crate::load_repository_policy(&policy_bytes)
@@ -212,10 +220,6 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
     .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     let mut store = Store::open(required(&options, "--database")?)
         .map_err(|error| CliError::Ledger(error.to_string()))?;
-    let result = crate::ingest_completed_once(&mut store, &policy, required(&options, "--hermes")?)
-        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
-    let ci = crate::reconcile_ci_once(&reader, &policy, &mut store, now)
-        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     let intake = if policy.intake.enabled {
         serde_json::to_value(
             crate::reconcile_intake(&reader, &policy, &mut store, now, global_paused)
@@ -229,6 +233,47 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     let authorization = crate::reconcile_active_authorization(&reader, &policy, &mut store, now)
         .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let (result, direct_worker, ci) = if authorization.is_authorized() {
+        let result =
+            crate::ingest_completed_once(&mut store, &policy, required(&options, "--hermes")?)
+                .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+        let runtime = crate::CursorDirectRuntime::new(
+            BoundedProcessRunner,
+            required(&options, "--cursor")?,
+            required(&options, "--git")?,
+            &policy.workspace,
+            &policy.artifacts,
+            required(&options, "--skills-root")?,
+            sanitized_environment(),
+            4 * 1024 * 1024,
+        )
+        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+        let direct = crate::run_direct_worker_once_with(
+            &mut store,
+            &policy,
+            &runtime,
+            crate::DirectWorkerCycleContext {
+                owner: required(&options, "--owner")?,
+                now,
+                lease_seconds,
+                authorization_valid: true,
+            },
+        )
+        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+        let ci = crate::reconcile_ci_once(&reader, &policy, &mut store, now)
+            .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+        (
+            serde_json::to_value(result)
+                .map_err(|error| CliError::Reconciliation(error.to_string()))?,
+            serde_json::to_value(direct)
+                .map_err(|error| CliError::Reconciliation(error.to_string()))?,
+            serde_json::to_value(ci)
+                .map_err(|error| CliError::Reconciliation(error.to_string()))?,
+        )
+    } else {
+        let blocked = json!({"result": "authorization_blocked"});
+        (blocked.clone(), blocked.clone(), blocked)
+    };
     let draft_pull_request = crate::publish_draft_pull_request_once(
         &writer,
         &policy,
@@ -311,6 +356,7 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         "repository": policy.repository.full_name(),
         "policy_revision": policy.revision,
         "worker_result": result,
+        "direct_worker": direct_worker,
         "ci": ci,
         "intake": intake,
         "takeover": takeover,

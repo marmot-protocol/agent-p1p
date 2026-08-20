@@ -1,14 +1,25 @@
 //! Durable execution cycle for roles bound to a direct provider runtime.
 
+use std::collections::BTreeMap;
 use std::fmt;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 use pip_contracts::{CaseIdentity, WorkerBinding, WorkerResult, WorkerRole};
 use pip_controller::{
     DirectTaskSpec, ExecutionKind, IngestError, IngestResult, ingest_worker_result,
 };
+use pip_executor::{
+    CursorExecutor, CursorHealthProbe, CursorTask, ProcessRunner, ProviderProbeError,
+};
 use pip_store::{ClaimedEffect, Store, StoreError, StoredCase};
 use serde::Serialize;
 use serde_json::Map;
+use sha2::{Digest, Sha256};
 
 use crate::{PolicyError, RepositoryPolicy};
 
@@ -55,6 +66,113 @@ impl std::error::Error for DirectWorkerRuntimeError {}
 
 pub trait DirectWorkerRuntime {
     fn execute(&self, task: &DirectTaskSpec) -> Result<WorkerResult, DirectWorkerRuntimeError>;
+}
+
+pub struct CursorDirectRuntime<R> {
+    runner: R,
+    cursor_program: String,
+    git_program: String,
+    worktree_root: PathBuf,
+    artifact_root: PathBuf,
+    skills_root: PathBuf,
+    environment: BTreeMap<String, String>,
+    max_output_bytes: usize,
+}
+
+impl<R: ProcessRunner + Clone> CursorDirectRuntime<R> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        runner: R,
+        cursor_program: impl Into<String>,
+        git_program: impl Into<String>,
+        worktree_root: impl AsRef<Path>,
+        artifact_root: impl AsRef<Path>,
+        skills_root: impl AsRef<Path>,
+        environment: BTreeMap<String, String>,
+        max_output_bytes: usize,
+    ) -> Result<Self, DirectWorkerRuntimeError> {
+        let cursor_program = cursor_program.into();
+        let git_program = git_program.into();
+        if cursor_program.trim().is_empty()
+            || git_program.trim().is_empty()
+            || max_output_bytes == 0
+        {
+            return Err(runtime_error("invalid direct runtime configuration"));
+        }
+        Ok(Self {
+            runner,
+            cursor_program,
+            git_program,
+            worktree_root: canonical_directory(worktree_root.as_ref())?,
+            artifact_root: canonical_directory(artifact_root.as_ref())?,
+            skills_root: canonical_directory(skills_root.as_ref())?,
+            environment,
+            max_output_bytes,
+        })
+    }
+
+    fn execute_task(
+        &self,
+        task: &DirectTaskSpec,
+    ) -> Result<WorkerResult, DirectWorkerRuntimeError> {
+        let worktree = canonical_directory(Path::new(&task.workspace))?;
+        if worktree == self.worktree_root || !worktree.starts_with(&self.worktree_root) {
+            return Err(runtime_error(
+                "task worktree is outside its configured root",
+            ));
+        }
+        let binding = task_binding(task)?;
+        let workflow_skill = read_skill(
+            &self.skills_root,
+            Path::new("shared/workflow-contract/SKILL.md"),
+        )?;
+        let role_skill = read_skill(
+            &self.skills_root,
+            Path::new(role_skill_name(task.role))
+                .join("SKILL.md")
+                .as_path(),
+        )?;
+        let timeout = parse_runtime(&task.max_runtime)?;
+        let probe = CursorHealthProbe::new(
+            self.runner.clone(),
+            &self.cursor_program,
+            worktree.clone(),
+            self.environment.clone(),
+            Duration::from_secs(30).min(timeout),
+            self.max_output_bytes.min(1_048_576),
+        )
+        .map_err(provider_error)?;
+        let health = probe.probe(&task.model).map_err(provider_error)?;
+        let artifact_dir = next_artifact_dir(&self.artifact_root, &task.task_id)?;
+        let executor = CursorExecutor::new(
+            self.runner.clone(),
+            &self.cursor_program,
+            &self.git_program,
+            self.environment.clone(),
+            timeout,
+            self.max_output_bytes,
+        )
+        .map_err(|error| runtime_error(error.to_string()))?;
+        executor
+            .execute(
+                &health,
+                &CursorTask {
+                    binding,
+                    immutable_input: task.body.clone(),
+                    workflow_skill,
+                    role_skill,
+                },
+                &worktree,
+                &artifact_dir,
+            )
+            .map_err(|error| runtime_error(error.to_string()))
+    }
+}
+
+impl<R: ProcessRunner + Clone> DirectWorkerRuntime for CursorDirectRuntime<R> {
+    fn execute(&self, task: &DirectTaskSpec) -> Result<WorkerResult, DirectWorkerRuntimeError> {
+        self.execute_task(task)
+    }
 }
 
 #[derive(Debug)]
@@ -345,4 +463,159 @@ fn role_name(role: WorkerRole) -> &'static str {
         WorkerRole::ReviewerSecperf => "reviewer-secperf",
         WorkerRole::FinalReviewer => "final-reviewer",
     }
+}
+
+fn role_skill_name(role: WorkerRole) -> &'static str {
+    match role {
+        WorkerRole::Builder => "builder-grok",
+        WorkerRole::ReviewerSecperf => "reviewer-secperf",
+        WorkerRole::Planner => "planner",
+        WorkerRole::ReviewerGeneral => "reviewer-general",
+        WorkerRole::FinalReviewer => "final-reviewer",
+    }
+}
+
+fn task_binding(task: &DirectTaskSpec) -> Result<WorkerBinding, DirectWorkerRuntimeError> {
+    let body = task
+        .body
+        .as_object()
+        .ok_or_else(|| runtime_error("direct task body is not an object"))?;
+    let repository_id = runtime_number(body, "repository_id")?;
+    let issue_number = runtime_number(body, "issue_number")?;
+    let workflow_version = u32::try_from(runtime_number(body, "workflow_version")?)
+        .map_err(|_| runtime_error("invalid workflow version"))?;
+    let plan_version = u32::try_from(runtime_number(body, "plan_version")?)
+        .map_err(|_| runtime_error("invalid plan version"))?;
+    Ok(WorkerBinding {
+        case: CaseIdentity {
+            repository_id,
+            issue_number,
+            workflow_version,
+        },
+        task_id: task.task_id.clone(),
+        role: task.role,
+        requested_model: runtime_text(body, "requested_model")?.into(),
+        skills_repository_commit: runtime_text(body, "skills_repository_commit")?.into(),
+        plan_version,
+        pr_number: runtime_optional_number(body, "pr_number")?,
+        expected_head_sha: runtime_optional_text(body, "expected_head_sha")?.map(str::to_owned),
+    })
+}
+
+fn runtime_number(
+    body: &Map<String, serde_json::Value>,
+    field: &str,
+) -> Result<u64, DirectWorkerRuntimeError> {
+    body.get(field)
+        .and_then(serde_json::Value::as_u64)
+        .filter(|value| *value > 0)
+        .ok_or_else(|| runtime_error(format!("invalid direct task field {field}")))
+}
+
+fn runtime_optional_number(
+    body: &Map<String, serde_json::Value>,
+    field: &str,
+) -> Result<Option<u64>, DirectWorkerRuntimeError> {
+    body.get(field)
+        .map(|_| runtime_number(body, field))
+        .transpose()
+}
+
+fn runtime_text<'a>(
+    body: &'a Map<String, serde_json::Value>,
+    field: &str,
+) -> Result<&'a str, DirectWorkerRuntimeError> {
+    body.get(field)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| runtime_error(format!("invalid direct task field {field}")))
+}
+
+fn runtime_optional_text<'a>(
+    body: &'a Map<String, serde_json::Value>,
+    field: &str,
+) -> Result<Option<&'a str>, DirectWorkerRuntimeError> {
+    body.get(field)
+        .map(|_| runtime_text(body, field))
+        .transpose()
+}
+
+fn parse_runtime(value: &str) -> Result<Duration, DirectWorkerRuntimeError> {
+    let minutes = value
+        .strip_prefix("PT")
+        .and_then(|value| value.strip_suffix('M'))
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|minutes| (1..=240).contains(minutes))
+        .ok_or_else(|| runtime_error("invalid bounded direct runtime"))?;
+    Ok(Duration::from_secs(minutes * 60))
+}
+
+fn canonical_directory(path: &Path) -> Result<PathBuf, DirectWorkerRuntimeError> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| runtime_error(format!("runtime directory unavailable: {error}")))?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(runtime_error("runtime path is not a real directory"));
+    }
+    path.canonicalize()
+        .map_err(|error| runtime_error(format!("runtime directory unavailable: {error}")))
+}
+
+fn read_skill(root: &Path, relative: &Path) -> Result<String, DirectWorkerRuntimeError> {
+    let path = root.join(relative);
+    let metadata = fs::symlink_metadata(&path)
+        .map_err(|error| runtime_error(format!("canonical skill unavailable: {error}")))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 256 * 1024 {
+        return Err(runtime_error(
+            "canonical skill is not a bounded regular file",
+        ));
+    }
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| runtime_error(format!("canonical skill unavailable: {error}")))?;
+    if !canonical.starts_with(root) {
+        return Err(runtime_error("canonical skill escapes the skills root"));
+    }
+    let value = fs::read_to_string(canonical)
+        .map_err(|error| runtime_error(format!("canonical skill unavailable: {error}")))?;
+    if value.trim().is_empty() {
+        return Err(runtime_error("canonical skill is empty"));
+    }
+    Ok(value)
+}
+
+fn next_artifact_dir(root: &Path, task_id: &str) -> Result<PathBuf, DirectWorkerRuntimeError> {
+    let task_digest = hex_digest(&Sha256::digest(task_id.as_bytes()));
+    let task_root = root.join(task_digest);
+    if task_root.exists() {
+        let metadata = fs::symlink_metadata(&task_root)
+            .map_err(|error| runtime_error(format!("artifact root unavailable: {error}")))?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(runtime_error("artifact task path is not a real directory"));
+        }
+    } else {
+        fs::create_dir(&task_root)
+            .map_err(|error| runtime_error(format!("artifact root unavailable: {error}")))?;
+        #[cfg(unix)]
+        fs::set_permissions(&task_root, fs::Permissions::from_mode(0o700))
+            .map_err(|error| runtime_error(format!("artifact root unavailable: {error}")))?;
+    }
+    for attempt in 1..=10_000_u32 {
+        let path = task_root.join(format!("attempt-{attempt:05}"));
+        if !path.exists() {
+            return Ok(path);
+        }
+    }
+    Err(runtime_error("direct worker attempt limit exhausted"))
+}
+
+fn provider_error(error: ProviderProbeError) -> DirectWorkerRuntimeError {
+    runtime_error(error.to_string())
+}
+
+fn runtime_error(error: impl Into<String>) -> DirectWorkerRuntimeError {
+    DirectWorkerRuntimeError::Unavailable(error.into())
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
