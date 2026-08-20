@@ -14,7 +14,8 @@ mod results;
 mod shadow;
 
 pub use authorization::{
-    ActiveAuthorization, AuthorizationBlock, AuthorizationError, verify_active_authorization,
+    ActiveAuthorization, AuthorizationBlock, AuthorizationError, reconcile_active_authorization,
+    verify_active_authorization,
 };
 pub use ci::{CiCycle, CiCycleError, PullRequestSource, reconcile_ci_once};
 pub use cli::{CliError, run_cli};

@@ -2,7 +2,8 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use pip_control::{
-    ActiveAuthorization, IntakeSource, load_repository_policy, verify_active_authorization,
+    ActiveAuthorization, IntakeSource, load_repository_policy, reconcile_active_authorization,
+    verify_active_authorization,
 };
 use pip_github::{GitHubError, IntakeSnapshot, IssueSnapshot, LabelEvent, RepositorySnapshot};
 use pip_store::{EventInput, NewCase, Store};
@@ -108,6 +109,52 @@ fn repository_policy_issue_and_actor_drift_fail_closed_for_every_active_case() {
     );
 }
 
+#[test]
+fn removed_authorization_is_committed_and_supersedes_pending_dispatch_atomically() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    seed_case_with_dispatch(&mut store, 1240);
+    let policy = active_policy();
+    let source = FakeSource::default();
+    let mut removed = authorized_snapshot(1240);
+    removed.issue.labels.clear();
+    removed.label_events.push(LabelEvent {
+        id: 12,
+        labeled: false,
+        actor_id: 202880,
+        label: "pip-ok".into(),
+        created_at: "2026-08-20T12:01:00Z".into(),
+    });
+    source.snapshots.borrow_mut().insert(1240, removed);
+
+    let ActiveAuthorization::Blocked { cases } =
+        reconcile_active_authorization(&source, &policy, &mut store, 100).unwrap()
+    else {
+        panic!("removed authorization must block")
+    };
+    assert!(cases[0].revoked);
+    assert_eq!(
+        store.case(&cases[0].case_key).unwrap().unwrap().state,
+        "ABANDONED"
+    );
+    let status = store.status(101).unwrap();
+    assert_eq!(status.outbox_pending, 1);
+    assert_eq!(status.outbox_superseded, 1);
+    assert_eq!(
+        store
+            .claim_effect("controller", 101, 30)
+            .unwrap()
+            .unwrap()
+            .effect_type,
+        "RECORD_ABANDONMENT"
+    );
+
+    assert_eq!(
+        reconcile_active_authorization(&source, &policy, &mut store, 102).unwrap(),
+        ActiveAuthorization::Authorized { case_count: 0 }
+    );
+}
+
 fn active_policy() -> pip_control::RepositoryPolicy {
     let mut value: Value = serde_json::from_slice(include_bytes!(
         "../../../config/target/repositories/mdk.json"
@@ -137,6 +184,30 @@ fn seed_case(store: &mut Store, issue_number: u64, policy_revision: u64) {
             effects: Vec::new(),
         })
         .unwrap();
+}
+
+fn seed_case_with_dispatch(store: &mut Store, issue_number: u64) {
+    let mut case = NewCase {
+        case_key: format!("repo:1055628515#{issue_number}@2"),
+        repository_id: 1_055_628_515,
+        issue_number,
+        workflow_version: 2,
+        policy_revision: 1,
+        initial_state: "PLANNING".into(),
+        observed_at: 1,
+        event: EventInput {
+            event_id: format!("event-intake-{issue_number}"),
+            event_type: "ISSUE_AUTHORIZED".into(),
+            payload: json!({"issue_number": issue_number}),
+        },
+        effects: Vec::new(),
+    };
+    case.effects.push(pip_store::EffectInput {
+        effect_id: format!("effect-intake-{issue_number}-planner"),
+        effect_type: "DISPATCH_PLANNER".into(),
+        payload: json!({"case_key": case.case_key}),
+    });
+    store.create_case(&case).unwrap();
 }
 
 fn authorized_snapshot(issue_number: u64) -> IntakeSnapshot {

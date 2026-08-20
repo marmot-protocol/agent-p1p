@@ -174,7 +174,7 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
     } else {
         json!({"result": "disabled"})
     };
-    let authorization = crate::verify_active_authorization(&reader, &policy, &store)
+    let authorization = crate::reconcile_active_authorization(&reader, &policy, &mut store, now)
         .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     let dispatch = crate::dispatch_once(
         &mut store,

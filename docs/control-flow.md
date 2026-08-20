@@ -157,9 +157,11 @@ proves whether GitHub performed it.
   evidence for bounded collection.
 - Removed issue authorization prevents every downstream activation and merge.
 - The controller re-fetches exact issue/label history immediately before an
-  outbox dispatch is claimed. A missing label, untrusted latest label actor,
-  closed issue, policy-revision drift, or repository-identity drift leaves the
-  effect pending and performs no Hermes write.
+  outbox dispatch is claimed. A policy or repository identity discrepancy
+  leaves the effect pending and performs no Hermes write. Authoritative label
+  removal, issue closure, exclusion, or untrusted relabeling commits an
+  immutable abandonment event and supersedes older pending effects in the same
+  SQLite transaction.
 - Human commits to or ownership changes on a Pip PR trigger takeover policy.
 - A running worker may be terminated only through an identity-checked process
   lease; PID alone is insufficient.

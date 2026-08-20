@@ -13,7 +13,7 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
 
 const MIGRATION_1: &str = r#"
 CREATE TABLE schema_migrations (
@@ -184,6 +184,13 @@ DROP TABLE task_projections_v1;
 CREATE INDEX task_projections_effect ON task_projections(effect_id, projection_id);
 "#;
 
+const MIGRATION_3: &str = r#"
+ALTER TABLE outbox ADD COLUMN superseded_at INTEGER;
+ALTER TABLE outbox ADD COLUMN superseded_by_event_id TEXT;
+CREATE INDEX outbox_dispatchable
+    ON outbox(delivered_at, superseded_at, lease_until, created_at);
+"#;
+
 #[derive(Clone, Debug, Serialize)]
 pub struct EventInput {
     pub event_id: String,
@@ -323,6 +330,7 @@ pub struct LedgerStatus {
     pub outbox_pending: u64,
     pub outbox_leased: u64,
     pub outbox_delivered: u64,
+    pub outbox_superseded: u64,
     pub task_projections: u64,
 }
 
@@ -652,6 +660,19 @@ impl Store {
             });
         }
         inject(fault, FaultPoint::AfterProjection)?;
+        transaction.execute(
+            "UPDATE outbox
+             SET superseded_at = ?1, superseded_by_event_id = ?2,
+                 lease_owner = NULL, lease_until = NULL
+             WHERE case_key = ?3 AND state_revision < ?4
+               AND delivered_at IS NULL AND superseded_at IS NULL",
+            params![
+                sql_u64(input.observed_at)?,
+                input.event.event_id,
+                input.case_key,
+                sql_u64(next_revision)?,
+            ],
+        )?;
         insert_effects(
             &transaction,
             &input.case_key,
@@ -809,14 +830,16 @@ impl Store {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let now = sql_u64(now)?;
-        let (pending, leased, delivered): (i64, i64, i64) = self.connection.query_row(
+        let (pending, leased, delivered, superseded): (i64, i64, i64, i64) =
+            self.connection.query_row(
             "SELECT
-                COALESCE(SUM(CASE WHEN delivered_at IS NULL THEN 1 ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN delivered_at IS NULL AND lease_until >= ?1 THEN 1 ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN delivered_at IS NOT NULL THEN 1 ELSE 0 END), 0)
+                COALESCE(SUM(CASE WHEN delivered_at IS NULL AND superseded_at IS NULL THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN delivered_at IS NULL AND superseded_at IS NULL AND lease_until >= ?1 THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN delivered_at IS NOT NULL THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN superseded_at IS NOT NULL THEN 1 ELSE 0 END), 0)
              FROM outbox",
             [now],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
         Ok(LedgerStatus {
             schema_version: self.schema_version()?,
@@ -829,6 +852,7 @@ impl Store {
             outbox_pending: unsigned(pending),
             outbox_leased: unsigned(leased),
             outbox_delivered: unsigned(delivered),
+            outbox_superseded: unsigned(superseded),
             task_projections: self.task_projection_count()?,
         })
     }
@@ -956,7 +980,8 @@ impl Store {
             let mut statement = transaction.prepare(
                 "SELECT effect_id, case_key, state_revision, effect_type, payload_json
                  FROM outbox
-                 WHERE delivered_at IS NULL AND (lease_until IS NULL OR lease_until < ?1)
+                 WHERE delivered_at IS NULL AND superseded_at IS NULL
+                   AND (lease_until IS NULL OR lease_until < ?1)
                  ORDER BY created_at, effect_id",
             )?;
             let mut rows = statement.query([sql_u64(now)?])?;
@@ -983,7 +1008,8 @@ impl Store {
         };
         let updated = transaction.execute(
             "UPDATE outbox SET lease_owner = ?1, lease_until = ?2
-             WHERE effect_id = ?3 AND delivered_at IS NULL AND (lease_until IS NULL OR lease_until < ?4)",
+             WHERE effect_id = ?3 AND delivered_at IS NULL AND superseded_at IS NULL
+               AND (lease_until IS NULL OR lease_until < ?4)",
             params![owner, sql_u64(lease_until)?, effect_id, sql_u64(now)?],
         )?;
         if updated != 1 {
@@ -1006,7 +1032,8 @@ impl Store {
         self.ensure_writable()?;
         let updated = self.connection.execute(
             "UPDATE outbox SET delivered_at = ?1, lease_owner = NULL, lease_until = NULL
-             WHERE effect_id = ?2 AND lease_owner = ?3 AND lease_until >= ?1 AND delivered_at IS NULL",
+             WHERE effect_id = ?2 AND lease_owner = ?3 AND lease_until >= ?1
+               AND delivered_at IS NULL AND superseded_at IS NULL",
             params![sql_u64(now)?, effect_id, owner],
         )?;
         if updated != 1 {
@@ -1070,11 +1097,11 @@ impl Store {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (case_key, delivered): (String, Option<i64>) = transaction
+        let (case_key, delivered, superseded): (String, Option<i64>, Option<i64>) = transaction
             .query_row(
-                "SELECT case_key, delivered_at FROM outbox WHERE effect_id = ?1",
+                "SELECT case_key, delivered_at, superseded_at FROM outbox WHERE effect_id = ?1",
                 [effect_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?
             .ok_or_else(|| StoreError::LeaseLost(effect_id.to_owned()))?;
@@ -1123,10 +1150,13 @@ impl Store {
             transaction.commit()?;
             return Ok(ApplyResult::Replayed);
         }
+        if superseded.is_some() {
+            return Err(StoreError::LeaseLost(effect_id.to_owned()));
+        }
         let lease_valid: bool = transaction.query_row(
             "SELECT EXISTS(
                     SELECT 1 FROM outbox
-                    WHERE effect_id = ?1 AND delivered_at IS NULL
+                    WHERE effect_id = ?1 AND delivered_at IS NULL AND superseded_at IS NULL
                       AND lease_owner = ?2 AND lease_until >= ?3
                 )",
             params![effect_id, owner, sql_u64(now)?],
@@ -1166,7 +1196,8 @@ impl Store {
         inject(fault, FaultPoint::AfterProjection)?;
         let updated = transaction.execute(
             "UPDATE outbox SET delivered_at = ?1, lease_owner = NULL, lease_until = NULL
-             WHERE effect_id = ?2 AND lease_owner = ?3 AND lease_until >= ?1 AND delivered_at IS NULL",
+             WHERE effect_id = ?2 AND lease_owner = ?3 AND lease_until >= ?1
+               AND delivered_at IS NULL AND superseded_at IS NULL",
             params![sql_u64(now)?, effect_id, owner],
         )?;
         if updated != 1 {
@@ -1234,6 +1265,17 @@ fn migrate(connection: &mut Connection) -> Result<()> {
         transaction.pragma_update(None, "user_version", 2)?;
         transaction.commit()?;
         version = 2;
+    }
+    if version == 2 {
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Exclusive)?;
+        transaction.execute_batch(MIGRATION_3)?;
+        transaction.execute(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (3, 0)",
+            [],
+        )?;
+        transaction.pragma_update(None, "user_version", 3)?;
+        transaction.commit()?;
+        version = 3;
     }
     if version != SCHEMA_VERSION {
         return Err(StoreError::UnsupportedSchema(version));

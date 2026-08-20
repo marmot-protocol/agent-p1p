@@ -62,10 +62,11 @@ pub enum Event {
     MergeStarted,
     MergeVerified,
     HumanTookOver,
+    AuthorizationRemoved,
 }
 
 impl Event {
-    pub const ALL: [Self; 32] = [
+    pub const ALL: [Self; 33] = [
         Self::Proceed,
         Self::WaitingForIssueCreator,
         Self::NeedsHumanScopeDecision,
@@ -98,6 +99,7 @@ impl Event {
         Self::MergeStarted,
         Self::MergeVerified,
         Self::HumanTookOver,
+        Self::AuthorizationRemoved,
     ];
 }
 
@@ -200,6 +202,7 @@ string_enum!(Event, "event", {
     "MERGE_STARTED" => MergeStarted,
     "MERGE_VERIFIED" => MergeVerified,
     "HUMAN_TOOK_OVER" => HumanTookOver,
+    "AUTHORIZATION_REMOVED" => AuthorizationRemoved,
 });
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -297,6 +300,9 @@ pub fn transition(
     }
     if event == Event::HumanTookOver {
         return decision(CaseState::TakenOver, &[Effect::RecordTakeover]);
+    }
+    if event == Event::AuthorizationRemoved {
+        return decision(CaseState::Abandoned, &[Effect::RecordAbandonment]);
     }
     if event == Event::BlockedUnexpectedModel {
         return decision(CaseState::Blocked, &[Effect::RecordBlock]);

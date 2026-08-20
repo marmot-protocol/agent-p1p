@@ -149,6 +149,34 @@ fn default_shadow_policy_cannot_emit_a_merge_effect() {
     assert!(!ready.effects.contains(&Effect::BeginMerge));
 }
 
+#[test]
+fn authorization_removal_abandons_every_nonterminal_state_without_new_work() {
+    for state in [
+        CaseState::Planning,
+        CaseState::WaitingHuman,
+        CaseState::ReadyToBuild,
+        CaseState::Building,
+        CaseState::WaitingCi,
+        CaseState::Reviewing,
+        CaseState::Remediating,
+        CaseState::FinalReview,
+        CaseState::ShadowReady,
+        CaseState::ReadyToMerge,
+        CaseState::Merging,
+        CaseState::Blocked,
+        CaseState::Escalated,
+    ] {
+        let decision = transition(
+            state,
+            Event::AuthorizationRemoved,
+            TransitionContext::default(),
+        )
+        .unwrap();
+        assert_eq!(decision.next_state, CaseState::Abandoned);
+        assert_eq!(decision.effects, [Effect::RecordAbandonment]);
+    }
+}
+
 proptest! {
     #[test]
     fn review_remediation_escalates_exactly_at_the_policy_bound(

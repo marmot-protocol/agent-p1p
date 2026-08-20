@@ -153,14 +153,14 @@ impl fmt::Display for GitHubError {
 
 impl std::error::Error for GitHubError {}
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct RepositorySnapshot {
     pub id: u64,
     pub full_name: String,
     pub default_branch: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IssueSnapshot {
     pub id: u64,
     pub number: u64,
@@ -169,7 +169,7 @@ pub struct IssueSnapshot {
     pub labels: BTreeSet<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct LabelEvent {
     pub id: u64,
     pub labeled: bool,
@@ -178,7 +178,7 @@ pub struct LabelEvent {
     pub created_at: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IntakeSnapshot {
     pub repository: RepositorySnapshot,
     pub issue: IssueSnapshot,

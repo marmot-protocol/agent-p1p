@@ -14,7 +14,7 @@ exist. It is not evidence of live-host installation or a completed canary.
 | Boundary | Current implementation | Evidence boundary |
 |---|---|---|
 | Deterministic workflow | Exhaustive Rust states, events, effects, exact-head joins, bounded remediation, and shadow-only MDK disposition | Workspace tests and frozen fixtures |
-| Authoritative storage | SQLite schema v2, immutable events/evidence/runs/findings, current-case projection, durable outbox, leases, backup, migration, and crash injection | Workspace and disposable lifecycle tests |
+| Authoritative storage | SQLite schema v3, immutable events/evidence/runs/findings, current-case projection, durable outbox, leases, transactional effect supersession, backup, migration, and crash injection | Workspace and disposable lifecycle tests |
 | Intake reads | Generic label discovery using numeric repository/actor identity, policy validation, bounded pagination, and one-case concurrency | Fixture tests plus a read-only live GitHub observation |
 | Hermes reads/projection | Bounded CLI adapter, capability/task/run reads, controller-owned gates, idempotent projections, result metadata ingestion, and restart convergence | Fake-runner and offline integration tests only |
 | Worker contracts | Versioned planner, builder, two reviewer, and final-reviewer results bound to case, task, role, model, skills commit, plan, PR, and exact head | Contract fixtures and ingestion tests |
@@ -41,11 +41,11 @@ These are implementation gaps, not merely missing operational evidence:
    particular, independently verify and publish planner comments, case-owned
    branches/draft PRs, role-stamped reviews, and human-held disposition without
    giving workers direct workflow authority.
-2. Add a durable authorization-removal/takeover transition with transactional
-   supersession of older outbox entries. The current fresh authorization gate
-   safely leaves unauthorized effects unclaimed, but does not yet resolve them.
-   Reconcile foreign commits/ownership, review threads, current mergeability,
-   and policy revision before final-review dispatch and disposition.
+2. Reconcile foreign commits/ownership and commit durable human takeover.
+   Authorization removal is now committed as an immutable abandonment event
+   and transactionally supersedes older pending effects. Review threads,
+   current mergeability, and policy revision still require a final-review
+   preflight before dispatch and disposition.
 3. Build the complete deterministic final-review bundle from immutable ledger
    references and fresh GitHub observations. A valid final worker result alone
    is not sufficient.
