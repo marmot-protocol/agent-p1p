@@ -7,6 +7,9 @@ fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
     assert_eq!(policy.repository.id, 1_055_628_515);
     assert_eq!(policy.repository.full_name(), "marmot-protocol/mdk");
     assert_eq!(policy.repository.default_branch, "master");
+    assert_eq!(policy.checkout, "/var/lib/pip-v2/repositories/mdk");
+    assert_eq!(policy.workspace, "/var/lib/pip-v2/worktrees/mdk");
+    assert_eq!(policy.artifacts, "/var/lib/pip-v2/artifacts/mdk");
     assert!(!policy.intake.enabled);
     assert!(policy.intake.paused);
     assert!(!policy.dispatch_enabled);
@@ -71,6 +74,22 @@ fn policy_rejects_unknown_fields_model_fallback_and_shadow_merge_authority() {
 
     let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
     value["merge"]["method"] = serde_json::json!("auto");
+    assert!(matches!(
+        load_repository_policy(&serde_json::to_vec(&value).unwrap()),
+        Err(PolicyError::Invalid)
+    ));
+
+    for field in ["checkout", "workspace", "artifacts"] {
+        let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+        value[field] = serde_json::json!("relative/path");
+        assert!(matches!(
+            load_repository_policy(&serde_json::to_vec(&value).unwrap()),
+            Err(PolicyError::Invalid)
+        ));
+    }
+
+    let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+    value["checkout"] = value["workspace"].clone();
     assert!(matches!(
         load_repository_policy(&serde_json::to_vec(&value).unwrap()),
         Err(PolicyError::Invalid)

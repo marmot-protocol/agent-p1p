@@ -9,7 +9,9 @@
   },
   "board": "pip-mdk",
   "workflow_version": 2,
+  "checkout": "/var/lib/pip-v2/repositories/mdk",
   "workspace": "/var/lib/pip-v2/worktrees/mdk",
+  "artifacts": "/var/lib/pip-v2/artifacts/mdk",
   "branch_prefix": "pip/v2/",
   "github": {
     "automation_actor_id": null,

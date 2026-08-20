@@ -3,6 +3,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 use std::num::{NonZeroU32, NonZeroU64};
+use std::path::{Component, Path};
 
 use pip_contracts::WorkerRole;
 use pip_controller::{ExecutionKind, RolePolicy, WorkflowPolicy};
@@ -95,7 +96,9 @@ pub struct RepositoryPolicy {
     pub repository: RepositoryIdentity,
     pub board: String,
     pub workflow_version: u32,
+    pub checkout: String,
     pub workspace: String,
+    pub artifacts: String,
     pub branch_prefix: String,
     pub github: GitHubConfiguration,
     pub intake: IntakeConfiguration,
@@ -233,8 +236,12 @@ fn validate_policy(policy: &RepositoryPolicy) -> Result<(), PolicyError> {
         && valid_git_ref(&policy.repository.default_branch)
         && valid_segment(&policy.board)
         && policy.workflow_version > 0
-        && !policy.workspace.trim().is_empty()
-        && policy.workspace.starts_with('/')
+        && valid_absolute_path(&policy.checkout)
+        && valid_absolute_path(&policy.workspace)
+        && valid_absolute_path(&policy.artifacts)
+        && disjoint_paths(&policy.checkout, &policy.workspace)
+        && disjoint_paths(&policy.checkout, &policy.artifacts)
+        && disjoint_paths(&policy.workspace, &policy.artifacts)
         && valid_branch_prefix(&policy.branch_prefix)
         && configured_github_actor_ids.iter().all(|id| *id > 0)
         && github_identities_valid
@@ -257,6 +264,23 @@ fn validate_policy(policy: &RepositoryPolicy) -> Result<(), PolicyError> {
     } else {
         Err(PolicyError::Invalid)
     }
+}
+
+fn valid_absolute_path(value: &str) -> bool {
+    if value.len() > 4096 || value.trim() != value || value == "/" {
+        return false;
+    }
+    let path = Path::new(value);
+    path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, Component::RootDir | Component::Normal(_)))
+}
+
+fn disjoint_paths(left: &str, right: &str) -> bool {
+    let left = Path::new(left);
+    let right = Path::new(right);
+    left != right && !left.starts_with(right) && !right.starts_with(left)
 }
 
 fn valid_segment(value: &str) -> bool {
