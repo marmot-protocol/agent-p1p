@@ -5,7 +5,8 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use ed25519_dalek::{Signer as _, SigningKey};
 use pip_control::{
-    ArtifactManifest, ReleaseError, ReleaseManifest, resource_set_digest, verify_release,
+    ArtifactManifest, ReleaseError, ReleaseManifest, ReleaseMetadata, create_release_manifest,
+    resource_set_digest, sign_manifest, verify_release, verifying_key,
 };
 use sha2::{Digest, Sha256};
 
@@ -116,6 +117,65 @@ fn duplicate_paths_unknown_fields_and_aggregate_resource_drift_are_rejected() {
     assert!(matches!(
         resource_set_digest(&artifacts, "bin/pip-control"),
         Err(ReleaseError::DuplicateArtifact { .. })
+    ));
+}
+
+#[test]
+fn deterministic_manifest_creation_and_offline_signing_form_a_verifiable_cohort() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir_all(root.path().join("bin")).unwrap();
+    fs::create_dir_all(root.path().join("share/pip-v2/contracts")).unwrap();
+    fs::write(root.path().join("bin/pip-control"), b"binary\n").unwrap();
+    fs::write(
+        root.path().join("share/pip-v2/contracts/planner.json"),
+        b"{}\n",
+    )
+    .unwrap();
+    fs::set_permissions(
+        root.path().join("bin/pip-control"),
+        fs::Permissions::from_mode(0o555),
+    )
+    .unwrap();
+    fs::set_permissions(
+        root.path().join("share/pip-v2/contracts/planner.json"),
+        fs::Permissions::from_mode(0o444),
+    )
+    .unwrap();
+    let metadata = ReleaseMetadata {
+        version: "0.1.0".into(),
+        source_commit: "a".repeat(40),
+        cargo_lock_sha256: "b".repeat(64),
+        target: "x86_64-unknown-linux-gnu".into(),
+        rust_toolchain: "rustc 1.96.1".into(),
+        built_at: "2026-08-20T12:00:00Z".into(),
+        builder_identity: "github-actions:pip-release".into(),
+        workflow_version: 2,
+        contract_version: 1,
+    };
+    let first = create_release_manifest(root.path(), &metadata).unwrap();
+    let second = create_release_manifest(root.path(), &metadata).unwrap();
+    assert_eq!(first, second);
+    assert_eq!(
+        first
+            .artifacts
+            .iter()
+            .map(|artifact| artifact.path.as_str())
+            .collect::<Vec<_>>(),
+        ["bin/pip-control", "share/pip-v2/contracts/planner.json"]
+    );
+
+    let bytes = serde_json::to_vec(&first).unwrap();
+    let signing_key = STANDARD.encode([13_u8; 32]);
+    let signature = sign_manifest(&bytes, &signing_key).unwrap();
+    let public_key = verifying_key(&signing_key).unwrap();
+    verify_release(root.path(), &bytes, &signature, &public_key).unwrap();
+
+    let unsafe_file = root.path().join("share/pip-v2/contracts/unsafe.json");
+    fs::write(&unsafe_file, b"{}\n").unwrap();
+    fs::set_permissions(&unsafe_file, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(matches!(
+        create_release_manifest(root.path(), &metadata),
+        Err(ReleaseError::UnsafeArtifact { .. })
     ));
 }
 

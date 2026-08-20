@@ -9,7 +9,7 @@ use std::path::{Component, Path, PathBuf};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use ed25519_dalek::{Signature, VerifyingKey};
+use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -41,6 +41,19 @@ pub struct ReleaseManifest {
     pub built_at: String,
     pub builder_identity: String,
     pub artifacts: Vec<ArtifactManifest>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReleaseMetadata {
+    pub version: String,
+    pub source_commit: String,
+    pub cargo_lock_sha256: String,
+    pub target: String,
+    pub rust_toolchain: String,
+    pub built_at: String,
+    pub builder_identity: String,
+    pub workflow_version: u32,
+    pub contract_version: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -128,6 +141,94 @@ impl fmt::Display for ReleaseError {
 }
 
 impl std::error::Error for ReleaseError {}
+
+pub fn create_release_manifest(
+    release_root: impl AsRef<Path>,
+    metadata: &ReleaseMetadata,
+) -> Result<ReleaseManifest, ReleaseError> {
+    let root_input = release_root.as_ref();
+    let root_metadata = fs::symlink_metadata(root_input)
+        .map_err(|error| ReleaseError::Filesystem(error.to_string()))?;
+    if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+        return Err(ReleaseError::InvalidManifest(
+            "release root is not a real directory",
+        ));
+    }
+    let root = root_input
+        .canonicalize()
+        .map_err(|error| ReleaseError::Filesystem(error.to_string()))?;
+    let mut paths = Vec::new();
+    collect_artifacts(&root, &root, &mut paths)?;
+    paths.sort();
+    if paths.is_empty() || paths.len() > MAX_ARTIFACTS {
+        return Err(ReleaseError::InvalidManifest("invalid artifact cohort"));
+    }
+    let mut artifacts = Vec::with_capacity(paths.len());
+    for path in paths {
+        let relative = path
+            .strip_prefix(&root)
+            .map_err(|error| ReleaseError::Filesystem(error.to_string()))?;
+        let relative = relative
+            .to_str()
+            .ok_or_else(|| ReleaseError::UnsafeArtifact {
+                path: relative.to_string_lossy().into_owned(),
+            })?
+            .replace(std::path::MAIN_SEPARATOR, "/");
+        let file_metadata = fs::symlink_metadata(&path)
+            .map_err(|error| ReleaseError::Filesystem(error.to_string()))?;
+        let mode = file_metadata.permissions().mode() & 0o7777;
+        let artifact = ArtifactManifest {
+            path: relative,
+            sha256: digest_file(&path)?,
+            mode,
+        };
+        validate_artifact_entry(&artifact)?;
+        artifacts.push(artifact);
+    }
+    let binary_path = "bin/pip-control".to_owned();
+    let binary_sha256 = artifacts
+        .iter()
+        .find(|artifact| artifact.path == binary_path)
+        .map(|artifact| artifact.sha256.clone())
+        .ok_or(ReleaseError::InvalidManifest(
+            "release binary is missing from the cohort",
+        ))?;
+    let resources_sha256 = resource_set_digest(&artifacts, &binary_path)?;
+    let manifest = ReleaseManifest {
+        release_format: 1,
+        version: metadata.version.clone(),
+        source_commit: metadata.source_commit.clone(),
+        cargo_lock_sha256: metadata.cargo_lock_sha256.clone(),
+        target: metadata.target.clone(),
+        rust_toolchain: metadata.rust_toolchain.clone(),
+        binary_path,
+        binary_sha256,
+        resources_sha256,
+        workflow_version: metadata.workflow_version,
+        contract_version: metadata.contract_version,
+        built_at: metadata.built_at.clone(),
+        builder_identity: metadata.builder_identity.clone(),
+        artifacts,
+    };
+    validate_manifest(&manifest)?;
+    Ok(manifest)
+}
+
+pub fn sign_manifest(
+    manifest_bytes: &[u8],
+    signing_key_base64: &str,
+) -> Result<String, ReleaseError> {
+    if manifest_bytes.is_empty() || manifest_bytes.len() > MAX_MANIFEST_BYTES {
+        return Err(ReleaseError::ManifestTooLarge);
+    }
+    let signing_key = decode_signing_key(signing_key_base64)?;
+    Ok(STANDARD.encode(signing_key.sign(manifest_bytes).to_bytes()))
+}
+
+pub fn verifying_key(signing_key_base64: &str) -> Result<String, ReleaseError> {
+    let signing_key = decode_signing_key(signing_key_base64)?;
+    Ok(STANDARD.encode(signing_key.verifying_key().to_bytes()))
+}
 
 pub fn verify_release(
     release_root: impl AsRef<Path>,
@@ -239,6 +340,49 @@ fn verify_signature(
     verifying_key
         .verify_strict(manifest, &signature)
         .map_err(|_| ReleaseError::InvalidSignature)
+}
+
+fn decode_signing_key(value: &str) -> Result<SigningKey, ReleaseError> {
+    let bytes = STANDARD
+        .decode(value.trim())
+        .map_err(|_| ReleaseError::InvalidSignature)?;
+    let bytes: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| ReleaseError::InvalidSignature)?;
+    Ok(SigningKey::from_bytes(&bytes))
+}
+
+fn collect_artifacts(
+    root: &Path,
+    directory: &Path,
+    artifacts: &mut Vec<PathBuf>,
+) -> Result<(), ReleaseError> {
+    let mut entries = fs::read_dir(directory)
+        .map_err(|error| ReleaseError::Filesystem(error.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| ReleaseError::Filesystem(error.to_string()))?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| ReleaseError::Filesystem(error.to_string()))?;
+        let relative = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .into_owned();
+        if metadata.file_type().is_symlink() {
+            return Err(ReleaseError::UnsafeArtifact { path: relative });
+        }
+        if metadata.is_dir() {
+            collect_artifacts(root, &path, artifacts)?;
+        } else if metadata.is_file() {
+            artifacts.push(path);
+        } else {
+            return Err(ReleaseError::UnsafeArtifact { path: relative });
+        }
+    }
+    Ok(())
 }
 
 fn validate_manifest(manifest: &ReleaseManifest) -> Result<(), ReleaseError> {

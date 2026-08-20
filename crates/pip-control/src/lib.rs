@@ -7,6 +7,6 @@ mod release;
 
 pub use cli::{CliError, run_cli};
 pub use release::{
-    ArtifactManifest, ReleaseError, ReleaseManifest, VerifiedRelease, resource_set_digest,
-    verify_release,
+    ArtifactManifest, ReleaseError, ReleaseManifest, ReleaseMetadata, VerifiedRelease,
+    create_release_manifest, resource_set_digest, sign_manifest, verify_release, verifying_key,
 };
