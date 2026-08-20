@@ -123,6 +123,19 @@ fn accepted_work_emits_only_the_next_declared_effect() {
 }
 
 #[test]
+fn first_independent_review_is_recorded_without_advancing_or_dispatching() {
+    let recorded = transition(
+        CaseState::Reviewing,
+        Event::ReviewRecorded,
+        TransitionContext::default(),
+    )
+    .unwrap();
+
+    assert_eq!(recorded.next_state, CaseState::Reviewing);
+    assert!(recorded.effects.is_empty());
+}
+
+#[test]
 fn default_shadow_policy_cannot_emit_a_merge_effect() {
     let ready = transition(
         CaseState::FinalReview,

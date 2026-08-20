@@ -6,6 +6,7 @@
     {"name": "builder dispatch becomes active", "from": "READY_TO_BUILD", "event": "BUILDER_DISPATCHED", "to": "BUILDING"},
     {"name": "builder result waits for independent CI", "from": "BUILDING", "event": "REVIEW_READY", "to": "WAITING_CI"},
     {"name": "accepted CI releases reviewers", "from": "WAITING_CI", "event": "CI_ACCEPTED", "to": "REVIEWING"},
+    {"name": "first independent review is retained", "from": "REVIEWING", "event": "REVIEW_RECORDED", "to": "REVIEWING"},
     {"name": "review changes enter remediation", "from": "REVIEWING", "event": "REQUEST_CHANGES", "remediation_round": 0, "max_rounds": 3, "to": "REMEDIATING"},
     {"name": "review loop bound escalates", "from": "REVIEWING", "event": "REQUEST_CHANGES", "remediation_round": 3, "max_rounds": 3, "to": "ESCALATED"},
     {"name": "remediation result waits for new exact-head CI", "from": "REMEDIATING", "event": "REVIEW_READY", "to": "WAITING_CI"},

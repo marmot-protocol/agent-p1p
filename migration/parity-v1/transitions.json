@@ -72,6 +72,10 @@
       "rationale": "Makes independent exact-head CI acceptance a first-class gate."
     },
     {
+      "target_name": "first independent review is retained",
+      "rationale": "Preserves each reviewer run immutably while the deterministic join waits for the second exact-head verdict."
+    },
+    {
       "target_name": "remediation result waits for new exact-head CI",
       "rationale": "Invalidates stale CI and reviews after every remediation head."
     },

@@ -206,6 +206,17 @@ pub struct RunInput {
     pub payload: Value,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct StoredRun {
+    pub run_id: String,
+    pub case_key: String,
+    pub event_id: String,
+    pub task_id: String,
+    pub role: String,
+    pub payload: Value,
+    pub accepted_at: u64,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct EvidenceInput {
     pub evidence_id: String,
@@ -726,6 +737,30 @@ impl Store {
 
     pub fn run_count(&self) -> Result<u64> {
         count(&self.connection, "runs")
+    }
+
+    pub fn run_by_task_id(&self, task_id: &str) -> Result<Option<StoredRun>> {
+        self.connection
+            .query_row(
+                "SELECT run_id, case_key, event_id, task_id, role, payload_json, accepted_at
+                 FROM runs WHERE task_id = ?1",
+                [task_id],
+                stored_run,
+            )
+            .optional()?
+            .map(parse_stored_run)
+            .transpose()
+    }
+
+    pub fn runs_for_case(&self, case_key: &str) -> Result<Vec<StoredRun>> {
+        let mut statement = self.connection.prepare(
+            "SELECT run_id, case_key, event_id, task_id, role, payload_json, accepted_at
+             FROM runs WHERE case_key = ?1 ORDER BY accepted_at, run_id",
+        )?;
+        statement
+            .query_map([case_key], stored_run)?
+            .map(|row| row.map_err(StoreError::from).and_then(parse_stored_run))
+            .collect()
     }
 
     pub fn outbox_count(&self) -> Result<u64> {
@@ -1448,6 +1483,32 @@ fn query_case(connection: &Connection, case_key: &str) -> Result<Option<StoredCa
             },
         )
         .optional()?)
+}
+
+type StoredRunRow = (String, String, String, String, String, String, i64);
+
+fn stored_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredRunRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+    ))
+}
+
+fn parse_stored_run(row: StoredRunRow) -> Result<StoredRun> {
+    Ok(StoredRun {
+        run_id: row.0,
+        case_key: row.1,
+        event_id: row.2,
+        task_id: row.3,
+        role: row.4,
+        payload: serde_json::from_str(&row.5)?,
+        accepted_at: unsigned(row.6),
+    })
 }
 
 fn count(connection: &Connection, table: &str) -> Result<u64> {

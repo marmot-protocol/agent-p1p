@@ -3,9 +3,11 @@
 #![forbid(unsafe_code)]
 
 mod ledger;
+mod results;
 mod scheduling;
 
 pub use ledger::{ControllerError, LedgerController, WorkflowCommand};
+pub use results::{IngestError, IngestResult, ingest_worker_result};
 
 pub use scheduling::{
     DispatchContext, DispatchError, ExecutionKind, RolePolicy, WorkflowDispatch, WorkflowPolicy,

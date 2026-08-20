@@ -49,6 +49,7 @@ pub enum Event {
     HumanReaffirmedScope,
     CiAccepted,
     CiFailed,
+    ReviewRecorded,
     ReviewsApproved,
     RequestChanges,
     Ready,
@@ -64,7 +65,7 @@ pub enum Event {
 }
 
 impl Event {
-    pub const ALL: [Self; 31] = [
+    pub const ALL: [Self; 32] = [
         Self::Proceed,
         Self::WaitingForIssueCreator,
         Self::NeedsHumanScopeDecision,
@@ -84,6 +85,7 @@ impl Event {
         Self::HumanReaffirmedScope,
         Self::CiAccepted,
         Self::CiFailed,
+        Self::ReviewRecorded,
         Self::ReviewsApproved,
         Self::RequestChanges,
         Self::Ready,
@@ -185,6 +187,7 @@ string_enum!(Event, "event", {
     "HUMAN_REAFFIRMED_SCOPE" => HumanReaffirmedScope,
     "CI_ACCEPTED" => CiAccepted,
     "CI_FAILED" => CiFailed,
+    "REVIEW_RECORDED" => ReviewRecorded,
     "REVIEWS_APPROVED" => ReviewsApproved,
     "REQUEST_CHANGES" => RequestChanges,
     "READY" => Ready,
@@ -337,6 +340,7 @@ pub fn transition(
             decision(State::Escalated, &[Fx::Escalate])
         }
         (State::WaitingCi, Ev::CiFailed) => decision(State::Remediating, &[Fx::DispatchBuilder]),
+        (State::Reviewing, Ev::ReviewRecorded) => decision(State::Reviewing, &[]),
         (State::Reviewing, Ev::ReviewsApproved) => {
             decision(State::FinalReview, &[Fx::DispatchFinalReviewer])
         }
