@@ -116,6 +116,25 @@ fn crash_after_gate_release_reconciles_existing_advanced_tasks_without_duplicate
     }));
 }
 
+#[test]
+fn invalid_fresh_authorization_never_claims_an_outbox_effect_or_calls_hermes() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = seeded_store(directory.path());
+    let policy = active_policy();
+    let runner = FakeRunner::default();
+    let mut dispatch = context("controller-1", 100);
+    dispatch.authorization_valid = false;
+
+    assert_eq!(
+        dispatch_once_with(&mut store, &policy, runner.clone(), dispatch).unwrap(),
+        DispatchCycleResult::AuthorizationBlocked
+    );
+    assert!(runner.commands.borrow().is_empty());
+    let status = store.status(100).unwrap();
+    assert_eq!(status.outbox_pending, 1);
+    assert_eq!(status.outbox_leased, 0);
+}
+
 fn context(owner: &str, now: u64) -> DispatchCycleContext<'_> {
     DispatchCycleContext {
         skills_repository_commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -123,6 +142,7 @@ fn context(owner: &str, now: u64) -> DispatchCycleContext<'_> {
         owner,
         now,
         lease_seconds: 30,
+        authorization_valid: true,
     }
 }
 

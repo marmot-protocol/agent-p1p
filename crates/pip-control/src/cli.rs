@@ -174,6 +174,8 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
     } else {
         json!({"result": "disabled"})
     };
+    let authorization = crate::verify_active_authorization(&reader, &policy, &store)
+        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     let dispatch = crate::dispatch_once(
         &mut store,
         &policy,
@@ -183,6 +185,7 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
             owner: required(&options, "--owner")?,
             now,
             lease_seconds,
+            authorization_valid: authorization.is_authorized(),
         },
     )
     .map_err(|error| CliError::Reconciliation(error.to_string()))?;
@@ -195,6 +198,7 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         "worker_result": result,
         "ci": ci,
         "intake": intake,
+        "authorization": authorization,
         "dispatch": dispatch,
     }))
 }

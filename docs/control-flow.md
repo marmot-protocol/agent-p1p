@@ -156,6 +156,10 @@ proves whether GitHub performed it.
 - Global or repository pause prevents new activation but preserves running-task
   evidence for bounded collection.
 - Removed issue authorization prevents every downstream activation and merge.
+- The controller re-fetches exact issue/label history immediately before an
+  outbox dispatch is claimed. A missing label, untrusted latest label actor,
+  closed issue, policy-revision drift, or repository-identity drift leaves the
+  effect pending and performs no Hermes write.
 - Human commits to or ownership changes on a Pip PR trigger takeover policy.
 - A running worker may be terminated only through an identity-checked process
   lease; PID alone is insufficient.

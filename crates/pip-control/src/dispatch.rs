@@ -27,6 +27,7 @@ const DISPATCH_EFFECTS: [&str; 4] = [
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum DispatchCycleResult {
     Idle,
+    AuthorizationBlocked,
     Projected {
         effect_id: String,
         projection_count: usize,
@@ -42,6 +43,7 @@ pub struct DispatchCycleContext<'a> {
     pub owner: &'a str,
     pub now: u64,
     pub lease_seconds: u64,
+    pub authorization_valid: bool,
 }
 
 #[derive(Debug)]
@@ -114,6 +116,9 @@ pub fn dispatch_once_with<R: CommandRunner + Clone>(
 ) -> Result<DispatchCycleResult, DispatchCycleError> {
     if !policy.dispatch_enabled || policy.intake.paused {
         return Err(DispatchCycleError::DispatchPaused);
+    }
+    if !context.authorization_valid {
+        return Ok(DispatchCycleResult::AuthorizationBlocked);
     }
     let skills_repository_commit = GitSha::from_str(context.skills_repository_commit)
         .map_err(|_| DispatchCycleError::InvalidSkillsCommit)?;

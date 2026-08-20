@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+mod authorization;
 mod ci;
 mod cli;
 mod dispatch;
@@ -12,6 +13,9 @@ mod release;
 mod results;
 mod shadow;
 
+pub use authorization::{
+    ActiveAuthorization, AuthorizationBlock, AuthorizationError, verify_active_authorization,
+};
 pub use ci::{CiCycle, CiCycleError, PullRequestSource, reconcile_ci_once};
 pub use cli::{CliError, run_cli};
 pub use dispatch::{
