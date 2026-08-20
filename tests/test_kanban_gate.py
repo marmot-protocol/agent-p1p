@@ -46,7 +46,25 @@ def advance_gates(*args: Any, **kwargs: Any) -> dict[str, Any]:
                     metadata.setdefault("artifacts", ["/tmp/result.json"])
                     metadata.setdefault("worker_session_id", "session-trusted")
                     payload["runs"][-1]["metadata"] = metadata
+                    role = metadata.get("role")
+                    role = role if isinstance(role, str) else ""
+                    profiles = {
+                        "builder-grok": "cursor-fixer",
+                        "reviewer-general": "reviewer-general",
+                        "reviewer-secperf": "cursor-reviewer",
+                        "final-reviewer": "final-reviewer",
+                    }
+                    role_skills = {
+                        "builder-grok": ["workflow-contract", "builder-grok"],
+                        "reviewer-general": ["workflow-contract", "reviewer-general"],
+                        "reviewer-secperf": ["workflow-contract", "reviewer-secperf"],
+                        "final-reviewer": ["workflow-contract", "final-reviewer"],
+                    }
+                    payload["runs"][-1].setdefault("outcome", "completed")
+                    payload["runs"][-1].setdefault("profile", profiles.get(role))
                     task = payload["task"]
+                    task.setdefault("assignee", profiles.get(role))
+                    task.setdefault("skills", role_skills.get(role))
                     actual = metadata.get("actual_model")
                     if isinstance(actual, str) and actual:
                         if "/" in actual:
@@ -276,6 +294,38 @@ def test_semantic_gate_rejects_self_consistent_but_unauthorized_model() -> None:
         advance_gates(_route(), _task_ids(), board="pip-mdk", runner=runner)
 
 
+def _trust_show_envelope(show: dict[str, object], result: dict[str, object]) -> None:
+    profiles = {
+        "builder-grok": "cursor-fixer",
+        "reviewer-general": "reviewer-general",
+        "reviewer-secperf": "cursor-reviewer",
+        "final-reviewer": "final-reviewer",
+    }
+    role = str(result["role"])
+    task = show["task"]
+    runs = show["runs"]
+    assert isinstance(task, dict) and isinstance(runs, list) and isinstance(runs[-1], dict)
+    task["assignee"] = profiles[role]
+    task["skills"] = ["workflow-contract", role]
+    result.setdefault("artifacts", [f"/tmp/{role}-result.json"])
+    result.setdefault("worker_session_id", f"session-{role}")
+    runs[-1]["profile"] = profiles[role]
+    runs[-1]["outcome"] = "completed"
+
+
+def test_builder_result_rejects_historically_red_pr_1515() -> None:
+    result = _results()["build"]
+    result["pr_number"] = 1515
+    show: dict[str, object] = {
+        "task": {"id": "t-build", "status": "done", "model": "cursor/composer-2.5"},
+        "runs": [{"metadata": result}],
+    }
+    _trust_show_envelope(show, result)
+
+    with pytest.raises(GateError, match="historically red"):
+        kanban_gate._builder_result(show, _route(), expected_round=1)
+
+
 def test_metadata_accepts_trusted_hermes_completion_envelope() -> None:
     result = _results()["build"]
     expected = copy.deepcopy(result)
@@ -289,6 +339,7 @@ def test_metadata_accepts_trusted_hermes_completion_envelope() -> None:
         },
         "runs": [{"metadata": result}],
     }
+    _trust_show_envelope(show, result)
 
     assert kanban_gate._metadata(show, "builder-result") == expected
 
@@ -304,6 +355,7 @@ def test_metadata_accepts_native_task_model_override_fields() -> None:
         },
         "runs": [{"metadata": result}],
     }
+    _trust_show_envelope(show, result)
 
     assert kanban_gate._metadata(show, "review-result") == result
 
@@ -327,6 +379,7 @@ def test_metadata_accepts_direct_cursor_model_bound_in_task_body() -> None:
         },
         "runs": [{"metadata": result}],
     }
+    _trust_show_envelope(show, result)
 
     assert kanban_gate._metadata(show, "builder-result") == result
 
@@ -349,6 +402,7 @@ def test_metadata_rejects_skills_commit_conflicting_with_task_binding() -> None:
         },
         "runs": [{"metadata": result}],
     }
+    _trust_show_envelope(show, result)
 
     with pytest.raises(GateError, match="skills repository commit"):
         kanban_gate._metadata(show, "builder-result")
@@ -375,8 +429,33 @@ def test_metadata_rejects_worker_profile_conflicting_with_result_role() -> None:
         },
         "runs": [{"metadata": result, "profile": "reviewer-general"}],
     }
+    _trust_show_envelope(show, result)
+    show_runs = show["runs"]
+    assert isinstance(show_runs, list) and isinstance(show_runs[-1], dict)
+    show_runs[-1]["profile"] = "reviewer-general"
 
     with pytest.raises(GateError, match="worker profile conflicts"):
+        kanban_gate._metadata(show, "builder-result")
+
+
+def test_metadata_rejects_non_completed_run_and_archived_task() -> None:
+    result = _results()["build"]
+    show: dict[str, object] = {
+        "task": {
+            "id": "t-build",
+            "status": "archived",
+            "model": "cursor/composer-2.5",
+        },
+        "runs": [{"metadata": result, "outcome": "crashed"}],
+    }
+    _trust_show_envelope(show, result)
+    task = show["task"]
+    runs = show["runs"]
+    assert isinstance(task, dict) and isinstance(runs, list) and isinstance(runs[-1], dict)
+    task["status"] = "archived"
+    runs[-1]["outcome"] = "crashed"
+
+    with pytest.raises(GateError, match="not durably completed"):
         kanban_gate._metadata(show, "builder-result")
 
 
@@ -399,6 +478,7 @@ def test_metadata_rejects_hermes_override_conflicting_with_task_binding() -> Non
         },
         "runs": [{"metadata": result}],
     }
+    _trust_show_envelope(show, result)
 
     with pytest.raises(GateError, match="execution binding"):
         kanban_gate._metadata(show, "review-result")
@@ -416,6 +496,7 @@ def test_metadata_rejects_worker_model_conflicting_with_durable_run() -> None:
             }
         ],
     }
+    _trust_show_envelope(show, result)
 
     with pytest.raises(GateError, match="durable task metadata"):
         kanban_gate._metadata(show, "builder-result")
@@ -427,6 +508,7 @@ def test_metadata_rejects_missing_durable_model_metadata() -> None:
         "task": {"id": "t-build", "status": "done"},
         "runs": [{"metadata": result}],
     }
+    _trust_show_envelope(show, result)
 
     with pytest.raises(GateError, match="model metadata is missing"):
         kanban_gate._metadata(show, "builder-result")
@@ -803,10 +885,53 @@ def test_builder_return_to_planning_creates_deterministic_replan(
     }
 
 
+def test_schema_valid_blocked_review_routes_to_durable_hold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    results = _results()
+    results["review-general-1"]["outcome"] = "BLOCKED"
+    monkeypatch.setattr(
+        kanban_gate,
+        "_notify_held_result",
+        lambda board, result, runner: "t-held-review",
+    )
+
+    def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+        task_id = command[command.index("show") + 1]
+        key = next(key for key, value in _task_ids().items() if value == task_id)
+        gate_response = _gate_response(command, key, task_id)
+        if gate_response is not None:
+            return gate_response
+        payload = {
+            "task": {"id": task_id, "status": "done"},
+            "runs": [{"metadata": results[key]}],
+            "events": [{"kind": "created"}],
+        }
+        return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+    assert advance_gates(_route(), _task_ids(), board="pip-mdk", runner=runner) == {
+        "advanced": [],
+        "waiting_for": "human-held",
+        "held_task": "t-held-review",
+    }
+
+
 def test_remediation_return_to_planning_creates_deterministic_replan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     results = _results()
+    results["review-general-1"]["outcome"] = "REQUEST_CHANGES"
+    results["review-general-1"]["blocking_findings"] = [
+        {
+            "id": "GENERAL-R1-009",
+            "summary": "fixture blocker",
+            "defect": "fixture defect",
+            "consequence": "fixture impact",
+            "required_evidence": ["fixture evidence"],
+            "corrective_direction": "fixture fix",
+            "status": "OPEN",
+        }
+    ]
     results["remediate"]["outcome"] = "RETURN_TO_PLANNING"
     results["remediate"]["github_ci_green"] = False
     results["remediate"]["evidence"] = {

@@ -246,7 +246,7 @@ def test_live_final_evidence_rejects_withdrawn_issue_intake() -> None:
 
 @pytest.mark.parametrize("conclusion", ["neutral", "skipped"])
 def test_live_final_evidence_rejects_non_success_check(conclusion: str) -> None:
-    with pytest.raises(GitHubGateError, match="non-green"):
+    with pytest.raises(GitHubGateError, match="skipped|red CI|non-green"):
         fetch_live_final_evidence(42, HEAD, runner=_runner(conclusion=conclusion))
 
 
@@ -287,6 +287,62 @@ def test_live_final_evidence_rejects_red_ci_on_earlier_pr_commit() -> None:
 
     with pytest.raises(GitHubGateError, match="earlier point"):
         fetch_live_final_evidence(42, HEAD, runner=runner)
+
+
+def test_live_final_evidence_rejects_unexpected_historical_skip() -> None:
+    old = "b" * 40
+    base = _runner()
+
+    def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+        completed = base(command)
+        payload = json.loads(completed.stdout)
+        if "graphql" in command:
+            payload["data"]["repository"]["pullRequest"]["commits"]["nodes"] = [
+                {"commit": {"oid": old}},
+                {"commit": {"oid": HEAD}},
+            ]
+        elif f"commits/{old}/check-runs" in " ".join(command):
+            payload = {
+                "total_count": 1,
+                "check_runs": [
+                    {
+                        "name": "Unrelated skipped job",
+                        "head_sha": old,
+                        "status": "completed",
+                        "conclusion": "skipped",
+                    }
+                ],
+            }
+        return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+    with pytest.raises(GitHubGateError, match="skipped"):
+        fetch_live_final_evidence(42, HEAD, runner=runner)
+
+
+def test_live_final_evidence_paginates_all_check_attempts() -> None:
+    base = _runner()
+
+    def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+        joined = " ".join(command)
+        if "check-runs" in joined:
+            page = 2 if "page=2" in joined else 1
+            count = 1 if page == 2 else 100
+            payload = {
+                "total_count": 101,
+                "check_runs": [
+                    {
+                        "name": f"check-{page}-{index}",
+                        "head_sha": HEAD,
+                        "status": "completed",
+                        "conclusion": "success",
+                    }
+                    for index in range(count)
+                ],
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+        return base(command)
+
+    assert fetch_live_final_evidence(42, HEAD, runner=runner)["ci"]["required_checks_green"]
 
 
 def test_live_final_evidence_rejects_effective_changes_requested() -> None:

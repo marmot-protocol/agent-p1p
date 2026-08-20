@@ -95,10 +95,16 @@ def _show(board: str, task_id: str, runner: Runner) -> dict[str, Any]:
 
 
 def _metadata(show: dict[str, Any], contract: str) -> dict[str, Any]:
+    task = show["task"]
+    if task.get("status") != "done":
+        raise GateError("task is not durably completed")
     runs = show.get("runs")
     if not isinstance(runs, list) or not runs or not isinstance(runs[-1], dict):
         raise GateError("completed task has no durable run result")
-    raw = runs[-1].get("metadata")
+    run = runs[-1]
+    if run.get("outcome") != "completed":
+        raise GateError("task's durable run did not complete successfully")
+    raw = run.get("metadata")
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
@@ -108,21 +114,19 @@ def _metadata(show: dict[str, Any], contract: str) -> dict[str, Any]:
         raise GateError("task run metadata is not an object")
     raw = dict(raw)
     artifacts = raw.pop("artifacts", None)
-    if artifacts is not None and (
+    if (
         not isinstance(artifacts, list)
+        or not artifacts
         or any(not isinstance(path, str) or not path for path in artifacts)
     ):
-        raise GateError("task run artifact envelope is malformed")
+        raise GateError("task run artifact envelope is missing or malformed")
     worker_session_id = raw.pop("worker_session_id", None)
-    if worker_session_id is not None and (
-        not isinstance(worker_session_id, str) or not worker_session_id
-    ):
-        raise GateError("task run worker-session envelope is malformed")
+    if not isinstance(worker_session_id, str) or not worker_session_id:
+        raise GateError("task run worker-session envelope is missing or malformed")
     try:
         validate_contract(contract, raw)
     except ContractError as exc:
         raise GateError(f"task run metadata fails {contract}: {exc}") from exc
-    task = show["task"]
     if raw.get("task_id") != task.get("id"):
         raise GateError("task result is bound to a different task")
     expected_profiles = {
@@ -131,14 +135,31 @@ def _metadata(show: dict[str, Any], contract: str) -> dict[str, Any]:
         "reviewer-secperf": "cursor-reviewer",
         "final-reviewer": "final-reviewer",
     }
-    durable_profile = runs[-1].get("profile")
+    durable_profile = run.get("profile")
     expected_profile = expected_profiles.get(str(raw.get("role")))
-    if (
-        durable_profile is not None
-        and expected_profile is not None
-        and durable_profile != expected_profile
-    ):
+    if expected_profile is None or durable_profile != expected_profile:
         raise GateError("worker profile conflicts with task result role")
+    expected_task_bindings = {
+        "builder-grok": ("cursor-fixer", {"workflow-contract", "builder-grok"}),
+        "reviewer-general": (
+            "reviewer-general",
+            {"workflow-contract", "reviewer-general"},
+        ),
+        "reviewer-secperf": (
+            "cursor-reviewer",
+            {"workflow-contract", "reviewer-secperf"},
+        ),
+        "final-reviewer": (
+            "final-reviewer",
+            {"workflow-contract", "final-reviewer"},
+        ),
+    }
+    expected_assignee, expected_skills = expected_task_bindings[str(raw["role"])]
+    task_skills = task.get("skills")
+    if task.get("assignee") != expected_assignee or not isinstance(task_skills, list):
+        raise GateError("task role binding is malformed")
+    if set(task_skills) != expected_skills or len(task_skills) != len(expected_skills):
+        raise GateError("task skill binding conflicts with task result role")
     execution_binding = _task_execution_binding(task)
     if (
         execution_binding is not None
@@ -177,7 +198,7 @@ def _metadata(show: dict[str, Any], contract: str) -> dict[str, Any]:
             )
         model_sources: tuple[tuple[str, dict[str, Any]], ...] = ()
     else:
-        model_sources = (("task", task), ("run", runs[-1]))
+        model_sources = (("task", task), ("run", run))
     for source_name, source in model_sources:
         if source_name == "task":
             observed_model = source.get("model_override", source.get("model"))
@@ -252,6 +273,8 @@ def _builder_result(
         raise GateError("builder result has the wrong build round")
     if result.get("github_ci_green") is not True:
         raise GateError("builder result does not attest green GitHub CI")
+    if result.get("pr_number") == 1515:
+        raise GateError("builder reused historically red PR #1515")
     if result.get("head_sha") != result.get("ci_head_sha"):
         raise GateError("builder result CI is not bound to its exact head")
     return result
@@ -288,7 +311,6 @@ def _review_result(
     expected_round: int,
     expected_pr: int,
     expected_head: str,
-    require_approval: bool,
 ) -> dict[str, Any]:
     result = _metadata(show, "review-result")
     _assert_common(result, route)
@@ -302,14 +324,8 @@ def _review_result(
     if result.get("reviewed_head_sha") != expected_head:
         raise GateError("review result is bound to a different head")
     outcome = result.get("outcome")
-    if outcome not in {"APPROVE", "REQUEST_CHANGES"}:
-        raise GateError(f"review did not complete semantically: {outcome}")
     if outcome == "REQUEST_CHANGES" and not result.get("blocking_findings"):
         raise GateError("REQUEST_CHANGES review has no blocking findings")
-    if require_approval and (
-        outcome != "APPROVE" or bool(result.get("blocking_findings"))
-    ):
-        raise GateError("same-head review still has blocking findings")
     return result
 
 
@@ -334,7 +350,7 @@ def _final_result(
 
 
 def _is_done(show: dict[str, Any]) -> bool:
-    return show["task"].get("status") in {"done", "archived"}
+    return show["task"].get("status") == "done"
 
 
 def _initial_gate_is_blocked(show: dict[str, Any]) -> bool:
@@ -482,6 +498,98 @@ def _notify_validated_final(board: str, result: dict[str, Any], runner: Runner) 
         raise GateError("validated final disposition completion failed")
 
 
+def _notify_held_result(board: str, result: dict[str, Any], runner: Runner) -> str:
+    outcome = str(result["outcome"])
+    task_id = str(result["task_id"])
+    binding = {
+        "case_id": result["case_id"],
+        "outcome": outcome,
+        "route_id": result["route_id"],
+        "source_task_id": task_id,
+    }
+    body = (
+        json.dumps(binding, sort_keys=True)
+        + "\nPip v2 stopped at a durable non-success outcome. Human attention is required; "
+        "no downstream worker was released."
+    )
+    created = runner(
+        [
+            "hermes",
+            "kanban",
+            "--board",
+            board,
+            "create",
+            f"Pip v2 held: {outcome} for {result['case_id']}",
+            "--body",
+            body,
+            "--idempotency-key",
+            f"pip-v2-held:{result['route_id']}:{task_id}:{outcome}",
+            "--initial-status",
+            "blocked",
+            "--created-by",
+            "pip-v2-router",
+            "--max-retries",
+            "1",
+            "--json",
+        ]
+    )
+    if created.returncode != 0:
+        raise GateError("held disposition staging failed")
+    try:
+        payload = json.loads(created.stdout)
+        disposition_id = payload["id"]
+        status = payload["status"]
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise GateError("held disposition returned malformed task data") from exc
+    if not isinstance(disposition_id, str) or not disposition_id.startswith("t_"):
+        raise GateError("held disposition returned an invalid task id")
+    if payload.get("body") != body:
+        raise GateError("held disposition metadata did not match")
+    if status == "done":
+        return disposition_id
+    if status != "blocked":
+        raise GateError("held disposition task has an unsafe status")
+    subscribed = runner(
+        [
+            "hermes",
+            "kanban",
+            "--board",
+            board,
+            "notify-subscribe",
+            disposition_id,
+            "--platform",
+            "telegram",
+            "--chat-id",
+            "483923125",
+            "--chat-type",
+            "dm",
+            "--user-id",
+            "483923125",
+            "--notifier-profile",
+            "default",
+        ]
+    )
+    if subscribed.returncode != 0:
+        raise GateError("held disposition notification subscription failed")
+    completed = runner(
+        [
+            "hermes",
+            "kanban",
+            "--board",
+            board,
+            "complete",
+            disposition_id,
+            "--result",
+            f"{outcome}: human attention required",
+            "--metadata",
+            json.dumps(result, sort_keys=True, separators=(",", ":")),
+        ]
+    )
+    if completed.returncode != 0:
+        raise GateError("held disposition completion failed")
+    return disposition_id
+
+
 def advance_gates(
     route: dict[str, Any],
     task_ids: dict[str, str],
@@ -514,6 +622,9 @@ def advance_gates(
             "waiting_for": "replanning",
             "replan_task": replanning["replan"],
         }
+    if first_outcome.get("outcome") != "REVIEW_READY":
+        held_id = _notify_held_result(board, first_outcome, runner)
+        return {"advanced": advanced, "waiting_for": "human-held", "held_task": held_id}
     first_build = _builder_result(build, route, expected_round=1)
     pending_first_review = any(
         not _is_done(shows[f"gate:{key}"])
@@ -541,7 +652,6 @@ def advance_gates(
         expected_round=1,
         expected_pr=first_build["pr_number"],
         expected_head=first_build["head_sha"],
-        require_approval=False,
     )
     first_secperf = _review_result(
         first_reviews[1],
@@ -550,32 +660,15 @@ def advance_gates(
         expected_round=1,
         expected_pr=first_build["pr_number"],
         expected_head=first_build["head_sha"],
-        require_approval=False,
     )
-    if _release_gate(board, shows["gate:remediate"], runner, before_activate):
-        advanced.append("remediate")
-
-    remediation = shows["remediate"]
-    if not _is_done(remediation):
-        return {"advanced": advanced, "waiting_for": "remediation"}
-    remediation_outcome = _metadata(remediation, "builder-result")
-    _assert_common(remediation_outcome, route)
-    _assert_expected_model(remediation_outcome, "builder-grok")
-    if remediation_outcome.get("outcome") == "RETURN_TO_PLANNING":
-        replanning = _route_builder_replan(
-            route,
-            board=board,
-            runner=runner,
-            before_activate=before_activate,
-        )
-        return {
-            "advanced": advanced,
-            "waiting_for": "replanning",
-            "replan_task": replanning["replan"],
-        }
-    remediated = _builder_result(remediation, route, expected_round=2)
-    if remediated["pr_number"] != first_build["pr_number"]:
-        raise GateError("remediation changed the authorized PR")
+    for review in (first_general, first_secperf):
+        if review["outcome"] not in {"APPROVE", "REQUEST_CHANGES"}:
+            held_id = _notify_held_result(board, review, runner)
+            return {
+                "advanced": advanced,
+                "waiting_for": "human-held",
+                "held_task": held_id,
+            }
     general_findings = _index_unique(
         first_general["blocking_findings"], "id", label="general finding"
     )
@@ -589,16 +682,49 @@ def advance_gates(
         "reviewer-secperf": set(secperf_findings),
     }
     required_findings = set().union(*findings_by_role.values())
-    resolutions = _index_unique(
-        remediated["finding_resolutions"], "finding_id", label="resolution"
-    )
-    if set(resolutions) != required_findings:
-        raise GateError("remediation does not resolve the exact round-1 finding set")
-    if any(
-        resolution["resolved_head_sha"] != remediated["head_sha"]
-        for resolution in resolutions.values()
-    ):
-        raise GateError("finding resolution is bound to a different remediation head")
+    if required_findings:
+        if _release_gate(board, shows["gate:remediate"], runner, before_activate):
+            advanced.append("remediate")
+        remediation = shows["remediate"]
+        if not _is_done(remediation):
+            return {"advanced": advanced, "waiting_for": "remediation"}
+        remediation_outcome = _metadata(remediation, "builder-result")
+        _assert_common(remediation_outcome, route)
+        _assert_expected_model(remediation_outcome, "builder-grok")
+        if remediation_outcome.get("outcome") == "RETURN_TO_PLANNING":
+            replanning = _route_builder_replan(
+                route,
+                board=board,
+                runner=runner,
+                before_activate=before_activate,
+            )
+            return {
+                "advanced": advanced,
+                "waiting_for": "replanning",
+                "replan_task": replanning["replan"],
+            }
+        if remediation_outcome.get("outcome") != "REVIEW_READY":
+            held_id = _notify_held_result(board, remediation_outcome, runner)
+            return {
+                "advanced": advanced,
+                "waiting_for": "human-held",
+                "held_task": held_id,
+            }
+        remediated = _builder_result(remediation, route, expected_round=2)
+        if remediated["pr_number"] != first_build["pr_number"]:
+            raise GateError("remediation changed the authorized PR")
+        resolutions = _index_unique(
+            remediated["finding_resolutions"], "finding_id", label="resolution"
+        )
+        if set(resolutions) != required_findings:
+            raise GateError("remediation does not resolve the exact round-1 finding set")
+        if any(
+            resolution["resolved_head_sha"] != remediated["head_sha"]
+            for resolution in resolutions.values()
+        ):
+            raise GateError("finding resolution is bound to a different remediation head")
+    else:
+        remediated = first_build
     pending_second_review = any(
         not _is_done(shows[f"gate:{key}"])
         for key in ("review-general-2", "review-secperf-2")
@@ -646,8 +772,14 @@ def advance_gates(
             expected_round=2,
             expected_pr=remediated["pr_number"],
             expected_head=remediated["head_sha"],
-            require_approval=True,
         )
+        if second_result["outcome"] != "APPROVE" or second_result["blocking_findings"]:
+            held_id = _notify_held_result(board, second_result, runner)
+            return {
+                "advanced": advanced,
+                "waiting_for": "human-held",
+                "held_task": held_id,
+            }
         second_results[role] = second_result
         confirmations = _index_unique(
             second_result["finding_confirmations"],

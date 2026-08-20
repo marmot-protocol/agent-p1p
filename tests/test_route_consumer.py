@@ -14,6 +14,7 @@ from pip_agent.decision_reconciler import (
 )
 from pip_agent.route_consumer import (
     RouteConsumerError,
+    _archive_canary_tasks,
     _validate_live_route,
     consume_route,
     render_route_consumer_service,
@@ -109,6 +110,43 @@ def test_stop_archives_only_nonterminal_pip_v2_canary_tasks() -> None:
     assert "t-done-gate" in commands[2]
     assert "t-final-disposition" in commands[2]
     assert "t-v1" not in commands[2]
+
+
+def test_dispatch_upgrade_archives_only_superseded_same_route_dag() -> None:
+    commands: list[list[str]] = []
+
+    def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        if "list" in command:
+            output = json.dumps(
+                [
+                    {
+                        "id": "t-v3",
+                        "created_by": "pip-v2-router",
+                        "body": '{"case_id": "mdk#1240", "route_id": "route-a", "dag_revision": 3}',
+                        "status": "done",
+                    },
+                    {
+                        "id": "t-v4",
+                        "created_by": "pip-v2-router",
+                        "body": '{"case_id": "mdk#1240", "route_id": "route-a", "dag_revision": 4}',
+                        "status": "blocked",
+                    },
+                ]
+            )
+        else:
+            output = ""
+        return subprocess.CompletedProcess(command, 0, output, "")
+
+    archived = _archive_canary_tasks(
+        "pip-mdk",
+        runner,
+        preserve_route_id="route-a",
+        preserve_dag_revision=4,
+    )
+
+    assert archived == ["t-v3"]
+    assert commands[-1][-1] == "t-v3"
 
 
 def test_live_route_revalidation_allows_base_change_before_dispatch(

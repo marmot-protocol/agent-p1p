@@ -19,7 +19,7 @@ REPOSITORY = "marmot-protocol/mdk"
 ISSUE_NUMBER = 1240
 ISSUE_URL = "https://github.com/marmot-protocol/mdk/issues/1240"
 ACTIVE_ACTIONS = {"dispatch_builder", "replan"}
-DAG_REVISION = 3
+DAG_REVISION = 4
 
 
 def _task_idempotency_key(route_id: str, key: str) -> str:
@@ -95,6 +95,7 @@ def _task_body(
             "planned_base_sha",
         )
     }
+    evidence["dag_revision"] = DAG_REVISION
     for key in (
         "decision",
         "planner_outcome",
@@ -230,7 +231,7 @@ def builder_dag(
                 execution_provider="openai-codex",
             ),
             assignee="reviewer-general",
-            parents=("remediate",),
+            parents=(),
             skills=("workflow-contract", "reviewer-general"),
             max_runtime="2h",
             model="gpt-5.6-sol",
@@ -249,7 +250,7 @@ def builder_dag(
                 execution_provider="cursor",
             ),
             assignee="cursor-reviewer",
-            parents=("remediate",),
+            parents=(),
             skills=("workflow-contract", "reviewer-secperf"),
             max_runtime="2h",
         ),

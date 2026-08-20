@@ -96,8 +96,8 @@ def test_builder_route_creates_v1_style_review_dag() -> None:
         "review-general-1",
         "review-secperf-1",
     )
-    assert by_key["review-general-2"].parents == ("remediate",)
-    assert by_key["review-secperf-2"].parents == ("remediate",)
+    assert by_key["review-general-2"].parents == ()
+    assert by_key["review-secperf-2"].parents == ()
     assert by_key["final-review"].parents == (
         "review-general-2",
         "review-secperf-2",
@@ -145,16 +145,16 @@ def test_builder_dag_binds_exact_installed_skills_commit() -> None:
 def test_dag_upgrade_revisions_builder_after_historical_red_ci() -> None:
     route_id = str(_active_route()["route_id"])
     assert kanban_router._task_idempotency_key(route_id, "build") == (
-        f"pip-v2:{route_id}:dag-v3:build"
+        f"pip-v2:{route_id}:dag-v4:build"
     )
     assert kanban_router._task_idempotency_key(route_id, "review-general-1") == (
-        f"pip-v2:{route_id}:dag-v3:review-general-1"
+        f"pip-v2:{route_id}:dag-v4:review-general-1"
     )
     assert kanban_router._gate_idempotency_key(route_id, "build") == (
-        f"pip-v2:{route_id}:gate:dag-v3:build"
+        f"pip-v2:{route_id}:gate:dag-v4:build"
     )
     assert kanban_router._gate_idempotency_key(route_id, "review-general-1") == (
-        f"pip-v2:{route_id}:gate:dag-v3:review-general-1"
+        f"pip-v2:{route_id}:gate:dag-v4:review-general-1"
     )
 
 
@@ -326,7 +326,7 @@ def test_partial_dag_failure_never_activates_builder() -> None:
         route_once(_active_route(), runner=runner)
 
     assert commands[0][commands[0].index("--idempotency-key") + 1].endswith(
-        ":gate:dag-v3:build"
+        ":gate:dag-v4:build"
     )
     assert not any("complete" in command for command in commands)
 

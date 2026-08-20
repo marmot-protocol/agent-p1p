@@ -111,6 +111,51 @@ def _assert_no_effective_changes_request(review_nodes: Any) -> None:
         raise GitHubGateError("an undismissed GitHub changes request remains")
 
 
+def _all_check_runs(commit_sha: str, runner: Runner) -> list[Any]:
+    collected: list[Any] = []
+    expected_total: int | None = None
+    for page_number in range(1, 101):
+        payload = _json(
+            [
+                "gh",
+                "api",
+                f"repos/{REPOSITORY}/commits/{commit_sha}/check-runs?per_page=100&filter=all&page={page_number}",
+                "-H",
+                "Accept: application/vnd.github+json",
+            ],
+            runner,
+        )
+        runs = payload.get("check_runs") if isinstance(payload, Mapping) else None
+        total = payload.get("total_count") if isinstance(payload, Mapping) else None
+        if not isinstance(runs, list) or len(runs) > 100 or type(total) is not int:
+            raise GitHubGateError("CI check-run evidence is malformed")
+        if expected_total is None:
+            expected_total = total
+        elif total != expected_total:
+            raise GitHubGateError("CI check-run count changed during pagination")
+        collected.extend(runs)
+        if len(collected) == expected_total:
+            return collected
+        if not runs or len(collected) > expected_total:
+            raise GitHubGateError("CI check-run evidence is incomplete")
+    raise GitHubGateError("CI check-run evidence exceeded the pagination bound")
+
+
+def _check_run_is_acceptable(run: Any, commit_sha: str) -> bool:
+    if (
+        not isinstance(run, Mapping)
+        or run.get("head_sha") != commit_sha
+        or run.get("status") != "completed"
+        or not isinstance(run.get("name"), str)
+        or not run.get("name")
+    ):
+        return False
+    conclusion = run.get("conclusion")
+    if conclusion == "success":
+        return True
+    return conclusion == "skipped" and run.get("name") in ALLOWED_SKIPPED_CHECKS
+
+
 def fetch_live_final_evidence(
     pr_number: int,
     head_sha: str,
@@ -228,70 +273,19 @@ query($owner:String!,$name:String!,$number:Int!){
     if head_sha not in commit_shas:
         raise GitHubGateError("PR commit history omits the current head")
 
-    for commit_sha in commit_shas:
-        history = _json(
-            [
-                "gh",
-                "api",
-                f"repos/{REPOSITORY}/commits/{commit_sha}/check-runs?per_page=100&filter=all",
-                "-H",
-                "Accept: application/vnd.github+json",
-            ],
-            runner,
-        )
-        history_runs = (
-            history.get("check_runs") if isinstance(history, Mapping) else None
-        )
-        history_total = (
-            history.get("total_count") if isinstance(history, Mapping) else None
-        )
-        if (
-            not isinstance(history_runs, list)
-            or type(history_total) is not int
-            or history_total != len(history_runs)
-        ):
-            raise GitHubGateError("historical CI evidence is incomplete")
+    check_runs_by_commit = {
+        commit_sha: _all_check_runs(commit_sha, runner) for commit_sha in commit_shas
+    }
+    for commit_sha, history_runs in check_runs_by_commit.items():
         if any(
-            isinstance(run, Mapping)
-            and run.get("conclusion")
-            in {"failure", "timed_out", "action_required", "startup_failure"}
-            for run in history_runs
+            not _check_run_is_acceptable(run, commit_sha) for run in history_runs
         ):
-            raise GitHubGateError("PR had red CI at an earlier point")
+            raise GitHubGateError("PR had incomplete, skipped, or red CI at an earlier point")
 
-    checks = _json(
-        [
-            "gh",
-            "api",
-            f"repos/{REPOSITORY}/commits/{head_sha}/check-runs?per_page=100&filter=all",
-            "-H",
-            "Accept: application/vnd.github+json",
-        ],
-        runner,
-    )
-    runs = checks.get("check_runs") if isinstance(checks, Mapping) else None
-    total = checks.get("total_count") if isinstance(checks, Mapping) else None
-    if (
-        not isinstance(runs, list)
-        or type(total) is not int
-        or total != len(runs)
-        or not runs
-    ):
+    runs = check_runs_by_commit[head_sha]
+    if not runs:
         raise GitHubGateError("CI check-run evidence is hollow or incomplete")
-
-    def check_is_acceptable(run: Any) -> bool:
-        if (
-            not isinstance(run, Mapping)
-            or run.get("head_sha") != head_sha
-            or run.get("status") != "completed"
-        ):
-            return False
-        conclusion = run.get("conclusion")
-        if conclusion == "success":
-            return True
-        return conclusion == "skipped" and run.get("name") in ALLOWED_SKIPPED_CHECKS
-
-    if any(not check_is_acceptable(run) for run in runs):
+    if any(not _check_run_is_acceptable(run, head_sha) for run in runs):
         raise GitHubGateError("exact-head CI contains incomplete or non-green checks")
 
     status_pages: list[list[Any]] = []
