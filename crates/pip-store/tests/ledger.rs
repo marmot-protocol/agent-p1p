@@ -105,6 +105,34 @@ fn case_event_projection_and_outbox_are_one_transaction() {
 }
 
 #[test]
+fn operator_status_separates_pending_leased_and_delivered_work() {
+    let (_directory, mut store) = open();
+    store.create_case(&new_case()).unwrap();
+    store
+        .claim_effect("controller-1", 100, 30)
+        .unwrap()
+        .unwrap();
+
+    let status = store.status(110).unwrap();
+    assert_eq!(status.schema_version, 1);
+    assert_eq!(status.cases.len(), 1);
+    assert_eq!(status.cases[0].case_key, "repo:984321#1240@1");
+    assert_eq!(status.events, 1);
+    assert_eq!(status.outbox_total, 1);
+    assert_eq!(status.outbox_pending, 1);
+    assert_eq!(status.outbox_leased, 1);
+    assert_eq!(status.outbox_delivered, 0);
+
+    store
+        .acknowledge_effect("effect-planner-1", "controller-1", 111)
+        .unwrap();
+    let status = store.status(112).unwrap();
+    assert_eq!(status.outbox_pending, 0);
+    assert_eq!(status.outbox_leased, 0);
+    assert_eq!(status.outbox_delivered, 1);
+}
+
+#[test]
 fn crash_injection_rolls_back_every_transition_boundary() {
     for fault in [
         FaultPoint::AfterEvent,

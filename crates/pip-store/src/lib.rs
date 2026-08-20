@@ -258,7 +258,7 @@ pub enum ApplyResult {
     Replayed,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct StoredCase {
     pub case_key: String,
     pub state: String,
@@ -268,6 +268,21 @@ pub struct StoredCase {
     pub plan_version: u32,
     pub pr_number: Option<u64>,
     pub head_sha: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct LedgerStatus {
+    pub schema_version: u32,
+    pub cases: Vec<StoredCase>,
+    pub events: u64,
+    pub runs: u64,
+    pub evidence: u64,
+    pub findings: u64,
+    pub outbox_total: u64,
+    pub outbox_pending: u64,
+    pub outbox_leased: u64,
+    pub outbox_delivered: u64,
+    pub task_projections: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -691,6 +706,56 @@ impl Store {
 
     pub fn task_projection_count(&self) -> Result<u64> {
         count(&self.connection, "task_projections")
+    }
+
+    pub fn status(&self, now: u64) -> Result<LedgerStatus> {
+        let mut statement = self.connection.prepare(
+            "SELECT case_key, state, state_revision, policy_revision, remediation_round,
+                    plan_version, pr_number, head_sha
+             FROM cases ORDER BY repository_id, issue_number, workflow_version",
+        )?;
+        let cases = statement
+            .query_map([], |row| {
+                let state_revision: i64 = row.get(2)?;
+                let policy_revision: i64 = row.get(3)?;
+                let remediation_round: i64 = row.get(4)?;
+                let plan_version: i64 = row.get(5)?;
+                let pr_number: Option<i64> = row.get(6)?;
+                Ok(StoredCase {
+                    case_key: row.get(0)?,
+                    state: row.get(1)?,
+                    state_revision: unsigned(state_revision),
+                    policy_revision: unsigned(policy_revision),
+                    remediation_round: u32::try_from(remediation_round).unwrap_or_default(),
+                    plan_version: u32::try_from(plan_version).unwrap_or_default(),
+                    pr_number: pr_number.map(unsigned),
+                    head_sha: row.get(7)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let now = sql_u64(now)?;
+        let (pending, leased, delivered): (i64, i64, i64) = self.connection.query_row(
+            "SELECT
+                COALESCE(SUM(CASE WHEN delivered_at IS NULL THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN delivered_at IS NULL AND lease_until >= ?1 THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN delivered_at IS NOT NULL THEN 1 ELSE 0 END), 0)
+             FROM outbox",
+            [now],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        Ok(LedgerStatus {
+            schema_version: self.schema_version()?,
+            cases,
+            events: self.event_count()?,
+            runs: self.run_count()?,
+            evidence: self.evidence_count()?,
+            findings: self.finding_count()?,
+            outbox_total: self.outbox_count()?,
+            outbox_pending: unsigned(pending),
+            outbox_leased: unsigned(leased),
+            outbox_delivered: unsigned(delivered),
+            task_projections: self.task_projection_count()?,
+        })
     }
 
     pub fn task_projection(&self, projection_id: &str) -> Result<Option<TaskProjectionInput>> {
