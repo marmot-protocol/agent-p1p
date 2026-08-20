@@ -73,7 +73,7 @@ pub fn ingest_completed_once(
     policy: &RepositoryPolicy,
     hermes_program: &str,
 ) -> Result<ResultCycle, ResultCycleError> {
-    ingest_completed_once_with(store, policy, ProcessRunner, hermes_program)
+    ingest_completed_once_with(store, policy, ProcessRunner::default(), hermes_program)
 }
 
 pub fn ingest_completed_once_with<R: CommandRunner>(

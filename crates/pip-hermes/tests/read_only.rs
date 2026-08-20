@@ -216,7 +216,7 @@ fn projection_comparison_detects_missing_foreign_and_drifted_tasks() {
 
 #[test]
 fn process_runner_enforces_wall_clock_timeout_and_output_bound() {
-    let runner = ProcessRunner;
+    let runner = ProcessRunner::default();
     let timed_out = runner
         .run(&CommandSpec {
             program: "/bin/sh".into(),
@@ -236,4 +236,26 @@ fn process_runner_enforces_wall_clock_timeout_and_output_bound() {
         })
         .unwrap();
     assert!(bounded.stdout.len() <= 65);
+}
+
+#[test]
+fn process_runner_pins_the_requested_hermes_root_and_clears_unrelated_environment() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("hermes");
+    std::fs::create_dir_all(root.join("home")).unwrap();
+    let runner = ProcessRunner::for_hermes_root(&root).unwrap();
+    let output = runner
+        .run(&CommandSpec {
+            program: "/usr/bin/env".into(),
+            args: Vec::new(),
+            timeout: Duration::from_secs(2),
+            max_output_bytes: 16 * 1024,
+        })
+        .unwrap();
+    let environment = String::from_utf8(output.stdout).unwrap();
+    assert!(environment.contains(&format!("HERMES_HOME={}\n", root.display())));
+    assert!(environment.contains(&format!("HERMES_KANBAN_HOME={}\n", root.display())));
+    assert!(environment.contains(&format!("HOME={}/home\n", root.display())));
+    assert!(!environment.contains("CARGO_HOME="));
+    assert!(!environment.contains("GITHUB_TOKEN="));
 }

@@ -1,22 +1,22 @@
 [Unit]
-Description=Pip v2 credential-free direct worker cycle for %i
+Description=Pip v2 dedicated Hermes Kanban dispatcher
 Documentation=https://github.com/marmot-protocol/agent-p1p
 After=network-online.target
 Wants=network-online.target
-ConditionPathIsDirectory=/var/lib/pip-v2/provider-home
+ConditionPathExists=/var/lib/pip-v2/hermes/.pip-v2-root.json
 
 [Service]
-Type=oneshot
+Type=simple
 User=pip-v2-control
 Group=pip-v2-control
-Environment=HOME=/var/lib/pip-v2/provider-home
-Environment=XDG_CONFIG_HOME=/var/lib/pip-v2/provider-home/config
-Environment=XDG_DATA_HOME=/var/lib/pip-v2/provider-home/data
-Environment=XDG_STATE_HOME=/var/lib/pip-v2/provider-home/state
-Environment=XDG_CACHE_HOME=/var/lib/pip-v2/provider-home/cache
+Environment=HOME=/var/lib/pip-v2/hermes/home
+Environment=HERMES_HOME=/var/lib/pip-v2/hermes
+Environment=HERMES_KANBAN_HOME=/var/lib/pip-v2/hermes
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 WorkingDirectory=/var/lib/pip-v2
-ExecStart=/opt/pip-v2/current/bin/pip-control direct-worker-cycle --policy /etc/pip-v2/repositories/%i.json --database /var/lib/pip-v2/ledger.db --cursor cursor-agent --git git --skills-root /opt/pip-v2/current/share/pip-v2/skills --owner pip-v2-direct-worker-%i
+ExecStart=/usr/local/bin/hermes gateway run --no-supervise
+Restart=on-failure
+RestartSec=5s
 UMask=0077
 NoNewPrivileges=yes
 PrivateDevices=yes
@@ -29,8 +29,9 @@ ProtectKernelLogs=yes
 ProtectKernelModules=yes
 ProtectKernelTunables=yes
 ProtectSystem=strict
-ReadWritePaths=/var/lib/pip-v2
-InaccessiblePaths=/var/lib/pip-v2/hermes
+ReadOnlyPaths=/opt/pip-v2/current /var/lib/pip-v2/repositories
+ReadWritePaths=/var/lib/pip-v2/hermes /var/lib/pip-v2/worktrees
+InaccessiblePaths=/var/lib/pip-v2/ledger.db /var/lib/pip-v2/artifacts /var/lib/pip-v2/provider-home
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 RestrictNamespaces=yes
 RestrictRealtime=yes
@@ -42,3 +43,6 @@ CapabilityBoundingSet=
 AmbientCapabilities=
 StandardOutput=journal
 StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

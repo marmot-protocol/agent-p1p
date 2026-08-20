@@ -2,8 +2,13 @@
 
 #![forbid(unsafe_code)]
 
+mod bootstrap;
 mod gate;
 mod projection;
+
+pub use bootstrap::{
+    BootstrapError, BootstrapOutcome, HermesBootstrap, ProfileBootstrapSpec, RuntimeBootstrapSpec,
+};
 
 pub use gate::{
     GateCreateSpec, GateError, GateProjectionResult, GateReleaseResult, HermesGateController,
@@ -12,8 +17,10 @@ pub use gate::{
 pub use projection::{HermesProjector, ProjectionError, ProjectionResult, TaskCreateSpec};
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fmt;
 use std::io::Read;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
@@ -42,19 +49,70 @@ pub trait CommandRunner {
     fn run(&self, spec: &CommandSpec) -> Result<CommandOutput, HermesError>;
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct ProcessRunner;
+#[derive(Clone, Debug)]
+pub struct ProcessRunner {
+    environment: BTreeMap<OsString, OsString>,
+}
+
+impl Default for ProcessRunner {
+    fn default() -> Self {
+        let mut environment = BTreeMap::new();
+        environment.insert(
+            OsString::from("PATH"),
+            std::env::var_os("PATH")
+                .unwrap_or_else(|| OsString::from("/usr/local/bin:/usr/bin:/bin")),
+        );
+        for name in [
+            "HOME",
+            "HERMES_HOME",
+            "HERMES_KANBAN_HOME",
+            "HERMES_KANBAN_BOARD",
+        ] {
+            if let Some(value) = std::env::var_os(name) {
+                environment.insert(OsString::from(name), value);
+            }
+        }
+        Self { environment }
+    }
+}
+
+impl ProcessRunner {
+    pub fn for_hermes_root(root: &Path) -> Result<Self, HermesError> {
+        if !root.is_absolute() || root == Path::new("/") {
+            return Err(HermesError::InvalidConfiguration);
+        }
+        let mut runner = Self::default();
+        runner
+            .environment
+            .insert(OsString::from("HOME"), root.join("home").into_os_string());
+        runner
+            .environment
+            .insert(OsString::from("HERMES_HOME"), root.as_os_str().to_owned());
+        runner.environment.insert(
+            OsString::from("HERMES_KANBAN_HOME"),
+            root.as_os_str().to_owned(),
+        );
+        runner
+            .environment
+            .remove(&OsString::from("HERMES_KANBAN_BOARD"));
+        Ok(runner)
+    }
+}
 
 impl CommandRunner for ProcessRunner {
     fn run(&self, spec: &CommandSpec) -> Result<CommandOutput, HermesError> {
         if spec.program.trim().is_empty() || spec.timeout.is_zero() || spec.max_output_bytes == 0 {
             return Err(HermesError::InvalidConfiguration);
         }
-        let mut child = Command::new(&spec.program)
+        let mut command = Command::new(&spec.program);
+        command
             .args(&spec.args)
+            .env_clear()
+            .envs(&self.environment)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command
             .spawn()
             .map_err(|error| HermesError::Process(error.to_string()))?;
         let stdout = child.stdout.take().ok_or_else(|| {

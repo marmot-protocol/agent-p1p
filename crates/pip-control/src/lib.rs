@@ -18,6 +18,7 @@ mod policy;
 mod release;
 mod results;
 mod reviews;
+mod runtime;
 mod shadow;
 mod takeover;
 mod workspace;
@@ -68,6 +69,7 @@ pub use results::{
 pub use reviews::{
     ReviewPublicationCycle, ReviewPublicationError, ReviewWriter, publish_reviews_once,
 };
+pub use runtime::{RuntimeBootstrapError, bootstrap_hermes_runtime_with};
 pub use shadow::{IntakeSource, ShadowCandidate, ShadowError, ShadowReport, reconcile_read_only};
 pub use takeover::{TakeoverCycle, TakeoverError, reconcile_takeover_once};
 pub use workspace::{GitWorkspacePreparer, WorkspaceError, WorkspacePreparer};

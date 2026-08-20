@@ -24,6 +24,8 @@ fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
     assert!(!policy.merge.autonomous);
     assert_eq!(policy.merge.method, "squash");
     assert_eq!(policy.workflow_policy().unwrap().roles().len(), 5);
+    assert_eq!(policy.roles[0].reasoning_effort.as_deref(), Some("xhigh"));
+    assert_eq!(policy.roles[1].reasoning_effort, None);
     assert_eq!(policy.intake_policy(false).trusted_actor_ids.len(), 3);
     let raw: serde_json::Value = serde_json::from_slice(bytes).unwrap();
     assert!(raw.get("canary_issue").is_none());
@@ -60,6 +62,20 @@ fn policy_rejects_unknown_fields_model_fallback_and_shadow_merge_authority() {
 
     let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
     value["roles"][0]["model"] = serde_json::json!("auto");
+    assert!(matches!(
+        load_repository_policy(&serde_json::to_vec(&value).unwrap()),
+        Err(PolicyError::Invalid)
+    ));
+
+    let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+    value["roles"][0]["reasoning_effort"] = serde_json::Value::Null;
+    assert!(matches!(
+        load_repository_policy(&serde_json::to_vec(&value).unwrap()),
+        Err(PolicyError::Invalid)
+    ));
+
+    let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+    value["roles"][1]["reasoning_effort"] = serde_json::json!("high");
     assert!(matches!(
         load_repository_policy(&serde_json::to_vec(&value).unwrap()),
         Err(PolicyError::Invalid)

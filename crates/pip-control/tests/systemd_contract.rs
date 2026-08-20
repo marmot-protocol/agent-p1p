@@ -55,5 +55,20 @@ fn direct_worker_template_has_provider_state_but_no_controller_credentials() {
     assert!(!service.contains("LoadCredential="));
     assert!(!service.contains("github.token"));
     assert!(!service.contains("--hermes"));
+    assert!(service.contains("InaccessiblePaths=/var/lib/pip-v2/hermes"));
     assert!(timer.contains("OnUnitActiveSec=15s"));
+}
+
+#[test]
+fn hermes_gateway_owns_dispatch_without_controller_credentials_or_ledger_access() {
+    let service = include_str!("../../../packaging/systemd/pip-v2-hermes-gateway.service");
+
+    assert!(service.contains("User=pip-v2-control"));
+    assert!(service.contains("Environment=HERMES_HOME=/var/lib/pip-v2/hermes"));
+    assert!(service.contains("Environment=HERMES_KANBAN_HOME=/var/lib/pip-v2/hermes"));
+    assert!(service.contains("ExecStart=/usr/local/bin/hermes gateway run --no-supervise"));
+    assert!(service.contains("InaccessiblePaths=/var/lib/pip-v2/ledger.db"));
+    assert!(service.contains("ReadWritePaths=/var/lib/pip-v2/hermes /var/lib/pip-v2/worktrees"));
+    assert!(!service.contains("LoadCredential="));
+    assert!(!service.contains("github.token"));
 }

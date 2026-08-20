@@ -35,6 +35,12 @@ fn clean_install_reinstall_and_upgrade_are_content_addressed_and_paused() {
             .is_file()
     );
     assert!(layout.unit_root.join("pip-v2-controller@.timer").is_file());
+    assert!(
+        layout
+            .unit_root
+            .join("pip-v2-hermes-gateway.service")
+            .is_file()
+    );
 
     let replay = install_release(&v1, &public, &layout, None).unwrap();
     assert_eq!(replay.result, InstallResult::Existing);
@@ -73,6 +79,12 @@ fn every_injected_install_failure_restores_the_complete_preinstall_snapshot() {
         );
         assert!(!layout.unit_root.join("pip-v2-controller@.service").exists());
         assert!(!layout.unit_root.join("pip-v2-controller@.timer").exists());
+        assert!(
+            !layout
+                .unit_root
+                .join("pip-v2-hermes-gateway.service")
+                .exists()
+        );
         assert!(
             !layout
                 .unit_root
@@ -285,6 +297,11 @@ fn cohort(parent: &Path, name: &str, binary: &[u8], source: &str, key: &str) -> 
     fs::write(
         root.join("share/pip-v2/systemd/pip-v2-direct-worker@.timer"),
         include_bytes!("../../../packaging/systemd/pip-v2-direct-worker@.timer"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("share/pip-v2/systemd/pip-v2-hermes-gateway.service"),
+        include_bytes!("../../../packaging/systemd/pip-v2-hermes-gateway.service"),
     )
     .unwrap();
     for entry in walk_files(&root) {

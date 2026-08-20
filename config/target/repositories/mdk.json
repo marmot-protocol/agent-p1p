@@ -42,6 +42,7 @@
       "execution": "hermes",
       "provider": "openai-codex",
       "model": "gpt-5.6-sol",
+      "reasoning_effort": "xhigh",
       "max_runtime": "PT30M",
       "priority": 50,
       "skills": ["workflow-contract", "planner"]
@@ -52,6 +53,7 @@
       "execution": "direct",
       "provider": "cursor",
       "model": "composer-2.5",
+      "reasoning_effort": null,
       "max_runtime": "PT45M",
       "priority": 50,
       "skills": ["workflow-contract", "builder-grok"]
@@ -62,6 +64,7 @@
       "execution": "hermes",
       "provider": "openai-codex",
       "model": "gpt-5.6-sol",
+      "reasoning_effort": "high",
       "max_runtime": "PT30M",
       "priority": 50,
       "skills": ["workflow-contract", "reviewer-general"]
@@ -72,6 +75,7 @@
       "execution": "direct",
       "provider": "cursor",
       "model": "claude-opus-4-8-thinking-high",
+      "reasoning_effort": null,
       "max_runtime": "PT30M",
       "priority": 50,
       "skills": ["workflow-contract", "reviewer-secperf"]
@@ -82,6 +86,7 @@
       "execution": "hermes",
       "provider": "openai-codex",
       "model": "gpt-5.6-sol",
+      "reasoning_effort": "xhigh",
       "max_runtime": "PT30M",
       "priority": 50,
       "skills": ["workflow-contract", "final-reviewer"]

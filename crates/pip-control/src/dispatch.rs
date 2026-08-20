@@ -111,7 +111,13 @@ pub fn dispatch_once(
     policy: &RepositoryPolicy,
     context: DispatchCycleContext<'_>,
 ) -> Result<DispatchCycleResult, DispatchCycleError> {
-    dispatch_once_with_workspace(store, policy, ProcessRunner, &GitWorkspacePreparer, context)
+    dispatch_once_with_workspace(
+        store,
+        policy,
+        ProcessRunner::default(),
+        &GitWorkspacePreparer,
+        context,
+    )
 }
 
 pub fn dispatch_once_with<R: CommandRunner + Clone>(

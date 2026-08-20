@@ -81,9 +81,43 @@ pub fn run_cli(arguments: impl IntoIterator<Item = String>) -> Result<Value, Cli
         "shadow-reconcile" => shadow_reconcile(&arguments[1..]),
         "controller-cycle" => controller_cycle(&arguments[1..]),
         "direct-worker-cycle" => direct_worker_cycle(&arguments[1..]),
+        "bootstrap-runtime" => bootstrap_runtime(&arguments[1..]),
         "install-release" => install(&arguments[1..]),
         _ => Err(CliError::InvalidArgument(command.into())),
     }
+}
+
+fn bootstrap_runtime(arguments: &[String]) -> Result<Value, CliError> {
+    let options = options(
+        arguments,
+        &[
+            "--policy",
+            "--hermes-root",
+            "--skills-root",
+            "--auth-source",
+            "--hermes",
+        ],
+        &[],
+    )?;
+    let policy_bytes = read_bounded(Path::new(required(&options, "--policy")?), 1024 * 1024)?;
+    let policy = crate::load_repository_policy(&policy_bytes)
+        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let outcome = crate::bootstrap_hermes_runtime_with(
+        &policy,
+        Path::new(required(&options, "--hermes-root")?),
+        Path::new(required(&options, "--skills-root")?),
+        Path::new(required(&options, "--auth-source")?),
+        required(&options, "--hermes")?,
+        pip_hermes::ProcessRunner::for_hermes_root(Path::new(required(&options, "--hermes-root")?))
+            .map_err(|error| CliError::Reconciliation(error.to_string()))?,
+    )
+    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    Ok(json!({
+        "ok": true,
+        "repository": policy.repository.full_name(),
+        "policy_revision": policy.revision,
+        "runtime": outcome,
+    }))
 }
 
 fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {

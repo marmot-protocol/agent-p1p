@@ -143,6 +143,11 @@ ensure_directory /etc/pip-v2 root root 755
 ensure_directory /etc/pip-v2/repositories root root 755
 ensure_directory /etc/systemd/system root root 755
 ensure_directory /var/lib/pip-v2 pip-v2-control pip-v2-control 700
+ensure_directory /var/lib/pip-v2/repositories pip-v2-control pip-v2-control 700
+ensure_directory /var/lib/pip-v2/worktrees pip-v2-control pip-v2-control 700
+ensure_directory /var/lib/pip-v2/artifacts pip-v2-control pip-v2-control 700
+ensure_directory /var/lib/pip-v2/provider-home pip-v2-control pip-v2-control 700
+ensure_directory /var/lib/pip-v2/hermes pip-v2-control pip-v2-control 700
 
 "$staging/cohort/root/bin/pip-control" install-release \
   --cohort "$staging/cohort" \

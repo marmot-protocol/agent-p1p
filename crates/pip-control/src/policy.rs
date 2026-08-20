@@ -83,9 +83,17 @@ pub struct RoleConfiguration {
     execution: ExecutionConfiguration,
     pub provider: String,
     pub model: String,
+    pub reasoning_effort: Option<String>,
     pub max_runtime: String,
     pub priority: u32,
     pub skills: Vec<String>,
+}
+
+impl RoleConfiguration {
+    #[must_use]
+    pub const fn is_hermes(&self) -> bool {
+        matches!(self.execution, ExecutionConfiguration::Hermes)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -228,6 +236,13 @@ fn validate_policy(policy: &RepositoryPolicy) -> Result<(), PolicyError> {
         && github_actor_ids.iter().all(Option::is_none))
         || (configured_github_actor_ids.len() == github_actor_ids.len()
             && github_actor_ids.iter().all(Option::is_some));
+    let reasoning_bindings_valid = policy.roles.iter().all(|role| match role.execution {
+        ExecutionConfiguration::Hermes => role
+            .reasoning_effort
+            .as_deref()
+            .is_some_and(valid_reasoning_effort),
+        ExecutionConfiguration::Direct => role.reasoning_effort.is_none(),
+    });
     let valid = policy.policy_format == 1
         && policy.revision > 0
         && policy.repository.id > 0
@@ -257,6 +272,7 @@ fn validate_policy(policy: &RepositoryPolicy) -> Result<(), PolicyError> {
         && !(policy.merge.is_shadow() && policy.merge.autonomous)
         && matches!(policy.merge.method.as_str(), "merge" | "squash" | "rebase")
         && policy.max_remediation_rounds > 0
+        && reasoning_bindings_valid
         && ci.len() == policy.required_ci_contexts.len()
         && ci.iter().all(|context| valid_text(context, 256));
     if valid {
@@ -264,6 +280,13 @@ fn validate_policy(policy: &RepositoryPolicy) -> Result<(), PolicyError> {
     } else {
         Err(PolicyError::Invalid)
     }
+}
+
+fn valid_reasoning_effort(value: &str) -> bool {
+    matches!(
+        value,
+        "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+    )
 }
 
 fn valid_absolute_path(value: &str) -> bool {
