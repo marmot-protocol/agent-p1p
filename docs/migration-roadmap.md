@@ -122,6 +122,9 @@ Exit gate:
 
 ## Phase 7: Packaging and lifecycle
 
+**Implementation status:** Complete locally; CI and live-host evidence remain
+separate gates.
+
 Deliverables:
 
 - Reproducible release cohort and signed source-bound manifest.

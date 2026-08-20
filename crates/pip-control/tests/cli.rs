@@ -138,6 +138,30 @@ fn privileged_install_command_requires_verified_digests_and_host_identity() {
     assert!(matches!(error, pip_control::CliError::Usage(_)));
 }
 
+#[test]
+fn derive_public_key_reads_a_private_mode_signing_key() {
+    let directory = tempfile::tempdir().unwrap();
+    let signing_key = directory.path().join("release-signing.key");
+    fs::write(&signing_key, STANDARD.encode([17_u8; 32])).unwrap();
+    fs::set_permissions(&signing_key, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_pip-control"))
+        .args([
+            "derive-public-key",
+            "--signing-key",
+            signing_key.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["ok"], true);
+    assert_eq!(
+        value["public_key"],
+        pip_control::verifying_key(&STANDARD.encode([17_u8; 32])).unwrap()
+    );
+}
+
 fn digest(bytes: &[u8]) -> String {
     let value = Sha256::digest(bytes);
     value.iter().map(|byte| format!("{byte:02x}")).collect()

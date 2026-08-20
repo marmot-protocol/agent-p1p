@@ -8,8 +8,11 @@ Hermes Kanban boards.
 ## Status
 
 The repository is migrating from a Python single-issue prototype to the target
-Rust control plane. The documentation pass and initial compatibility fixtures
-are in place, and the first pure `pip-core` state-machine slice is implemented.
+Rust control plane. Phases 0 through 7 of the migration roadmap are implemented
+locally: the deterministic core, immutable ledger/outbox, bounded adapters,
+worker projection/execution, GitHub write boundary, signed release cohort, and
+transactional systemd lifecycle are present. Phase 8 read-only shadow work is
+in progress. No live MDK intake or dispatch has been authorized.
 
 The Python implementation is useful as a safety prototype and behavioral
 reference, but it is not the target runtime and must not be installed from the
@@ -110,9 +113,9 @@ schemas/                Legacy JSON contracts retained as migration inputs
 manifests/              Legacy role manifests retained as migration inputs
 src/pip_agent/          Legacy Python reference implementation
 tests/                  Legacy behavioral and safety tests
-scripts/                Legacy Python-prototype installer
+scripts/                Rust release/lifecycle tools plus retained legacy installer
 migration/               Language-neutral Python-to-Rust compatibility fixtures
-crates/pip-core/         Pure Rust domain types and deterministic transitions
+crates/                  Rust core, contracts, store, adapters, controller, and CLI
 ```
 
 Canonical skills remain under `skills/`; runtime profile directories must
@@ -134,12 +137,13 @@ Do not run `scripts/install-control-plane.sh` from the current migration branch.
 The legacy installer and runtime remain issue-specific and do not have
 cryptographically bound source provenance.
 
-The initial Rust core is checked with:
+The Rust workspace and disposable systemd lifecycle are checked with:
 
 ```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --locked
+scripts/test-systemd-lifecycle.sh
 ```
 
 ## Non-negotiable invariants

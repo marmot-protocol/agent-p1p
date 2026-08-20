@@ -76,10 +76,22 @@ pub fn run_cli(arguments: impl IntoIterator<Item = String>) -> Result<Value, Cli
         "status" => status(&arguments[1..]),
         "verify-release" => verify(&arguments[1..]),
         "seal-release" => seal(&arguments[1..]),
+        "derive-public-key" => derive_public_key(&arguments[1..]),
         "shadow-reconcile" => shadow_reconcile(&arguments[1..]),
         "install-release" => install(&arguments[1..]),
         _ => Err(CliError::InvalidArgument(command.into())),
     }
+}
+
+fn derive_public_key(arguments: &[String]) -> Result<Value, CliError> {
+    let options = options(arguments, &["--signing-key"], &[])?;
+    let signing_key = read_secret(Path::new(required(&options, "--signing-key")?), 1024)?;
+    let signing_key = std::str::from_utf8(&signing_key)
+        .map_err(|_| CliError::InvalidArgument("--signing-key".into()))?;
+    Ok(json!({
+        "ok": true,
+        "public_key": verifying_key(signing_key.trim())?,
+    }))
 }
 
 fn install(arguments: &[String]) -> Result<Value, CliError> {

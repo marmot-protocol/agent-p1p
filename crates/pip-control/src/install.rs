@@ -146,7 +146,11 @@ pub fn install_host_release(
     expected_binary_sha256: &str,
     options: &HostInstallOptions,
 ) -> Result<InstallOutcome, InstallError> {
-    let mut lifecycle = SystemdLifecycle::new(options.clone(), layout.state_root.join("ledger.db"));
+    let mut lifecycle = SystemdLifecycle::new(
+        options.clone(),
+        layout.state_root.join("ledger.db"),
+        layout.unit_root.join("pip-v2-shadow-reconcile.timer"),
+    );
     install_release_inner(
         cohort,
         public_key,
@@ -306,6 +310,7 @@ impl InstallLifecycle for NoopLifecycle {
 struct SystemdLifecycle {
     options: HostInstallOptions,
     ledger: PathBuf,
+    timer_path: PathBuf,
     prior_enabled: Option<bool>,
     prior_active: Option<bool>,
 }
@@ -313,10 +318,11 @@ struct SystemdLifecycle {
 impl SystemdLifecycle {
     const TIMER: &'static str = "pip-v2-shadow-reconcile.timer";
 
-    fn new(options: HostInstallOptions, ledger: PathBuf) -> Self {
+    fn new(options: HostInstallOptions, ledger: PathBuf, timer_path: PathBuf) -> Self {
         Self {
             options,
             ledger,
+            timer_path,
             prior_enabled: None,
             prior_active: None,
         }
@@ -385,6 +391,11 @@ impl SystemdLifecycle {
 
 impl InstallLifecycle for SystemdLifecycle {
     fn before_mutation(&mut self) -> Result<(), InstallError> {
+        if !self.timer_path.exists() {
+            self.prior_enabled = Some(false);
+            self.prior_active = Some(false);
+            return Ok(());
+        }
         self.prior_enabled = Some(self.query(
             "is-enabled",
             &["enabled", "enabled-runtime"],

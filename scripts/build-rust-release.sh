@@ -52,7 +52,7 @@ trap cleanup EXIT
 
 cargo build --release --locked -p pip-control
 release_root="$temporary/root"
-install -d -m 0555 "$release_root/bin" "$release_root/share/pip-v2"
+install -d -m 0755 "$release_root/bin" "$release_root/share/pip-v2"
 install -m 0555 target/release/pip-control "$release_root/bin/pip-control"
 cp -R skills "$release_root/share/pip-v2/skills"
 cp -R config/target "$release_root/share/pip-v2/config"
@@ -60,6 +60,7 @@ cp -R migration/target-v1 "$release_root/share/pip-v2/contracts"
 cp -R packaging/systemd "$release_root/share/pip-v2/systemd"
 find "$release_root/share" -type d -exec chmod 0555 {} +
 find "$release_root/share" -type f -exec chmod 0444 {} +
+chmod 0555 "$release_root/bin"
 
 "$release_root/bin/pip-control" seal-release \
   --release-root "$release_root" \

@@ -1,10 +1,11 @@
 # Target deployment and rollback runbook
 
-**Status:** Design contract; not an executable production runbook yet
+**Status:** Executable Rust release and lifecycle runbook; production activation remains unauthorized
 
 This runbook defines the evidence and ordering the Rust implementation must
-satisfy. Exact commands will be added only after the Rust packaging and
-disposable-systemd lifecycle harness exist.
+satisfy. The release builder, pinned installer, and disposable-systemd harness
+are executable. A passing harness does not authorize installation on a live
+host or MDK activation.
 
 The legacy `scripts/install-control-plane.sh` is not the target installer.
 
@@ -62,6 +63,56 @@ All gates bind to the exact release commit:
 Passing local tests does not imply these lifecycle gates or live shadow evidence
 passed.
 
+The disposable lifecycle gate is:
+
+```bash
+scripts/test-systemd-lifecycle.sh
+```
+
+It builds three independently signed cohorts from one exact candidate commit,
+then proves clean install, reinstall, upgrade, host-finalization rollback, and
+restart recovery in a privileged systemd container. It asserts that intake,
+dispatch, and the reconciliation timer remain disabled after a fresh install.
+
+## Build and verify commands
+
+Create an offline Ed25519 signing key outside the repository, mode `0600`, and
+derive its public key with a trusted local build:
+
+```bash
+target/release/pip-control derive-public-key \
+  --signing-key /secure/release-signing.key
+```
+
+Store the emitted public key in a separate root-owned file. Build only from a
+clean reviewed checkout:
+
+```bash
+scripts/build-rust-release.sh \
+  --output /staging/pip-v2-release \
+  --version 0.1.0 \
+  --built-at 2026-08-20T12:00:00Z \
+  --builder-identity reviewed-builder \
+  --signing-key /secure/release-signing.key \
+  --public-key /secure/release-public.key
+```
+
+Before privilege escalation, use a trusted `pip-control` binary to verify the
+cohort and retain its JSON output:
+
+```bash
+pip-control verify-release \
+  --release-root /staging/pip-v2-release/root \
+  --manifest /staging/pip-v2-release/release-manifest.json \
+  --signature /staging/pip-v2-release/release-manifest.sig \
+  --public-key /secure/release-public.key
+```
+
+The output includes the signed source commit plus exact manifest and binary
+SHA-256 values. Those two digests are mandatory inputs to the root installer;
+the installer copies the cohort into root-only staging and checks them again
+before it executes the staged binary.
+
 ## Host prerequisites
 
 - Supported Linux/systemd version and architecture.
@@ -105,6 +156,22 @@ outside the release manifest.
     from the presence of a board or label.
 
 Failure after mutation begins invokes rollback.
+
+The reviewed operator invocation is:
+
+```bash
+sudo scripts/install-rust-control-plane.sh \
+  --cohort /staging/pip-v2-release \
+  --public-key /secure/release-public.key \
+  --manifest-sha256 MANIFEST_SHA_FROM_VERIFY_OUTPUT \
+  --binary-sha256 BINARY_SHA_FROM_VERIFY_OUTPUT
+```
+
+The installer serializes with a host lock, validates or creates the isolated
+service identity, refuses unsafe directory state, installs a content-addressed
+release, uses SQLite online backup for rollback, preserves the timer's prior
+enabled/active state on upgrade, and leaves a fresh timer disabled. Its root
+transaction does not enable intake or dispatch.
 
 ## Rollback ordering
 
