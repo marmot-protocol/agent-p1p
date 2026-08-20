@@ -1,0 +1,246 @@
+//! Strict, versioned repository policy loading.
+
+use std::collections::BTreeSet;
+use std::fmt;
+use std::num::{NonZeroU32, NonZeroU64};
+
+use pip_contracts::WorkerRole;
+use pip_controller::{ExecutionKind, RolePolicy, WorkflowPolicy};
+use pip_core::{ActorId, IntakePolicy, PolicyRevision};
+use serde::Deserialize;
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryIdentity {
+    pub id: u64,
+    pub owner: String,
+    pub name: String,
+    pub default_branch: String,
+}
+
+impl RepositoryIdentity {
+    #[must_use]
+    pub fn full_name(&self) -> String {
+        format!("{}/{}", self.owner, self.name)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntakeConfiguration {
+    pub enabled: bool,
+    pub paused: bool,
+    pub label: String,
+    pub trusted_actor_ids: Vec<u64>,
+    pub excluded_issue_numbers: Vec<u64>,
+    pub repository_active_limit: u32,
+    pub global_active_limit: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum MergeModeConfiguration {
+    Shadow,
+    Guarded,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MergeConfiguration {
+    mode: MergeModeConfiguration,
+    pub autonomous: bool,
+}
+
+impl MergeConfiguration {
+    #[must_use]
+    pub const fn is_shadow(&self) -> bool {
+        matches!(self.mode, MergeModeConfiguration::Shadow)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ExecutionConfiguration {
+    Hermes,
+    Direct,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoleConfiguration {
+    pub role: WorkerRole,
+    pub profile: String,
+    execution: ExecutionConfiguration,
+    pub provider: String,
+    pub model: String,
+    pub max_runtime: String,
+    pub priority: u32,
+    pub skills: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryPolicy {
+    pub policy_format: u32,
+    pub revision: u64,
+    pub repository: RepositoryIdentity,
+    pub board: String,
+    pub workflow_version: u32,
+    pub workspace: String,
+    pub branch_prefix: String,
+    pub intake: IntakeConfiguration,
+    pub dispatch_enabled: bool,
+    pub merge: MergeConfiguration,
+    pub max_remediation_rounds: u32,
+    pub required_ci_contexts: Vec<String>,
+    pub roles: Vec<RoleConfiguration>,
+}
+
+impl RepositoryPolicy {
+    pub fn intake_policy(&self, global_paused: bool) -> IntakePolicy {
+        IntakePolicy {
+            revision: PolicyRevision::new(
+                NonZeroU64::new(self.revision).expect("validated policy"),
+            ),
+            intake_enabled: self.intake.enabled,
+            global_paused,
+            repository_paused: self.intake.paused,
+            required_label: self.intake.label.clone(),
+            trusted_actor_ids: self
+                .intake
+                .trusted_actor_ids
+                .iter()
+                .map(|id| ActorId::new(NonZeroU64::new(*id).expect("validated actor")))
+                .collect(),
+            repository_active_limit: NonZeroU32::new(self.intake.repository_active_limit)
+                .expect("validated repository limit"),
+            global_active_limit: NonZeroU32::new(self.intake.global_active_limit)
+                .expect("validated global limit"),
+        }
+    }
+
+    pub fn workflow_policy(&self) -> Result<WorkflowPolicy, PolicyError> {
+        let roles = self
+            .roles
+            .iter()
+            .map(|role| RolePolicy {
+                role: role.role,
+                profile: role.profile.clone(),
+                execution: match role.execution {
+                    ExecutionConfiguration::Hermes => ExecutionKind::Hermes,
+                    ExecutionConfiguration::Direct => ExecutionKind::Direct,
+                },
+                provider: role.provider.clone(),
+                model: role.model.clone(),
+                max_runtime: role.max_runtime.clone(),
+                priority: role.priority,
+                skills: role.skills.clone(),
+            })
+            .collect();
+        WorkflowPolicy::new(&self.board, &self.workspace, roles)
+            .map_err(|error| PolicyError::Dispatch(error.to_string()))
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PolicyError {
+    Malformed(String),
+    Invalid,
+    Dispatch(String),
+}
+
+impl fmt::Display for PolicyError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Malformed(error) => write!(formatter, "malformed repository policy: {error}"),
+            Self::Invalid => formatter.write_str("invalid repository policy"),
+            Self::Dispatch(error) => write!(formatter, "invalid dispatch policy: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for PolicyError {}
+
+pub fn load_repository_policy(bytes: &[u8]) -> Result<RepositoryPolicy, PolicyError> {
+    if bytes.is_empty() || bytes.len() > 1024 * 1024 {
+        return Err(PolicyError::Invalid);
+    }
+    let policy: RepositoryPolicy =
+        serde_json::from_slice(bytes).map_err(|error| PolicyError::Malformed(error.to_string()))?;
+    validate_policy(&policy)?;
+    policy.workflow_policy().map_err(|_| PolicyError::Invalid)?;
+    Ok(policy)
+}
+
+fn validate_policy(policy: &RepositoryPolicy) -> Result<(), PolicyError> {
+    let trusted = policy
+        .intake
+        .trusted_actor_ids
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let exclusions = policy
+        .intake
+        .excluded_issue_numbers
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let ci = policy.required_ci_contexts.iter().collect::<BTreeSet<_>>();
+    let valid = policy.policy_format == 1
+        && policy.revision > 0
+        && policy.repository.id > 0
+        && valid_segment(&policy.repository.owner)
+        && valid_segment(&policy.repository.name)
+        && valid_git_ref(&policy.repository.default_branch)
+        && valid_segment(&policy.board)
+        && policy.workflow_version > 0
+        && !policy.workspace.trim().is_empty()
+        && policy.workspace.starts_with('/')
+        && valid_branch_prefix(&policy.branch_prefix)
+        && valid_segment(&policy.intake.label)
+        && !trusted.is_empty()
+        && trusted.len() == policy.intake.trusted_actor_ids.len()
+        && trusted.iter().all(|id| *id > 0)
+        && exclusions.len() == policy.intake.excluded_issue_numbers.len()
+        && exclusions.iter().all(|issue| *issue > 0)
+        && policy.intake.repository_active_limit > 0
+        && policy.intake.global_active_limit > 0
+        && !(policy.merge.is_shadow() && policy.merge.autonomous)
+        && policy.max_remediation_rounds > 0
+        && ci.len() == policy.required_ci_contexts.len()
+        && ci.iter().all(|context| valid_text(context, 256));
+    if valid {
+        Ok(())
+    } else {
+        Err(PolicyError::Invalid)
+    }
+}
+
+fn valid_segment(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+fn valid_branch_prefix(value: &str) -> bool {
+    value.starts_with("pip/")
+        && value.ends_with('/')
+        && value.trim_end_matches('/').split('/').all(valid_segment)
+}
+
+fn valid_git_ref(value: &str) -> bool {
+    !value.is_empty()
+        && !value.starts_with('/')
+        && !value.ends_with('/')
+        && !value.contains("..")
+        && !value.contains("//")
+        && value.split('/').all(valid_segment)
+}
+
+fn valid_text(value: &str, max: usize) -> bool {
+    !value.trim().is_empty()
+        && value.len() <= max
+        && value.chars().all(|character| !character.is_control())
+}

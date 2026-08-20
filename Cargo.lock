@@ -469,6 +469,9 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
+ "pip-contracts",
+ "pip-controller",
+ "pip-core",
  "pip-store",
  "serde",
  "serde_json",

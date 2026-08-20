@@ -1,0 +1,82 @@
+{
+  "policy_format": 1,
+  "revision": 1,
+  "repository": {
+    "id": 1055628515,
+    "owner": "marmot-protocol",
+    "name": "mdk",
+    "default_branch": "master"
+  },
+  "board": "pip-mdk",
+  "workflow_version": 2,
+  "workspace": "/var/lib/pip-v2/worktrees/mdk",
+  "branch_prefix": "pip/v2/",
+  "intake": {
+    "enabled": false,
+    "paused": true,
+    "label": "pip-ok",
+    "trusted_actor_ids": [202880, 258432291, 292420120],
+    "excluded_issue_numbers": [1366, 1384],
+    "repository_active_limit": 1,
+    "global_active_limit": 1
+  },
+  "dispatch_enabled": false,
+  "merge": {
+    "mode": "shadow",
+    "autonomous": false
+  },
+  "max_remediation_rounds": 3,
+  "required_ci_contexts": [],
+  "roles": [
+    {
+      "role": "planner",
+      "profile": "planner",
+      "execution": "hermes",
+      "provider": "openai-codex",
+      "model": "gpt-5.6-sol",
+      "max_runtime": "PT30M",
+      "priority": 50,
+      "skills": ["workflow-contract", "planner"]
+    },
+    {
+      "role": "builder",
+      "profile": "builder-grok",
+      "execution": "direct",
+      "provider": "cursor",
+      "model": "composer-2.5",
+      "max_runtime": "PT45M",
+      "priority": 50,
+      "skills": ["workflow-contract", "builder-grok"]
+    },
+    {
+      "role": "reviewer-general",
+      "profile": "reviewer-general",
+      "execution": "hermes",
+      "provider": "openai-codex",
+      "model": "gpt-5.6-sol",
+      "max_runtime": "PT30M",
+      "priority": 50,
+      "skills": ["workflow-contract", "reviewer-general"]
+    },
+    {
+      "role": "reviewer-secperf",
+      "profile": "reviewer-secperf",
+      "execution": "direct",
+      "provider": "cursor",
+      "model": "claude-opus-4-8-thinking-high",
+      "max_runtime": "PT30M",
+      "priority": 50,
+      "skills": ["workflow-contract", "reviewer-secperf"]
+    },
+    {
+      "role": "final-reviewer",
+      "profile": "final-reviewer",
+      "execution": "hermes",
+      "provider": "openai-codex",
+      "model": "gpt-5.6-sol",
+      "max_runtime": "PT30M",
+      "priority": 50,
+      "skills": ["workflow-contract", "final-reviewer"]
+    }
+  ]
+}
