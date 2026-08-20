@@ -346,6 +346,7 @@ def test_metadata_accepts_trusted_hermes_completion_envelope() -> None:
 
 def test_metadata_accepts_native_task_model_override_fields() -> None:
     result = _results()["review-general-1"]
+    expected = copy.deepcopy(result)
     show = {
         "task": {
             "id": "t-general-1",
@@ -357,13 +358,14 @@ def test_metadata_accepts_native_task_model_override_fields() -> None:
     }
     _trust_show_envelope(show, result)
 
-    assert kanban_gate._metadata(show, "review-result") == result
+    assert kanban_gate._metadata(show, "review-result") == expected
 
 
 def test_metadata_accepts_direct_cursor_model_bound_in_task_body() -> None:
     result = _results()["build"]
     result["requested_model"] = "cursor/composer-2.5"
     result["actual_model"] = "cursor/composer-2.5"
+    expected = copy.deepcopy(result)
     binding = {
         "execution_mode": "direct-cursor",
         "execution_model": "composer-2.5",
@@ -381,7 +383,7 @@ def test_metadata_accepts_direct_cursor_model_bound_in_task_body() -> None:
     }
     _trust_show_envelope(show, result)
 
-    assert kanban_gate._metadata(show, "builder-result") == result
+    assert kanban_gate._metadata(show, "builder-result") == expected
 
 
 def test_metadata_rejects_skills_commit_conflicting_with_task_binding() -> None:

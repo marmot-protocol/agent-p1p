@@ -337,6 +337,7 @@ def _activation_gate_command(
             {
                 "activation_gate": key,
                 "case_id": "mdk#1240",
+                "dag_revision": DAG_REVISION,
                 "route_id": route_id,
             },
             sort_keys=True,

@@ -19,6 +19,7 @@ from pip_agent.route_consumer import (
     consume_route,
     render_route_consumer_service,
 )
+from pip_agent.kanban_router import canonical_route_id
 
 
 def test_passive_route_does_not_touch_kanban() -> None:
@@ -147,6 +148,77 @@ def test_dispatch_upgrade_archives_only_superseded_same_route_dag() -> None:
 
     assert archived == ["t-v3"]
     assert commands[-1][-1] == "t-v3"
+
+
+def test_dispatch_route_quiesces_superseded_dag_before_materializing_current(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    route = {
+        "ok": True,
+        "case_id": "mdk#1240",
+        "repository": "marmot-protocol/mdk",
+        "issue_number": 1240,
+        "issue_url": "https://github.com/marmot-protocol/mdk/issues/1240",
+        "action": "dispatch_builder",
+    }
+    route["route_id"] = canonical_route_id(route)
+    commands: list[list[str]] = []
+    routed_after_cleanup: list[bool] = []
+
+    def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        if "list" in command:
+            output = json.dumps(
+                [
+                    {
+                        "id": "t-v3",
+                        "created_by": "pip-v2-router",
+                        "body": json.dumps(
+                            {
+                                "case_id": "mdk#1240",
+                                "route_id": route["route_id"],
+                                "dag_revision": 3,
+                            }
+                        ),
+                        "status": "done",
+                    },
+                    {
+                        "id": "t-v4",
+                        "created_by": "pip-v2-router",
+                        "body": json.dumps(
+                            {
+                                "case_id": "mdk#1240",
+                                "route_id": route["route_id"],
+                                "dag_revision": 4,
+                            }
+                        ),
+                        "status": "blocked",
+                    },
+                ]
+            )
+        else:
+            output = ""
+        return subprocess.CompletedProcess(command, 0, output, "")
+
+    def fake_route_once(*args, **kwargs):
+        routed_after_cleanup.append(any("archive" in command for command in commands))
+        return {"build": "t-build"}
+
+    monkeypatch.setattr("pip_agent.route_consumer.route_once", fake_route_once)
+
+    result = consume_route(
+        route,
+        board="pip-mdk",
+        runner=runner,
+        live_validator=lambda _route: None,
+        gate_advancer=lambda *args, **kwargs: {"status": "waiting"},
+    )
+
+    assert result["tasks"] == {"build": "t-build"}
+    assert routed_after_cleanup == [True]
+    archive = next(command for command in commands if "archive" in command)
+    assert archive[-1] == "t-v3"
+    assert "t-v4" not in archive
 
 
 def test_live_route_revalidation_allows_base_change_before_dispatch(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import signal
 import stat
 import subprocess
@@ -18,7 +19,13 @@ from .github_gate import (
     validate_live_implementation_base,
 )
 from .kanban_gate import advance_gates
-from .kanban_router import RouteError, canonical_route_id, route_once, validate_route
+from .kanban_router import (
+    DAG_REVISION,
+    RouteError,
+    canonical_route_id,
+    route_once,
+    validate_route,
+)
 
 MAX_ROUTE_BYTES = 65_536
 PASSIVE_ACTIONS = {"wait", "stop", "continue", "request_explicit_command"}
@@ -254,9 +261,37 @@ def _archive_canary_tasks(
     terminator: Callable[[int], None] = _terminate_worker,
     *,
     preserve_route_id: str | None = None,
+    preserve_dag_revision: int | None = None,
+    before_archive: Callable[[], None] | None = None,
 ) -> list[str]:
+    if preserve_dag_revision is not None and (
+        preserve_route_id is None
+        or type(preserve_dag_revision) is not int
+        or preserve_dag_revision < 1
+    ):
+        raise RouteConsumerError(
+            "preserved DAG revision requires a route and positive integer revision"
+        )
     tasks = _list_canary_tasks(board, runner)
     terminal = {"archived"}
+
+    def preserved(body: str) -> bool:
+        if preserve_route_id is None:
+            return False
+        route = re.search(
+            rf'"route_id"\s*:\s*{re.escape(json.dumps(preserve_route_id))}', body
+        )
+        if route is None:
+            return False
+        if preserve_dag_revision is None:
+            return True
+        return (
+            re.search(
+                rf'"dag_revision"\s*:\s*{preserve_dag_revision}(?![0-9])', body
+            )
+            is not None
+        )
+
     task_ids = [
         task["id"]
         for task in tasks
@@ -264,15 +299,14 @@ def _archive_canary_tasks(
         and task.get("created_by") == "pip-v2-router"
         and isinstance(task.get("body"), str)
         and '"case_id": "mdk#1240"' in task["body"]
-        and (
-            preserve_route_id is None
-            or f'"route_id": "{preserve_route_id}"' not in task["body"]
-        )
+        and not preserved(task["body"])
         and task.get("status") not in terminal
         and isinstance(task.get("id"), str)
     ]
     if not task_ids:
         return []
+    if before_archive is not None:
+        before_archive()
     for task in tasks:
         if task.get("id") in task_ids and task.get("status") == "running":
             pid = _worker_pid(board, task["id"], runner)
@@ -405,6 +439,22 @@ def consume_route(
             terminator,
             preserve_route_id=str(route.get("route_id")),
         )
+    if action == "dispatch_builder" and isinstance(route.get("route_id"), str):
+        try:
+            route_id = validate_route(route)
+        except RouteError:
+            # Preserve the existing validation boundary in route_once. Several
+            # isolated tests deliberately use partial routes with a fake router.
+            pass
+        else:
+            _archive_canary_tasks(
+                board,
+                runner,
+                terminator,
+                preserve_route_id=route_id,
+                preserve_dag_revision=DAG_REVISION,
+                before_archive=checked_live,
+            )
     route_kwargs: dict[str, Any] = {
         "board": board,
         "runner": runner,
