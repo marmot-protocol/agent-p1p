@@ -101,6 +101,26 @@ fn intake_read_uses_numeric_identity_authentication_and_bounded_pagination() {
 }
 
 #[test]
+fn generic_intake_discovery_lists_labeled_issues_without_a_canary_constant() {
+    let transport = FakeTransport::default();
+    transport.push(response(
+        r#"[{"id":555,"number":1240,"state":"open","pull_request":null,"labels":[{"name":"pip-ok"}]},{"id":556,"number":1241,"state":"open","pull_request":{"url":"x"},"labels":[{"name":"pip-ok"}]}]"#,
+    ));
+    let issues = reader(transport.clone())
+        .discover_open_issues("marmot-protocol", "mdk", "pip-ok")
+        .unwrap();
+    assert_eq!(issues.len(), 2);
+    assert_eq!(issues[0].number, 1240);
+    assert!(!issues[0].is_pull_request);
+    assert!(issues[1].is_pull_request);
+    let requests = transport.requests.borrow();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].url.contains(
+        "/repos/marmot-protocol/mdk/issues?state=open&labels=pip-ok&per_page=100&page=1"
+    ));
+}
+
+#[test]
 fn oversized_malformed_and_non_success_responses_fail_closed() {
     let transport = FakeTransport::default();
     transport.push(ReadResponse {

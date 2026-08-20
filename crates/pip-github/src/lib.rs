@@ -473,6 +473,49 @@ impl<T: ReadTransport> GitHubReader<T> {
         })
     }
 
+    pub fn discover_open_issues(
+        &self,
+        owner: &str,
+        repository: &str,
+        label: &str,
+    ) -> Result<Vec<IssueSnapshot>, GitHubError> {
+        if !valid_segment(owner) || !valid_segment(repository) || !valid_segment(label) {
+            return Err(GitHubError::InvalidRepository);
+        }
+        let issues = self.get_pages::<IssueDto>(&format!(
+            "/repos/{owner}/{repository}/issues?state=open&labels={label}&per_page=100&page=1"
+        ))?;
+        let mut ids = BTreeSet::new();
+        let mut numbers = BTreeSet::new();
+        issues
+            .into_iter()
+            .map(|issue| {
+                let labels = issue
+                    .labels
+                    .into_iter()
+                    .map(|label| label.name)
+                    .collect::<BTreeSet<_>>();
+                if issue.id == 0
+                    || issue.number == 0
+                    || issue.state != "open"
+                    || !ids.insert(issue.id)
+                    || !numbers.insert(issue.number)
+                    || labels.iter().any(|label| label.trim().is_empty())
+                    || !labels.contains(label)
+                {
+                    return Err(GitHubError::InvalidIdentity);
+                }
+                Ok(IssueSnapshot {
+                    id: issue.id,
+                    number: issue.number,
+                    open: true,
+                    is_pull_request: issue.pull_request.is_some(),
+                    labels,
+                })
+            })
+            .collect()
+    }
+
     pub fn read_intake(
         &self,
         owner: &str,
