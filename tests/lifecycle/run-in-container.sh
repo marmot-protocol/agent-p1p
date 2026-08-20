@@ -65,6 +65,10 @@ grep -q '"enabled": false' /etc/pip-v2/repositories/mdk.json
 grep -q '"dispatch_enabled": false' /etc/pip-v2/repositories/mdk.json
 test "$(systemctl is-enabled pip-v2-shadow-reconcile.timer || true)" = disabled
 test "$(systemctl is-active pip-v2-shadow-reconcile.timer || true)" = inactive
+systemctl cat pip-v2-controller@.service >/dev/null
+systemctl cat pip-v2-controller@.timer >/dev/null
+test "$(systemctl is-enabled pip-v2-controller@mdk.timer || true)" = disabled
+test "$(systemctl is-active pip-v2-controller@mdk.timer || true)" = inactive
 
 install_version /work/releases/v0
 test "$(readlink -f /opt/pip-v2/current)" = "$first_target"
@@ -101,5 +105,7 @@ test "$(systemctl is-enabled pip-v2-shadow-reconcile.timer || true)" = disabled
 test "$(systemctl is-active pip-v2-shadow-reconcile.timer || true)" = inactive
 test "$(find /opt/pip-v2/releases -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 2
 systemctl cat pip-v2-shadow-reconcile.service >/dev/null
+systemctl cat pip-v2-controller@.service >/dev/null
+systemctl cat pip-v2-controller@.timer >/dev/null
 
 printf '%s\n' "$first_target" "$second_target" >/work/expected-release-targets

@@ -45,6 +45,8 @@ docker exec "$container" bash -lc '
   test -d "${expected[0]}"
   test "$(systemctl is-enabled pip-v2-shadow-reconcile.timer || true)" = disabled
   test "$(systemctl is-active pip-v2-shadow-reconcile.timer || true)" = inactive
+  test "$(systemctl is-enabled pip-v2-controller@mdk.timer || true)" = disabled
+  test "$(systemctl is-active pip-v2-controller@mdk.timer || true)" = inactive
   /opt/pip-v2/current/bin/pip-control status --database /var/lib/pip-v2/ledger.db --now 1787220001 \
     | jq -e ".ok and .ledger.schema_version == 3" >/dev/null
 '

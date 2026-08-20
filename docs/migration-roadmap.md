@@ -135,10 +135,10 @@ Exit gate:
 
 ## Phase 7: Packaging and lifecycle
 
-**Implementation status:** The signed cohort, installer, non-dispatching unit,
-and disposable lifecycle are complete locally. The active controller unit is a
-packaged template only; its install/upgrade/rollback path remains open. CI and
-live-host evidence are separate gates.
+**Implementation status:** The signed cohort, installer, shadow unit, inert
+active-controller templates, and disposable lifecycle are complete locally.
+Fresh install, reinstall, upgrade, rollback, and restart all preserve disabled
+active and shadow timers. CI and live-host evidence are separate gates.
 
 Deliverables:
 

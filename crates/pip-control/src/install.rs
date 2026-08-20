@@ -194,6 +194,8 @@ fn install_release_inner(
     let release_dir = layout.install_root.join("releases").join(&release_id);
     let service_target = layout.unit_root.join("pip-v2-shadow-reconcile.service");
     let timer_target = layout.unit_root.join("pip-v2-shadow-reconcile.timer");
+    let controller_service_target = layout.unit_root.join("pip-v2-controller@.service");
+    let controller_timer_target = layout.unit_root.join("pip-v2-controller@.timer");
     let ledger_target = layout.state_root.join("ledger.db");
     let current = layout.install_root.join("current");
     let service_bytes = read_regular(
@@ -202,6 +204,14 @@ fn install_release_inner(
     )?;
     let timer_bytes = read_regular(
         &source_root.join("share/pip-v2/systemd/pip-v2-shadow-reconcile.timer"),
+        1024 * 1024,
+    )?;
+    let controller_service_bytes = read_regular(
+        &source_root.join("share/pip-v2/systemd/pip-v2-controller@.service"),
+        1024 * 1024,
+    )?;
+    let controller_timer_bytes = read_regular(
+        &source_root.join("share/pip-v2/systemd/pip-v2-controller@.timer"),
         1024 * 1024,
     )?;
 
@@ -214,6 +224,8 @@ fn install_release_inner(
                 .all(|policy| exact_file(&policy.target, &policy.bytes))
             && exact_file(&service_target, &service_bytes)
             && exact_file(&timer_target, &timer_bytes)
+            && exact_file(&controller_service_target, &controller_service_bytes)
+            && exact_file(&controller_timer_target, &controller_timer_bytes)
             && ledger_target.is_file()
         {
             return Ok(InstallOutcome {
@@ -227,7 +239,13 @@ fn install_release_inner(
     let snapshot_paths = policies
         .iter()
         .map(|policy| &policy.target)
-        .chain([&service_target, &timer_target, &ledger_target])
+        .chain([
+            &service_target,
+            &timer_target,
+            &controller_service_target,
+            &controller_timer_target,
+            &ledger_target,
+        ])
         .collect::<Vec<_>>();
     let snapshot = Snapshot::capture(&current, snapshot_paths)?;
     let release_preexisting = release_dir.exists();
@@ -255,6 +273,8 @@ fn install_release_inner(
         inject(fault, InstallFault::AfterPolicy)?;
         write_atomic(&service_target, &service_bytes, 0o444)?;
         write_atomic(&timer_target, &timer_bytes, 0o444)?;
+        write_atomic(&controller_service_target, &controller_service_bytes, 0o444)?;
+        write_atomic(&controller_timer_target, &controller_timer_bytes, 0o444)?;
         inject(fault, InstallFault::AfterUnits)?;
         Store::open(&ledger_target).map_err(|error| InstallError::Ledger(error.to_string()))?;
         fs::set_permissions(&ledger_target, fs::Permissions::from_mode(0o600)).map_err(fs_error)?;

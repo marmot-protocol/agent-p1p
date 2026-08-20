@@ -20,8 +20,8 @@ exist. It is not evidence of live-host installation or a completed canary.
 | Worker contracts | Versioned planner, builder, two reviewer, and final-reviewer results bound to case, task, role, model, skills commit, plan, PR, and exact head | Contract fixtures and ingestion tests |
 | CI reconciliation | Independent current and historical check/status evaluation on the ledger-bound PR head | Fixture and controller-cycle tests |
 | GitHub reads/writes | Bounded REST reads plus bounded GraphQL review-thread pagination; idempotent issue comments, controller-owned draft PRs, exact-head reviews, ready-for-review mutation, and guarded merge | Adapter and controller-cycle tests; MDK policy cannot enable the guarded path |
-| Release/install | Signed source-bound release cohort, artifact verification, content-addressed install, rollback, schema migration, and hardened non-dispatching timer | Local tests and disposable systemd container |
-| Active controller | One `controller-cycle` command that ingests completed runs, reconciles CI, performs generic intake, commits authorization removal or foreign-PR takeover, publishes plans and role reviews, verifies the final-review preflight, publishes human-held disposition comments, records local terminal effects, and projects dispatch effects only while fresh gates pass | Local tests; active unit template is packaged but not installed or enabled |
+| Release/install | Signed source-bound release cohort, artifact verification, content-addressed install, rollback, schema migration, hardened shadow timer, and inert active-controller templates | Local tests and disposable systemd container |
+| Active controller | One `controller-cycle` command that ingests completed runs, reconciles CI, performs generic intake, commits authorization removal or foreign-PR takeover, publishes plans and role reviews, verifies the final-review preflight, publishes human-held disposition comments, records local terminal effects, and projects dispatch effects only while fresh gates pass | Local tests; active unit templates are installed but no instance is enabled or started |
 | Final-review preflight | A durable observation effect joins the accepted plan/build/reviewer ledger, exact numeric GitHub actor and role-stamped approvals, current head CI, clean draft-PR ownership/mergeability, and resolved review threads before final-review dispatch | State-machine, adapter, fixture, and restart-safe lease tests |
 | Review publication | Two distinct controller-held reviewer credentials publish the joined role contracts on the exact head; remediation and final preflight remain blocked until both idempotent reviews exist | Policy, state-machine, mutation, outage/retry, and exact-role fixture tests |
 | Plan publication | Planner results first create a durable `PUBLISH_PLAN` effect; the controller publishes the immutable plan comment and only then applies the typed outcome that releases build, human disposition, or terminal recording | Contract, state-machine, mutation, and outage/retry tests |
@@ -33,9 +33,9 @@ exist. It is not evidence of live-host installation or a completed canary.
 
 - `config/target/repositories/mdk.json` has intake disabled, repository paused,
   dispatch disabled, merge mode `shadow`, and autonomous merge false.
-- The production installer installs only the non-dispatching shadow reconciler.
-- `pip-v2-controller@.service` and its timer are staged release resources. The
-  installer does not copy, enable, or start them.
+- The production installer does not enable or start either reconciliation path.
+- `pip-v2-controller@.service` and its timer are installed as templates. The
+  installer does not enable or start an instance.
 - No Rust process has created an MDK task, branch, comment, PR, review,
   notification, or merge in a live environment.
 
@@ -53,9 +53,7 @@ These are implementation gaps, not merely missing operational evidence:
    `pip-v2-control` identity, including repository board, profiles, exact skill
    links, shared authentication, provider probes, and the gateway/dispatcher
    observing the same Hermes root.
-4. Add active-unit installation, upgrade, rollback, and restart tests while
-   preserving the rule that a fresh install remains disabled.
-5. Record live Hermes and provider outage/recovery evidence, then seek explicit
+4. Record live Hermes and provider outage/recovery evidence, then seek explicit
    authorization for one MDK shadow case.
 
 ## Runtime topology decision
