@@ -115,6 +115,30 @@ fn malformed_oversized_failed_and_timed_out_commands_fail_closed() {
 }
 
 #[test]
+fn hermes_outage_then_recovery_reprobes_without_a_write_command() {
+    let runner = FakeRunner::default();
+    runner.outputs.borrow_mut().push_back(Ok(CommandOutput {
+        status: 0,
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+        timed_out: true,
+    }));
+    runner.output("hermes 0.9.0\n");
+    runner.output(r#"[{"name":"pip-mdk"}]"#);
+    let reader = reader(runner.clone());
+
+    assert_eq!(reader.capabilities(), Err(HermesError::TimedOut));
+    let recovered = reader.capabilities().unwrap();
+    assert_eq!(recovered.boards, ["pip-mdk"]);
+    assert_eq!(runner.commands.borrow().len(), 3);
+    for command in runner.commands.borrow().iter() {
+        for forbidden in ["add", "update", "archive", "complete", "create", "delete"] {
+            assert!(!command.args.iter().any(|argument| argument == forbidden));
+        }
+    }
+}
+
+#[test]
 fn projection_comparison_detects_missing_foreign_and_drifted_tasks() {
     let desired = vec![
         DesiredTask {

@@ -143,6 +143,11 @@ Exit gate:
 
 ## Phase 8: Parity and non-dispatching live shadow
 
+**Implementation status:** Frozen transition and worker-contract parity is
+exhaustive, and repeated live GitHub reconciliation is stable with zero
+mutations. Live Hermes and provider recovery evidence is currently unavailable
+on the development workstation and remains an open exit-gate item.
+
 Deliverables:
 
 - Rust evaluation of frozen Python fixtures.

@@ -122,6 +122,27 @@ fn authentication_and_model_availability_fail_closed_without_substitution() {
 }
 
 #[test]
+fn provider_outage_then_recovery_requires_a_fresh_exact_model_probe() {
+    let runner = FakeRunner::default();
+    runner.push(0, "version\n");
+    runner.push(0, "models\nstatus\n");
+    runner.push(0, "Not authenticated\n");
+    runner.push(0, "version\n");
+    runner.push(0, "models\nstatus\n");
+    runner.push(0, "Authenticated\n");
+    runner.push(0, "composer-2.5\nauto\n");
+
+    let probe = probe(runner.clone());
+    assert_eq!(
+        probe.probe("composer-2.5"),
+        Err(ProviderProbeError::Unauthenticated)
+    );
+    let recovered = probe.probe("composer-2.5").unwrap();
+    assert_eq!(recovered.model, "composer-2.5");
+    assert_eq!(runner.commands.borrow().len(), 7);
+}
+
+#[test]
 fn bounded_runner_enforces_timeout_output_limit_and_explicit_environment() {
     let runner = BoundedProcessRunner;
     let started = Instant::now();
