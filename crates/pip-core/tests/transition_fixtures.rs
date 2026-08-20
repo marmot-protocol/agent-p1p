@@ -119,7 +119,16 @@ fn accepted_work_emits_only_the_next_declared_effect() {
         TransitionContext::default(),
     )
     .unwrap();
-    assert_eq!(final_review.effects, [Effect::DispatchFinalReviewer]);
+    assert_eq!(final_review.effects, [Effect::ObserveFinalPreflight]);
+
+    let verified = transition(
+        CaseState::FinalReview,
+        Event::FinalPreflightAccepted,
+        TransitionContext::default(),
+    )
+    .unwrap();
+    assert_eq!(verified.next_state, CaseState::FinalReview);
+    assert_eq!(verified.effects, [Effect::DispatchFinalReviewer]);
 }
 
 #[test]

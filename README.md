@@ -10,8 +10,9 @@ Hermes Kanban boards.
 The repository is migrating from a Python single-issue prototype to the target
 Rust control plane. Phases 0 through 5 and the Phase 7 non-dispatching release
 lifecycle are implemented locally. Phase 6 is partial: the GitHub write
-adapters are tested, but several durable write and takeover paths are not yet
-wired into the active controller. Phase 8 has live read-only GitHub evidence,
+adapters are tested, authorization removal and takeover are durable, and the
+final-review evidence gate is wired; several write effects are not yet consumed
+by the active controller. Phase 8 has live read-only GitHub evidence,
 but not live Hermes/provider evidence. No live MDK intake or dispatch has been
 authorized.
 

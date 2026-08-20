@@ -228,21 +228,27 @@ fn map_event(
             };
             Ok(mapped(event, None, None, None))
         }
-        WorkerResult::Final(result) if case.state == "FINAL_REVIEW" => Ok(mapped(
-            match result.outcome {
-                FinalOutcome::Ready => Event::Ready,
-                FinalOutcome::ReturnToBuild => Event::ReturnToBuild,
-                FinalOutcome::ReturnToReview => Event::ReturnToReview,
-                FinalOutcome::ReturnToPlanning => Event::ReturnToPlanning,
-                FinalOutcome::WaitForIssueCreator => Event::WaitForIssueCreator,
-                FinalOutcome::Blocked => Event::Blocked,
-                FinalOutcome::Abandon => Event::Abandon,
-                FinalOutcome::BlockedUnexpectedModel => Event::BlockedUnexpectedModel,
-            },
-            None,
-            None,
-            None,
-        )),
+        WorkerResult::Final(result)
+            if case.state == "FINAL_REVIEW"
+                && store.latest_event_type(&case.case_key)?.as_deref()
+                    == Some("FINAL_PREFLIGHT_ACCEPTED") =>
+        {
+            Ok(mapped(
+                match result.outcome {
+                    FinalOutcome::Ready => Event::Ready,
+                    FinalOutcome::ReturnToBuild => Event::ReturnToBuild,
+                    FinalOutcome::ReturnToReview => Event::ReturnToReview,
+                    FinalOutcome::ReturnToPlanning => Event::ReturnToPlanning,
+                    FinalOutcome::WaitForIssueCreator => Event::WaitForIssueCreator,
+                    FinalOutcome::Blocked => Event::Blocked,
+                    FinalOutcome::Abandon => Event::Abandon,
+                    FinalOutcome::BlockedUnexpectedModel => Event::BlockedUnexpectedModel,
+                },
+                None,
+                None,
+                None,
+            ))
+        }
         _ => Err(IngestError::InvalidState),
     }
 }

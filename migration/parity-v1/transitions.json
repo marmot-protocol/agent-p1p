@@ -35,7 +35,7 @@
       "legacy_name": "approved reviews reach final",
       "target_name": "approved reviews reach final",
       "classification": "equivalent",
-      "rationale": "Two accepted reviews release a fresh holistic final review."
+      "rationale": "Both engines enter final review after two accepted worker results; the target separately withholds dispatch behind its target-only final preflight."
     },
     {
       "legacy_name": "shadow final waits for human",
@@ -78,6 +78,10 @@
     {
       "target_name": "remediation result waits for new exact-head CI",
       "rationale": "Invalidates stale CI and reviews after every remediation head."
+    },
+    {
+      "target_name": "verified final preflight releases final reviewer",
+      "rationale": "Requires independent current GitHub reviews, threads, CI, ownership, authorization, and mergeability before final-review dispatch."
     },
     {
       "target_name": "guarded final reaches deterministic merge gate",

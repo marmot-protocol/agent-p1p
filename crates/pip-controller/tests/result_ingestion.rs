@@ -45,6 +45,12 @@ fn complete_worker_sequence_is_immutable_exact_head_and_shadow_held() {
     assert_eq!(case(&store).state, "FINAL_REVIEW");
     assert_eq!(store.run_count().unwrap(), 4);
 
+    assert!(matches!(
+        ingest_worker_result(&mut store, &policy(), &binding(&results[4]), &results[4]),
+        Err(IngestError::InvalidState)
+    ));
+    assert_eq!(store.run_count().unwrap(), 4);
+    accept_final_preflight(&mut store);
     ingest_worker_result(&mut store, &policy(), &binding(&results[4]), &results[4]).unwrap();
     assert_eq!(case(&store).state, "SHADOW_READY");
     assert_eq!(store.run_count().unwrap(), 5);
@@ -196,6 +202,33 @@ fn accept_ci(store: &mut Store) {
         next_pr_number: None,
         next_head_sha: None,
         event_payload: json!({"head_sha": "b".repeat(40)}),
+        run: None,
+        evidence: Vec::new(),
+        findings: Vec::new(),
+    };
+    LedgerController::apply(store, &policy(), &workflow).unwrap();
+}
+
+fn accept_final_preflight(store: &mut Store) {
+    let current = case(store);
+    let workflow = WorkflowCommand {
+        case_id: case_id(),
+        event_id: EventId::from_str("event-final-preflight-accepted").unwrap(),
+        observed_at: ObservedAt::new(30),
+        expected_state: CaseState::FinalReview,
+        expected_state_revision: StateRevision::new(
+            NonZeroU64::new(current.state_revision).unwrap(),
+        ),
+        accepted_policy_revision: PolicyRevision::new(NonZeroU64::new(1).unwrap()),
+        remediation_round: current.remediation_round,
+        plan_version: Some(PlanVersion::new(NonZeroU32::new(1).unwrap())),
+        pr_number: Some(PullRequestNumber::new(NonZeroU64::new(77).unwrap())),
+        head_sha: Some(GitSha::from_str(&"b".repeat(40)).unwrap()),
+        event: Event::FinalPreflightAccepted,
+        accepted_plan_version: None,
+        next_pr_number: None,
+        next_head_sha: None,
+        event_payload: json!({"verdict": "ACCEPTED"}),
         run: None,
         evidence: Vec::new(),
         findings: Vec::new(),

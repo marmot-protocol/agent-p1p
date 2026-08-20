@@ -387,6 +387,26 @@ fn dispatch_claim_skips_other_durable_effect_types_without_leasing_them() {
 }
 
 #[test]
+fn effect_owner_can_release_a_live_lease_for_immediate_retry() {
+    let (_directory, mut store) = open();
+    store.create_case(&new_case()).unwrap();
+    let claimed = store.claim_effect("observer-a", 100, 30).unwrap().unwrap();
+
+    assert!(
+        store
+            .release_effect(&claimed.effect_id, "wrong-owner")
+            .is_err()
+    );
+    store
+        .release_effect(&claimed.effect_id, "observer-a")
+        .unwrap();
+
+    let retried = store.claim_effect("observer-b", 100, 30).unwrap().unwrap();
+    assert_eq!(retried.effect_id, claimed.effect_id);
+    assert_eq!(retried.lease_owner, "observer-b");
+}
+
+#[test]
 fn online_backup_is_a_complete_reopenable_ledger() {
     let (directory, mut store) = open();
     store.create_case(&new_case()).unwrap();

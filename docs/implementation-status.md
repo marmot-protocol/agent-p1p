@@ -19,9 +19,10 @@ exist. It is not evidence of live-host installation or a completed canary.
 | Hermes reads/projection | Bounded CLI adapter, capability/task/run reads, controller-owned gates, idempotent projections, result metadata ingestion, and restart convergence | Fake-runner and offline integration tests only |
 | Worker contracts | Versioned planner, builder, two reviewer, and final-reviewer results bound to case, task, role, model, skills commit, plan, PR, and exact head | Contract fixtures and ingestion tests |
 | CI reconciliation | Independent current and historical check/status evaluation on the ledger-bound PR head | Fixture and controller-cycle tests |
-| GitHub writes | Idempotent issue comment, draft PR, exact-head review, and guarded merge adapter primitives | Adapter tests; not all are wired to outbox consumption |
+| GitHub reads/writes | Bounded REST reads plus bounded GraphQL review-thread pagination; idempotent issue comment, draft PR, exact-head review, and guarded merge adapter primitives | Adapter tests; not all writes are wired to outbox consumption |
 | Release/install | Signed source-bound release cohort, artifact verification, content-addressed install, rollback, schema migration, and hardened non-dispatching timer | Local tests and disposable systemd container |
-| Active controller | One `controller-cycle` command that ingests completed runs, reconciles CI, performs generic intake, commits authorization removal or foreign-PR takeover, and projects dispatch effects only while fresh gates pass | Local tests; active unit template is packaged but not installed or enabled |
+| Active controller | One `controller-cycle` command that ingests completed runs, reconciles CI, performs generic intake, commits authorization removal or foreign-PR takeover, verifies the final-review preflight, and projects dispatch effects only while fresh gates pass | Local tests; active unit template is packaged but not installed or enabled |
+| Final-review preflight | A durable observation effect joins the accepted plan/build/reviewer ledger, exact numeric GitHub actor and role-stamped approvals, current head CI, clean draft-PR ownership/mergeability, and resolved review threads before final-review dispatch | State-machine, adapter, fixture, and restart-safe lease tests |
 
 ## What is deliberately inert
 
@@ -41,20 +42,16 @@ These are implementation gaps, not merely missing operational evidence:
    particular, independently verify and publish planner comments, case-owned
    branches/draft PRs, role-stamped reviews, and human-held disposition without
    giving workers direct workflow authority.
-2. Build the final-review preflight for review threads, current mergeability,
-   policy revision, and exact published review evidence. Authorization removal
-   and foreign PR ownership/head changes now commit immutable abandonment or
-   takeover events and transactionally supersede older pending effects.
-3. Build the complete deterministic final-review bundle from immutable ledger
+2. Build the complete deterministic final-review bundle from immutable ledger
    references and fresh GitHub observations. A valid final worker result alone
    is not sufficient.
-4. Provision and test a compatible Hermes runtime under the dedicated
+3. Provision and test a compatible Hermes runtime under the dedicated
    `pip-v2-control` identity, including repository board, profiles, exact skill
    links, shared authentication, provider probes, and the gateway/dispatcher
    observing the same Hermes root.
-5. Add active-unit installation, upgrade, rollback, and restart tests while
+4. Add active-unit installation, upgrade, rollback, and restart tests while
    preserving the rule that a fresh install remains disabled.
-6. Record live Hermes and provider outage/recovery evidence, then seek explicit
+5. Record live Hermes and provider outage/recovery evidence, then seek explicit
    authorization for one MDK shadow case.
 
 ## Runtime topology decision
@@ -82,3 +79,4 @@ Upstream references:
 - [Hermes CLI command reference](https://github.com/nousresearch/hermes-agent/blob/main/website/docs/reference/cli-commands.md)
 - [Hermes Kanban guide](https://github.com/nousresearch/hermes-agent/blob/main/website/docs/user-guide/features/kanban.md)
 - [Hermes environment layout](https://github.com/NousResearch/hermes-agent/blob/main/AGENTS.md)
+- [GitHub GraphQL pull-request and review-thread schema](https://docs.github.com/en/graphql/reference/pulls)

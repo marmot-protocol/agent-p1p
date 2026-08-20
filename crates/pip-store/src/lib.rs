@@ -756,6 +756,18 @@ impl Store {
         count(&self.connection, "events")
     }
 
+    pub fn latest_event_type(&self, case_key: &str) -> Result<Option<String>> {
+        self.connection
+            .query_row(
+                "SELECT event_type FROM events WHERE case_key = ?1
+                 ORDER BY state_revision DESC LIMIT 1",
+                [case_key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
     pub fn run_count(&self) -> Result<u64> {
         count(&self.connection, "runs")
     }
@@ -1035,6 +1047,25 @@ impl Store {
              WHERE effect_id = ?2 AND lease_owner = ?3 AND lease_until >= ?1
                AND delivered_at IS NULL AND superseded_at IS NULL",
             params![sql_u64(now)?, effect_id, owner],
+        )?;
+        if updated != 1 {
+            return Err(StoreError::LeaseLost(effect_id.to_owned()));
+        }
+        Ok(())
+    }
+
+    pub fn release_effect(&mut self, effect_id: &str, owner: &str) -> Result<()> {
+        self.ensure_writable()?;
+        if effect_id.trim().is_empty() || owner.trim().is_empty() {
+            return Err(StoreError::InvalidInput(
+                "effect id and lease owner are required",
+            ));
+        }
+        let updated = self.connection.execute(
+            "UPDATE outbox SET lease_owner = NULL, lease_until = NULL
+             WHERE effect_id = ?1 AND lease_owner = ?2
+               AND delivered_at IS NULL AND superseded_at IS NULL",
+            params![effect_id, owner],
         )?;
         if updated != 1 {
             return Err(StoreError::LeaseLost(effect_id.to_owned()));

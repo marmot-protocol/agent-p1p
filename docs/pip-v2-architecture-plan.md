@@ -289,6 +289,13 @@ issue authorization remains valid
 GitHub reports clean mergeability
 ```
 
+The controller identifies the two mandatory published GitHub reviews by an
+exact, machine-readable line in the body: `Pip reviewer role:
+reviewer-general` or `Pip reviewer role: reviewer-secperf`. The review actor
+must be the configured numeric automation identity, the review must approve
+the current commit, and the latest same-role stamped review on that commit is
+authoritative. Worker result metadata alone cannot release final review.
+
 Optional external review is advisory. Its concrete findings may enter the loop,
 but absence, rate limiting, or failure never substitutes for a mandatory review.
 

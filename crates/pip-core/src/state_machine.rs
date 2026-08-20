@@ -51,6 +51,7 @@ pub enum Event {
     CiFailed,
     ReviewRecorded,
     ReviewsApproved,
+    FinalPreflightAccepted,
     RequestChanges,
     Ready,
     ReturnToBuild,
@@ -66,7 +67,7 @@ pub enum Event {
 }
 
 impl Event {
-    pub const ALL: [Self; 33] = [
+    pub const ALL: [Self; 34] = [
         Self::Proceed,
         Self::WaitingForIssueCreator,
         Self::NeedsHumanScopeDecision,
@@ -88,6 +89,7 @@ impl Event {
         Self::CiFailed,
         Self::ReviewRecorded,
         Self::ReviewsApproved,
+        Self::FinalPreflightAccepted,
         Self::RequestChanges,
         Self::Ready,
         Self::ReturnToBuild,
@@ -191,6 +193,7 @@ string_enum!(Event, "event", {
     "CI_FAILED" => CiFailed,
     "REVIEW_RECORDED" => ReviewRecorded,
     "REVIEWS_APPROVED" => ReviewsApproved,
+    "FINAL_PREFLIGHT_ACCEPTED" => FinalPreflightAccepted,
     "REQUEST_CHANGES" => RequestChanges,
     "READY" => Ready,
     "RETURN_TO_BUILD" => ReturnToBuild,
@@ -235,6 +238,7 @@ pub enum Effect {
     DispatchBuilder,
     ObserveCi,
     DispatchReviewers,
+    ObserveFinalPreflight,
     DispatchFinalReviewer,
     HoldForHuman,
     NotifyShadowReady,
@@ -348,6 +352,9 @@ pub fn transition(
         (State::WaitingCi, Ev::CiFailed) => decision(State::Remediating, &[Fx::DispatchBuilder]),
         (State::Reviewing, Ev::ReviewRecorded) => decision(State::Reviewing, &[]),
         (State::Reviewing, Ev::ReviewsApproved) => {
+            decision(State::FinalReview, &[Fx::ObserveFinalPreflight])
+        }
+        (State::FinalReview, Ev::FinalPreflightAccepted) => {
             decision(State::FinalReview, &[Fx::DispatchFinalReviewer])
         }
         (State::Reviewing, Ev::RequestChanges)

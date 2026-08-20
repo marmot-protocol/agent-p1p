@@ -59,3 +59,20 @@ fn shared_skill_requires_every_immutable_common_binding() {
         );
     }
 }
+
+#[test]
+fn mandatory_reviewers_publish_distinct_machine_readable_role_stamps() {
+    for (name, marker) in [
+        ("reviewer-general", "Pip reviewer role: reviewer-general"),
+        ("reviewer-secperf", "Pip reviewer role: reviewer-secperf"),
+    ] {
+        let skill = ROLE_SKILLS
+            .iter()
+            .find_map(|(candidate, skill)| (*candidate == name).then_some(*skill))
+            .unwrap();
+        assert!(
+            skill.contains(marker),
+            "{name} omits its exact GitHub review marker"
+        );
+    }
+}

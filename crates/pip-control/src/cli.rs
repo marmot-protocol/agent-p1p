@@ -178,6 +178,16 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     let authorization = crate::reconcile_active_authorization(&reader, &policy, &mut store, now)
         .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let final_preflight = crate::reconcile_final_preflight_once(
+        &reader,
+        &policy,
+        &mut store,
+        now,
+        required(&options, "--owner")?,
+        lease_seconds,
+        authorization.is_authorized(),
+    )
+    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     let dispatch = crate::dispatch_once(
         &mut store,
         &policy,
@@ -202,6 +212,7 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         "intake": intake,
         "takeover": takeover,
         "authorization": authorization,
+        "final_preflight": final_preflight,
         "dispatch": dispatch,
     }))
 }

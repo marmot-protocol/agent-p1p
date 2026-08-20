@@ -107,8 +107,10 @@ Exit gate:
 ## Phase 6: GitHub write boundary
 
 **Implementation status:** Partial. The idempotent write primitives and
-adversarial tests exist. The active controller does not yet consume every
-durable write/takeover effect, so the phase exit gate is not met.
+adversarial tests exist. Authorization removal and foreign-PR takeover are
+durable, and final-review dispatch now waits for exact published GitHub
+evidence. The active controller does not yet consume every durable write
+effect, so the phase exit gate is not met.
 
 Deliverables:
 

@@ -6,6 +6,7 @@ mod authorization;
 mod ci;
 mod cli;
 mod dispatch;
+mod final_preflight;
 mod install;
 mod intake;
 mod policy;
@@ -23,6 +24,9 @@ pub use cli::{CliError, run_cli};
 pub use dispatch::{
     DispatchCycleContext, DispatchCycleError, DispatchCycleResult, dispatch_once,
     dispatch_once_with,
+};
+pub use final_preflight::{
+    FinalPreflightCycle, FinalPreflightError, FinalPreflightSource, reconcile_final_preflight_once,
 };
 pub use install::{
     HostInstallOptions, InstallError, InstallFault, InstallLayout, InstallOutcome, InstallResult,
