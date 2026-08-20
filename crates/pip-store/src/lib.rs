@@ -9,7 +9,7 @@ use std::time::Duration;
 use rusqlite::{
     Connection, MAIN_DB, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -456,7 +456,7 @@ pub struct LedgerStatus {
     pub direct_attempts_failed: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct ClaimedEffect {
     pub effect_id: String,
     pub case_key: String,
@@ -1511,6 +1511,23 @@ impl Store {
             }
         }
         Ok(attempt)
+    }
+
+    pub fn direct_attempt(&self, attempt_id: u64) -> Result<Option<StoredDirectAttempt>> {
+        if attempt_id == 0 {
+            return Err(StoreError::InvalidInput("attempt id is required"));
+        }
+        self.connection
+            .query_row(
+                "SELECT attempt_id, effect_id, case_key, state_revision, task_id,
+                        lease_owner, lease_until, started_at, completed_at, status,
+                        result_json, result_sha256, error
+                 FROM direct_attempts WHERE attempt_id = ?1",
+                [sql_u64(attempt_id)?],
+                direct_attempt_from_row,
+            )
+            .optional()
+            .map_err(StoreError::from)
     }
 
     pub fn direct_attempt_count(&self) -> Result<u64> {

@@ -157,6 +157,7 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
             "--hermes",
             "--owner",
             "--skills-commit-file",
+            "--direct-queue",
         ],
         &["--now", "--lease-seconds", "--global-paused"],
     )?;
@@ -302,6 +303,19 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         let blocked = json!({"result": "authorization_blocked"});
         (blocked.clone(), blocked)
     };
+    let direct_queue = crate::DirectQueue::new(required(&options, "--direct-queue")?)
+        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let direct_worker = crate::reconcile_direct_queue_once(
+        &mut store,
+        &policy,
+        &direct_queue,
+        required(&options, "--owner")?,
+        now,
+        crate::recommended_direct_lease_seconds(&policy)
+            .map_err(|error| CliError::Reconciliation(error.to_string()))?,
+        authorization.is_authorized(),
+    )
+    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     let draft_pull_request = crate::publish_draft_pull_request_once(
         &writer,
         &policy,
@@ -386,6 +400,7 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         "repository": policy.repository.full_name(),
         "policy_revision": policy.revision,
         "worker_result": result,
+        "direct_worker": direct_worker,
         "ci": ci,
         "intake": intake,
         "takeover": takeover,
@@ -405,13 +420,12 @@ fn direct_worker_cycle(arguments: &[String]) -> Result<Value, CliError> {
         arguments,
         &[
             "--policy",
-            "--database",
+            "--direct-queue",
             "--cursor",
             "--git",
             "--skills-root",
-            "--owner",
         ],
-        &["--now", "--lease-seconds"],
+        &["--now"],
     )?;
     let policy_bytes = read_bounded(Path::new(required(&options, "--policy")?), 1024 * 1024)?;
     let policy = crate::load_repository_policy(&policy_bytes)
@@ -433,20 +447,6 @@ fn direct_worker_cycle(arguments: &[String]) -> Result<Value, CliError> {
         })
         .transpose()?
         .map_or_else(current_time, Ok)?;
-    let lease_seconds = options
-        .get("--lease-seconds")
-        .map(|value| {
-            value
-                .parse::<u64>()
-                .ok()
-                .filter(|value| *value > 0)
-                .ok_or_else(|| CliError::InvalidArgument("--lease-seconds".into()))
-        })
-        .transpose()?
-        .unwrap_or(
-            crate::recommended_direct_lease_seconds(&policy)
-                .map_err(|error| CliError::Reconciliation(error.to_string()))?,
-        );
     let runtime = crate::CursorDirectRuntime::new(
         BoundedProcessRunner,
         required(&options, "--cursor")?,
@@ -458,20 +458,10 @@ fn direct_worker_cycle(arguments: &[String]) -> Result<Value, CliError> {
         4 * 1024 * 1024,
     )
     .map_err(|error| CliError::Reconciliation(error.to_string()))?;
-    let mut store = Store::open(required(&options, "--database")?)
-        .map_err(|error| CliError::Ledger(error.to_string()))?;
-    let result = crate::run_direct_worker_once_with(
-        &mut store,
-        &policy,
-        &runtime,
-        crate::DirectWorkerCycleContext {
-            owner: required(&options, "--owner")?,
-            now,
-            lease_seconds,
-            authorization_valid: true,
-        },
-    )
-    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let queue = crate::DirectQueue::new(required(&options, "--direct-queue")?)
+        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let result = crate::execute_direct_queue_once(&runtime, &queue, now)
+        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     Ok(json!({
         "ok": true,
         "repository": policy.repository.full_name(),

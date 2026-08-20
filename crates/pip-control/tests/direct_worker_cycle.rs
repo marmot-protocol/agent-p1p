@@ -3,8 +3,9 @@ use std::rc::Rc;
 
 use pip_contracts::{WorkerResult, WorkerRole};
 use pip_control::{
-    DirectWorkerCycle, DirectWorkerCycleContext, DirectWorkerError, DirectWorkerRuntime,
-    DirectWorkerRuntimeError, recommended_direct_lease_seconds, run_direct_worker_once_with,
+    DirectQueue, DirectQueueCycle, DirectWorkerCycle, DirectWorkerCycleContext, DirectWorkerError,
+    DirectWorkerRuntime, DirectWorkerRuntimeError, execute_direct_queue_once,
+    recommended_direct_lease_seconds, reconcile_direct_queue_once, run_direct_worker_once_with,
 };
 
 #[test]
@@ -63,6 +64,146 @@ fn leased_direct_builder_executes_and_enters_the_shared_ingestion_path() {
     assert_eq!(status.outbox_leased, 0);
     assert_eq!(status.outbox_superseded, 1);
     assert_eq!(status.direct_attempts_complete, 1);
+}
+
+#[test]
+fn controller_queue_and_credential_free_executor_converge_without_worker_ledger_access() {
+    let directory = tempfile::tempdir().unwrap();
+    let queue_root = directory.path().join("direct-queue");
+    for child in ["inbox", "results", "archive"] {
+        std::fs::create_dir_all(queue_root.join(child)).unwrap();
+    }
+    let queue = DirectQueue::new(&queue_root).unwrap();
+    let mut store = queued_builder(directory.path());
+    let runtime = runtime(Ok(builder_result()));
+
+    assert_eq!(
+        reconcile_direct_queue_once(
+            &mut store,
+            &active_policy(),
+            &queue,
+            "controller",
+            100,
+            30,
+            true,
+        )
+        .unwrap(),
+        DirectQueueCycle::Prepared {
+            attempt_id: 1,
+            task_id: task_id().into(),
+        }
+    );
+    assert_eq!(store.status(100).unwrap().direct_attempts_running, 1);
+
+    assert_eq!(
+        execute_direct_queue_once(&runtime, &queue, 101).unwrap(),
+        DirectQueueCycle::Executed {
+            attempt_id: 1,
+            succeeded: true,
+        }
+    );
+    assert_eq!(runtime.tasks.borrow().len(), 1);
+    assert_eq!(store.run_count().unwrap(), 0);
+
+    assert_eq!(
+        reconcile_direct_queue_once(
+            &mut store,
+            &active_policy(),
+            &queue,
+            "controller",
+            102,
+            30,
+            false,
+        )
+        .unwrap(),
+        DirectQueueCycle::AuthorizationBlocked
+    );
+    assert_eq!(store.run_count().unwrap(), 0);
+
+    assert_eq!(
+        reconcile_direct_queue_once(
+            &mut store,
+            &active_policy(),
+            &queue,
+            "controller",
+            103,
+            30,
+            true,
+        )
+        .unwrap(),
+        DirectQueueCycle::Ingested {
+            task_id: task_id().into(),
+            transition_count: 2,
+        }
+    );
+    assert_eq!(store.run_count().unwrap(), 1);
+    assert!(
+        std::fs::read_dir(queue_root.join("inbox"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
+    assert!(
+        std::fs::read_dir(queue_root.join("results"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
+    assert_eq!(
+        std::fs::read_dir(queue_root.join("archive"))
+            .unwrap()
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn queued_provider_failure_is_recorded_by_controller_and_releases_the_effect() {
+    let directory = tempfile::tempdir().unwrap();
+    let queue_root = directory.path().join("direct-queue");
+    for child in ["inbox", "results", "archive"] {
+        std::fs::create_dir_all(queue_root.join(child)).unwrap();
+    }
+    let queue = DirectQueue::new(&queue_root).unwrap();
+    let mut store = queued_builder(directory.path());
+    reconcile_direct_queue_once(
+        &mut store,
+        &active_policy(),
+        &queue,
+        "controller",
+        100,
+        30,
+        true,
+    )
+    .unwrap();
+    let runtime = runtime(Err(DirectWorkerRuntimeError::Unavailable("outage".into())));
+    assert_eq!(
+        execute_direct_queue_once(&runtime, &queue, 101).unwrap(),
+        DirectQueueCycle::Executed {
+            attempt_id: 1,
+            succeeded: false
+        }
+    );
+    assert_eq!(
+        reconcile_direct_queue_once(
+            &mut store,
+            &active_policy(),
+            &queue,
+            "controller",
+            102,
+            30,
+            true,
+        )
+        .unwrap(),
+        DirectQueueCycle::Failed { attempt_id: 1 }
+    );
+    assert_eq!(store.status(102).unwrap().direct_attempts_failed, 1);
+    assert!(
+        store
+            .claim_effect_matching("retry", 102, 30, &["RUN_DIRECT_WORKER"])
+            .unwrap()
+            .is_some()
+    );
 }
 
 #[test]

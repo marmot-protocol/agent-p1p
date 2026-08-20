@@ -338,7 +338,7 @@ fn process_claimed<R: DirectWorkerRuntime>(
     Ok((task.task_id, ingested))
 }
 
-fn validate_job(
+pub(crate) fn validate_job(
     claimed: &ClaimedEffect,
     case: &StoredCase,
     task: &DirectTaskSpec,

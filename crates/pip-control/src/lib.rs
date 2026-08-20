@@ -5,6 +5,7 @@
 mod authorization;
 mod ci;
 mod cli;
+mod direct_queue;
 mod direct_worker;
 mod dispatch;
 mod disposition;
@@ -29,6 +30,10 @@ pub use authorization::{
 };
 pub use ci::{CiCycle, CiCycleError, PullRequestSource, reconcile_ci_once};
 pub use cli::{CliError, run_cli, run_git_askpass};
+pub use direct_queue::{
+    DirectQueue, DirectQueueCycle, DirectQueueError, execute_direct_queue_once,
+    reconcile_direct_queue_once,
+};
 pub use direct_worker::{
     CursorDirectRuntime, DirectWorkerCycle, DirectWorkerCycleContext, DirectWorkerError,
     DirectWorkerRuntime, DirectWorkerRuntimeError, recommended_direct_lease_seconds,

@@ -48,6 +48,7 @@ systemctl_path=$(command -v systemctl)
 staging=$(mktemp -d /var/tmp/pip-v2-install.XXXXXX)
 created_paths=()
 control_user_created=false
+worker_user_created=false
 installation_complete=false
 cleanup() {
   status=$?
@@ -61,6 +62,9 @@ cleanup() {
         cleanup_safe=false
       fi
     done
+    if [[ $worker_user_created == true && $cleanup_safe == true ]]; then
+      userdel pip-v2-worker >/dev/null 2>&1 || true
+    fi
     if [[ $control_user_created == true && $cleanup_safe == true ]]; then
       userdel pip-v2-control >/dev/null 2>&1 || true
       groupdel pip-v2-control >/dev/null 2>&1 || true
@@ -120,6 +124,27 @@ IFS=: read -r control_group _ resolved_gid members <<<"$group_entry"
   exit 1
 }
 
+if ! getent passwd pip-v2-worker >/dev/null; then
+  useradd --system --gid pip-v2-control --no-create-home --home-dir /nonexistent \
+    --shell /usr/sbin/nologin pip-v2-worker
+  worker_user_created=true
+fi
+worker_entry=$(getent passwd pip-v2-worker)
+IFS=: read -r worker_account _ worker_uid worker_gid _ worker_home worker_shell <<<"$worker_entry"
+[[ $worker_account == pip-v2-worker && $worker_uid != 0 && $worker_uid != "$control_uid" &&
+   $worker_gid == "$control_gid" && $worker_home == /nonexistent ]] || {
+  echo "pip-v2-worker identity has an unsafe account definition" >&2
+  exit 1
+}
+[[ $worker_shell == /usr/sbin/nologin || $worker_shell == /sbin/nologin ]] || {
+  echo "pip-v2-worker must use a nologin shell" >&2
+  exit 1
+}
+[[ $(id -G pip-v2-worker) == "$control_gid" ]] || {
+  echo "pip-v2-worker must have only the control group" >&2
+  exit 1
+}
+
 ensure_directory() {
   path=$1
   owner=$2
@@ -144,10 +169,14 @@ ensure_directory /etc/pip-v2/repositories root root 755
 ensure_directory /etc/systemd/system root root 755
 ensure_directory /var/lib/pip-v2 pip-v2-control pip-v2-control 700
 ensure_directory /var/lib/pip-v2/repositories pip-v2-control pip-v2-control 700
-ensure_directory /var/lib/pip-v2/worktrees pip-v2-control pip-v2-control 700
-ensure_directory /var/lib/pip-v2/artifacts pip-v2-control pip-v2-control 700
-ensure_directory /var/lib/pip-v2/provider-home pip-v2-control pip-v2-control 700
+ensure_directory /var/lib/pip-v2/worktrees pip-v2-control pip-v2-control 770
+ensure_directory /var/lib/pip-v2/artifacts pip-v2-control pip-v2-control 770
+ensure_directory /var/lib/pip-v2/provider-home pip-v2-worker pip-v2-control 700
 ensure_directory /var/lib/pip-v2/hermes pip-v2-control pip-v2-control 700
+ensure_directory /var/lib/pip-v2/direct-queue pip-v2-control pip-v2-control 750
+ensure_directory /var/lib/pip-v2/direct-queue/inbox pip-v2-control pip-v2-control 750
+ensure_directory /var/lib/pip-v2/direct-queue/results pip-v2-worker pip-v2-control 770
+ensure_directory /var/lib/pip-v2/direct-queue/archive pip-v2-control pip-v2-control 700
 
 "$staging/cohort/root/bin/pip-control" install-release \
   --cohort "$staging/cohort" \

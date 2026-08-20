@@ -29,6 +29,7 @@ fn staged_active_controller_template_uses_a_dedicated_shared_hermes_root() {
     assert!(service.contains("controller-cycle"));
     assert!(service.contains("--policy /etc/pip-v2/repositories/%i.json"));
     assert!(service.contains("--skills-commit-file /opt/pip-v2/current/SOURCE.COMMIT"));
+    assert!(service.contains("--direct-queue /var/lib/pip-v2/direct-queue"));
     assert!(service.contains("LoadCredential=github.token:/etc/pip-v2/github.token"));
     assert!(service.contains("--git-askpass /opt/pip-v2/current/bin/pip-control"));
     assert!(service.contains(
@@ -48,15 +49,18 @@ fn direct_worker_template_has_provider_state_but_no_controller_credentials() {
     let service = include_str!("../../../packaging/systemd/pip-v2-direct-worker@.service");
     let timer = include_str!("../../../packaging/systemd/pip-v2-direct-worker@.timer");
 
-    assert!(service.contains("User=pip-v2-control"));
+    assert!(service.contains("User=pip-v2-worker"));
     assert!(service.contains("Environment=HOME=/var/lib/pip-v2/provider-home"));
     assert!(service.contains("direct-worker-cycle"));
+    assert!(service.contains("--direct-queue /var/lib/pip-v2/direct-queue"));
+    assert!(!service.contains("--database"));
     assert!(service.contains("--cursor cursor-agent"));
     assert!(service.contains("--skills-root /opt/pip-v2/current/share/pip-v2/skills"));
     assert!(!service.contains("LoadCredential="));
     assert!(!service.contains("github.token"));
+    assert!(service.contains("InaccessiblePaths=/var/lib/pip-v2/ledger.db"));
     assert!(!service.contains("--hermes"));
-    assert!(service.contains("InaccessiblePaths=/var/lib/pip-v2/hermes"));
+    assert!(service.contains("/var/lib/pip-v2/hermes"));
     assert!(timer.contains("OnUnitActiveSec=15s"));
 }
 
@@ -69,7 +73,10 @@ fn hermes_gateway_owns_dispatch_without_controller_credentials_or_ledger_access(
     assert!(service.contains("Environment=HERMES_KANBAN_HOME=/var/lib/pip-v2/hermes"));
     assert!(service.contains("ExecStart=/usr/local/bin/hermes gateway run --no-supervise"));
     assert!(service.contains("InaccessiblePaths=/var/lib/pip-v2/ledger.db"));
-    assert!(service.contains("ReadWritePaths=/var/lib/pip-v2/hermes /var/lib/pip-v2/worktrees"));
+    assert!(service.contains("ReadWritePaths=/var/lib/pip-v2/hermes"));
+    assert!(service.contains(
+        "ReadOnlyPaths=/opt/pip-v2/current /var/lib/pip-v2/repositories /var/lib/pip-v2/worktrees"
+    ));
     assert!(!service.contains("LoadCredential="));
     assert!(!service.contains("github.token"));
 }

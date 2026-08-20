@@ -201,6 +201,8 @@ fn controller_cycle_is_inert_before_credentials_database_or_hermes_when_policy_i
             "pip-v2-controller",
             "--skills-commit-file",
             directory.path().join("missing-source").to_str().unwrap(),
+            "--direct-queue",
+            directory.path().join("missing-queue").to_str().unwrap(),
             "--now",
             "1787220000",
         ])

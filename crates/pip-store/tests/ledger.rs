@@ -112,6 +112,10 @@ fn direct_attempts_preserve_terminal_results_and_audit_history() {
         .completed_direct_attempt("effect-planner-1")
         .unwrap()
         .unwrap();
+    assert_eq!(
+        store.direct_attempt(attempt_id).unwrap(),
+        Some(attempt.clone())
+    );
     assert_eq!(attempt.attempt_id, 1);
     assert_eq!(attempt.task_id, "planner-task-1");
     assert_eq!(attempt.status, DirectAttemptStatus::Complete);
