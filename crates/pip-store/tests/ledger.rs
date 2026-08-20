@@ -80,7 +80,7 @@ fn transition() -> TransitionInput {
 #[test]
 fn migration_creates_hardened_authoritative_schema() {
     let (_directory, store) = open();
-    assert_eq!(store.schema_version().unwrap(), 1);
+    assert_eq!(store.schema_version().unwrap(), 2);
     assert!(store.foreign_keys_enabled().unwrap());
     assert_eq!(store.journal_mode().unwrap(), "wal");
 }
@@ -114,7 +114,7 @@ fn operator_status_separates_pending_leased_and_delivered_work() {
         .unwrap();
 
     let status = store.status(110).unwrap();
-    assert_eq!(status.schema_version, 1);
+    assert_eq!(status.schema_version, 2);
     assert_eq!(status.cases.len(), 1);
     assert_eq!(status.cases[0].case_key, "repo:984321#1240@1");
     assert_eq!(status.events, 1);
@@ -350,6 +350,60 @@ fn newer_schema_fails_closed() {
 }
 
 #[test]
+fn schema_one_upgrades_forward_without_losing_existing_projections() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("v1.db");
+    let mut store = Store::open(&path).unwrap();
+    store.create_case(&new_case()).unwrap();
+    let effect = store.claim_effect("projector", 100, 30).unwrap().unwrap();
+    let projection = TaskProjectionInput {
+        projection_id: "legacy-projection".into(),
+        effect_id: effect.effect_id,
+        board: "pip-mdk".into(),
+        task_id: "legacy-task".into(),
+        desired: json!({"status": "blocked"}),
+        observed: json!({"id": "legacy-task"}),
+    };
+    store
+        .complete_task_projection(&projection, "projector", 101, None)
+        .unwrap();
+    drop(store);
+
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA foreign_keys = OFF;
+             ALTER TABLE task_projections RENAME TO task_projections_v2;
+             CREATE TABLE task_projections (
+                 projection_id TEXT PRIMARY KEY,
+                 case_key TEXT NOT NULL REFERENCES cases(case_key),
+                 effect_id TEXT NOT NULL UNIQUE REFERENCES outbox(effect_id),
+                 board TEXT NOT NULL,
+                 task_id TEXT,
+                 desired_json TEXT NOT NULL,
+                 observed_json TEXT,
+                 reconciled_at INTEGER
+             ) STRICT;
+             INSERT INTO task_projections SELECT * FROM task_projections_v2;
+             DROP TABLE task_projections_v2;
+             DELETE FROM schema_migrations WHERE version = 2;
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+    drop(connection);
+
+    let upgraded = Store::open(&path).unwrap();
+    assert_eq!(upgraded.schema_version().unwrap(), 2);
+    assert_eq!(
+        upgraded
+            .task_projection("legacy-projection")
+            .unwrap()
+            .unwrap(),
+        projection
+    );
+}
+
+#[test]
 fn database_path_is_never_implicitly_created_by_read_only_open() {
     let directory = tempfile::tempdir().unwrap();
     let missing = directory.path().join("missing.db");
@@ -427,5 +481,44 @@ fn task_projection_and_outbox_delivery_commit_together_and_replay() {
             .claim_effect("projector-c", 200, 30)
             .unwrap()
             .is_none()
+    );
+}
+
+#[test]
+fn one_dispatch_effect_atomically_records_gate_and_worker_projections() {
+    let (_directory, mut store) = open();
+    store.create_case(&new_case()).unwrap();
+    let claimed = store.claim_effect("projector-a", 100, 30).unwrap().unwrap();
+    let projections = [
+        TaskProjectionInput {
+            projection_id: "repo:984321#1240@1:planner:gate".into(),
+            effect_id: claimed.effect_id.clone(),
+            board: "pip-mdk".into(),
+            task_id: "gate-1".into(),
+            desired: json!({"kind": "gate", "status": "blocked"}),
+            observed: json!({"id": "gate-1", "status": "blocked"}),
+        },
+        TaskProjectionInput {
+            projection_id: "repo:984321#1240@1:planner:worker".into(),
+            effect_id: claimed.effect_id.clone(),
+            board: "pip-mdk".into(),
+            task_id: "worker-1".into(),
+            desired: json!({"kind": "worker", "status": "blocked"}),
+            observed: json!({"id": "worker-1", "status": "blocked"}),
+        },
+    ];
+
+    assert_eq!(
+        store
+            .complete_task_projections(&projections, "projector-a", 110, None)
+            .unwrap(),
+        ApplyResult::Applied
+    );
+    assert_eq!(store.task_projection_count().unwrap(), 2);
+    assert_eq!(
+        store
+            .complete_task_projections(&projections, "projector-a", 111, None)
+            .unwrap(),
+        ApplyResult::Replayed
     );
 }

@@ -13,7 +13,7 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 
 const MIGRATION_1: &str = r#"
 CREATE TABLE schema_migrations (
@@ -155,6 +155,33 @@ END;
 CREATE TRIGGER findings_no_delete BEFORE DELETE ON findings BEGIN
     SELECT RAISE(ABORT, 'findings are immutable');
 END;
+"#;
+
+const MIGRATION_2: &str = r#"
+ALTER TABLE task_projections RENAME TO task_projections_v1;
+
+CREATE TABLE task_projections (
+    projection_id TEXT PRIMARY KEY,
+    case_key TEXT NOT NULL REFERENCES cases(case_key),
+    effect_id TEXT NOT NULL REFERENCES outbox(effect_id),
+    board TEXT NOT NULL,
+    task_id TEXT,
+    desired_json TEXT NOT NULL,
+    observed_json TEXT,
+    reconciled_at INTEGER
+) STRICT;
+
+INSERT INTO task_projections(
+    projection_id, case_key, effect_id, board, task_id,
+    desired_json, observed_json, reconciled_at
+)
+SELECT
+    projection_id, case_key, effect_id, board, task_id,
+    desired_json, observed_json, reconciled_at
+FROM task_projections_v1;
+
+DROP TABLE task_projections_v1;
+CREATE INDEX task_projections_effect ON task_projections(effect_id, projection_id);
 "#;
 
 #[derive(Clone, Debug, Serialize)]
@@ -875,73 +902,132 @@ impl Store {
         now: u64,
         fault: Option<FaultPoint>,
     ) -> Result<ApplyResult> {
+        self.complete_task_projections(std::slice::from_ref(input), owner, now, fault)
+    }
+
+    pub fn complete_task_projections(
+        &mut self,
+        inputs: &[TaskProjectionInput],
+        owner: &str,
+        now: u64,
+        fault: Option<FaultPoint>,
+    ) -> Result<ApplyResult> {
         self.ensure_writable()?;
-        if input.projection_id.trim().is_empty()
-            || input.effect_id.trim().is_empty()
-            || input.board.trim().is_empty()
-            || input.task_id.trim().is_empty()
-            || !input.desired.is_object()
-            || !input.observed.is_object()
+        let effect_id = inputs.first().map(|input| input.effect_id.as_str());
+        let unique = inputs
+            .iter()
+            .map(|input| input.projection_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        if inputs.is_empty()
+            || unique.len() != inputs.len()
             || owner.trim().is_empty()
+            || effect_id.is_none()
+            || inputs.iter().any(|input| {
+                input.projection_id.trim().is_empty()
+                    || input.effect_id.trim().is_empty()
+                    || input.board.trim().is_empty()
+                    || input.task_id.trim().is_empty()
+                    || !input.desired.is_object()
+                    || !input.observed.is_object()
+                    || Some(input.effect_id.as_str()) != effect_id
+            })
         {
             return Err(StoreError::InvalidInput(
-                "projection, effect, board, task, object evidence, and owner are required",
+                "unique projections for one effect, board, task, object evidence, and owner are required",
             ));
         }
-        let desired_json = serde_json::to_string(&input.desired)?;
-        let observed_json = serde_json::to_string(&input.observed)?;
+        let effect_id = effect_id.expect("validated effect ID");
+        let serialized = inputs
+            .iter()
+            .map(|input| {
+                Ok((
+                    input,
+                    serde_json::to_string(&input.desired)?,
+                    serde_json::to_string(&input.observed)?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let existing: Option<(String, String, String, String, String, String)> = transaction
+        let (case_key, delivered): (String, Option<i64>) = transaction
             .query_row(
-                "SELECT projection_id, effect_id, board, task_id, desired_json, observed_json
-                 FROM task_projections WHERE projection_id = ?1 OR effect_id = ?2",
-                params![input.projection_id, input.effect_id],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                    ))
-                },
+                "SELECT case_key, delivered_at FROM outbox WHERE effect_id = ?1",
+                [effect_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .optional()?;
-        if let Some(existing) = existing {
-            let exact = existing.0 == input.projection_id
-                && existing.1 == input.effect_id
-                && existing.2 == input.board
-                && existing.3 == input.task_id
-                && existing.4 == desired_json
-                && existing.5 == observed_json;
-            if !exact {
+            .optional()?
+            .ok_or_else(|| StoreError::LeaseLost(effect_id.to_owned()))?;
+        let existing_count: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM task_projections WHERE effect_id = ?1",
+            [effect_id],
+            |row| row.get(0),
+        )?;
+        if delivered.is_some() {
+            if usize::try_from(existing_count).ok() != Some(inputs.len()) {
+                return Err(StoreError::IdempotencyConflict {
+                    id: effect_id.to_owned(),
+                });
+            }
+            for (input, desired_json, observed_json) in &serialized {
+                let existing: Option<(String, String, String, String, String)> = transaction
+                    .query_row(
+                        "SELECT effect_id, board, task_id, desired_json, observed_json
+                         FROM task_projections WHERE projection_id = ?1",
+                        [&input.projection_id],
+                        |row| {
+                            Ok((
+                                row.get(0)?,
+                                row.get(1)?,
+                                row.get(2)?,
+                                row.get(3)?,
+                                row.get(4)?,
+                            ))
+                        },
+                    )
+                    .optional()?;
+                if existing.as_ref()
+                    != Some(&(
+                        input.effect_id.clone(),
+                        input.board.clone(),
+                        input.task_id.clone(),
+                        desired_json.clone(),
+                        observed_json.clone(),
+                    ))
+                {
+                    return Err(StoreError::IdempotencyConflict {
+                        id: input.projection_id.clone(),
+                    });
+                }
+            }
+            transaction.commit()?;
+            return Ok(ApplyResult::Replayed);
+        }
+        let lease_valid: bool = transaction.query_row(
+            "SELECT EXISTS(
+                    SELECT 1 FROM outbox
+                    WHERE effect_id = ?1 AND delivered_at IS NULL
+                      AND lease_owner = ?2 AND lease_until >= ?3
+                )",
+            params![effect_id, owner, sql_u64(now)?],
+            |row| row.get(0),
+        )?;
+        if !lease_valid || existing_count != 0 {
+            return Err(StoreError::LeaseLost(effect_id.to_owned()));
+        }
+        for (input, desired_json, observed_json) in &serialized {
+            let existing_projection: Option<String> = transaction
+                .query_row(
+                    "SELECT effect_id FROM task_projections WHERE projection_id = ?1",
+                    [&input.projection_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if existing_projection.is_some() {
                 return Err(StoreError::IdempotencyConflict {
                     id: input.projection_id.clone(),
                 });
             }
-            let delivered: Option<i64> = transaction.query_row(
-                "SELECT delivered_at FROM outbox WHERE effect_id = ?1",
-                [&input.effect_id],
-                |row| row.get(0),
-            )?;
-            if delivered.is_some() {
-                transaction.commit()?;
-                return Ok(ApplyResult::Replayed);
-            }
-        } else {
-            let case_key: String = transaction
-                .query_row(
-                    "SELECT case_key FROM outbox
-                     WHERE effect_id = ?1 AND delivered_at IS NULL
-                       AND lease_owner = ?2 AND lease_until >= ?3",
-                    params![input.effect_id, owner, sql_u64(now)?],
-                    |row| row.get(0),
-                )
-                .optional()?
-                .ok_or_else(|| StoreError::LeaseLost(input.effect_id.clone()))?;
             transaction.execute(
                 "INSERT INTO task_projections(projection_id, case_key, effect_id, board, task_id, desired_json, observed_json, reconciled_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -961,10 +1047,10 @@ impl Store {
         let updated = transaction.execute(
             "UPDATE outbox SET delivered_at = ?1, lease_owner = NULL, lease_until = NULL
              WHERE effect_id = ?2 AND lease_owner = ?3 AND lease_until >= ?1 AND delivered_at IS NULL",
-            params![sql_u64(now)?, input.effect_id, owner],
+            params![sql_u64(now)?, effect_id, owner],
         )?;
         if updated != 1 {
-            return Err(StoreError::LeaseLost(input.effect_id.clone()));
+            return Err(StoreError::LeaseLost(effect_id.to_owned()));
         }
         transaction.commit()?;
         Ok(ApplyResult::Applied)
@@ -1003,7 +1089,7 @@ fn configure(connection: &Connection) -> Result<()> {
 }
 
 fn migrate(connection: &mut Connection) -> Result<()> {
-    let version = schema_version(connection)?;
+    let mut version = schema_version(connection)?;
     if version > SCHEMA_VERSION {
         return Err(StoreError::UnsupportedSchema(version));
     }
@@ -1014,8 +1100,23 @@ fn migrate(connection: &mut Connection) -> Result<()> {
             "INSERT INTO schema_migrations(version, applied_at) VALUES (1, 0)",
             [],
         )?;
-        transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        transaction.pragma_update(None, "user_version", 1)?;
         transaction.commit()?;
+        version = 1;
+    }
+    if version == 1 {
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Exclusive)?;
+        transaction.execute_batch(MIGRATION_2)?;
+        transaction.execute(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (2, 0)",
+            [],
+        )?;
+        transaction.pragma_update(None, "user_version", 2)?;
+        transaction.commit()?;
+        version = 2;
+    }
+    if version != SCHEMA_VERSION {
+        return Err(StoreError::UnsupportedSchema(version));
     }
     Ok(())
 }
