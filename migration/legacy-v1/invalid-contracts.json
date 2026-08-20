@@ -1,0 +1,19 @@
+{
+  "fixture_format": 1,
+  "cases": [
+    {
+      "name": "planner role is mandatory",
+      "source": "planner",
+      "contract": "planner-result",
+      "remove": ["role"],
+      "error_contains": "role.*required"
+    },
+    {
+      "name": "builder model substitution fails closed",
+      "source": "builder",
+      "contract": "builder-result",
+      "set": {"actual_model": "cursor/auto"},
+      "error_contains": "model substitution"
+    }
+  ]
+}

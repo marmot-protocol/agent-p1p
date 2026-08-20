@@ -1,0 +1,15 @@
+{
+  "fixture_format": 1,
+  "cases": [
+    {"name": "accepted plan builds", "from": "PLANNING", "outcome": "PROCEED", "to": "BUILDING"},
+    {"name": "planning ambiguity waits", "from": "PLANNING", "outcome": "NEEDS_HUMAN_SCOPE_DECISION", "to": "WAITING_HUMAN"},
+    {"name": "builder opens review", "from": "BUILDING", "outcome": "REVIEW_READY", "to": "REVIEWING"},
+    {"name": "review changes remediate", "from": "REVIEWING", "outcome": "REQUEST_CHANGES", "remediation_round": 0, "max_rounds": 3, "to": "BUILDING"},
+    {"name": "review loop bound escalates", "from": "REVIEWING", "outcome": "REQUEST_CHANGES", "remediation_round": 3, "max_rounds": 3, "to": "ESCALATED"},
+    {"name": "approved reviews reach final", "from": "REVIEWING", "outcome": "REVIEWS_APPROVED", "to": "FINAL_REVIEW"},
+    {"name": "shadow final waits for human", "from": "FINAL_REVIEW", "outcome": "HUMAN_REVIEW_REQUIRED", "to": "SHADOW_READY"},
+    {"name": "final can return to builder", "from": "FINAL_REVIEW", "outcome": "RETURN_TO_BUILD", "remediation_round": 0, "max_rounds": 3, "to": "BUILDING"},
+    {"name": "final return bound escalates", "from": "FINAL_REVIEW", "outcome": "RETURN_TO_BUILD", "remediation_round": 3, "max_rounds": 3, "to": "ESCALATED"},
+    {"name": "human merge completes shadow case", "from": "SHADOW_READY", "outcome": "HUMAN_MERGED", "to": "COMPLETED"}
+  ]
+}

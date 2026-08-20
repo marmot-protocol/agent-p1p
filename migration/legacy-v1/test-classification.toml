@@ -1,0 +1,47 @@
+format_version = 1
+baseline_commit = "2607004f65ce2cbff75ec2fbda4d407b6eb22f6f"
+
+[[module]]
+path = "tests/test_control_plane.py"
+disposition = "split"
+reason = "Port bounded protocol, identity, and concurrency invariants; replace Python socketserver and systemd notification mechanics with Rust integration tests."
+
+[[module]]
+path = "tests/test_decision_reconciler.py"
+disposition = "port"
+reason = "Numeric actor identity, immutable comment evidence, idempotency, narrowing, and fail-closed history are core Rust evidence fixtures."
+
+[[module]]
+path = "tests/test_github_gate.py"
+disposition = "port"
+reason = "Exact-head CI, review, ownership, pagination, and mergeability checks define the provider-independent GitHub evidence boundary."
+
+[[module]]
+path = "tests/test_kanban_gate.py"
+disposition = "split"
+reason = "Port result, model, finding, and exact-head semantics; replace fixed two-round DAG and Python-specific Hermes envelope plumbing with dynamic Rust transitions."
+
+[[module]]
+path = "tests/test_kanban_router.py"
+disposition = "replace"
+reason = "Preserve idempotent projection and role binding requirements in the Rust outbox/Hermes adapter without retaining the compiled canary DAG."
+
+[[module]]
+path = "tests/test_kanban_sentinel.py"
+disposition = "legacy-only"
+reason = "Direct mutation of Hermes internal SQLite is a legacy activation workaround and is not part of the target adapter contract."
+
+[[module]]
+path = "tests/test_repository_contract.py"
+disposition = "split"
+reason = "Port language-neutral schemas and safety invariants; replace wheel, Python entry point, and legacy installer assertions with Cargo release-manifest and lifecycle gates."
+
+[[module]]
+path = "tests/test_route_consumer.py"
+disposition = "replace"
+reason = "Preserve live authorization, quiescence, and replay requirements in the authoritative ledger/outbox reconciler rather than the fixed route JSON timer."
+
+[[module]]
+path = "tests/test_runtime.py"
+disposition = "split"
+reason = "Port state, store, adapter, secret, and offline-case behavior while replacing Python bootstrap, wheel-resource, and process implementation details."
