@@ -2,13 +2,19 @@
 
 use std::fmt;
 use std::num::{NonZeroU32, NonZeroU64};
+use std::path::PathBuf;
 use std::str::FromStr;
+use std::time::Duration;
 
 use pip_contracts::{BuilderOutcome, BuilderResult, WorkerResult};
 use pip_controller::{ControllerError, LedgerController, WorkflowCommand};
 use pip_core::{
     CaseId, CaseState, Event, EventId, GitSha, IssueNumber, ObservedAt, PlanVersion,
     PolicyRevision, PullRequestNumber, RepositoryId, StateRevision, WorkflowVersion,
+};
+use pip_executor::{
+    GitPublicationSpec, GitPublisher, GitRunner, ProcessGitRunner, PublicationError,
+    PublicationResult,
 };
 use pip_github::{GitHubError, GitHubWriter, MutationResult, MutationTransport, PullRequestSpec};
 use pip_store::{EvidenceInput, Store, StoreError, StoredCase};
@@ -35,6 +41,50 @@ impl<T: MutationTransport> DraftPullRequestWriter for GitHubWriter<T> {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BranchPublicationRequest {
+    pub worktree_root: PathBuf,
+    pub worktree: PathBuf,
+    pub remote: String,
+    pub expected_remote_url: String,
+    pub branch: String,
+    pub local_head: String,
+    pub expected_remote_head: Option<String>,
+}
+
+pub trait BranchPublisher {
+    fn publish_branch(
+        &self,
+        request: &BranchPublicationRequest,
+    ) -> Result<PublicationResult, PublicationError>;
+}
+
+impl<R: GitRunner> BranchPublisher for GitPublisher<R> {
+    fn publish_branch(
+        &self,
+        request: &BranchPublicationRequest,
+    ) -> Result<PublicationResult, PublicationError> {
+        let local_head =
+            GitSha::from_str(&request.local_head).map_err(|_| PublicationError::InvalidSpec)?;
+        let expected_remote_head = request
+            .expected_remote_head
+            .as_deref()
+            .map(GitSha::from_str)
+            .transpose()
+            .map_err(|_| PublicationError::InvalidSpec)?;
+        let spec = GitPublicationSpec::new_scoped(
+            &request.worktree_root,
+            &request.worktree,
+            &request.remote,
+            &request.expected_remote_url,
+            &request.branch,
+            local_head,
+            expected_remote_head,
+        )?;
+        self.publish(&spec)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum DraftPullRequestCycle {
@@ -52,6 +102,7 @@ pub enum DraftPullRequestError {
     GitHub(GitHubError),
     Store(StoreError),
     Controller(ControllerError),
+    Publication(PublicationError),
     MissingAutomationActor,
     InvalidCase,
     InvalidBuildJoin,
@@ -66,6 +117,7 @@ impl fmt::Display for DraftPullRequestError {
             Self::GitHub(error) => error.fmt(formatter),
             Self::Store(error) => error.fmt(formatter),
             Self::Controller(error) => error.fmt(formatter),
+            Self::Publication(error) => error.fmt(formatter),
             Self::MissingAutomationActor => {
                 formatter.write_str("draft PR publication requires an automation actor")
             }
@@ -100,10 +152,40 @@ macro_rules! error_from {
 error_from!(GitHubError, GitHub);
 error_from!(StoreError, Store);
 error_from!(ControllerError, Controller);
+error_from!(PublicationError, Publication);
 
 #[allow(clippy::too_many_arguments)]
 pub fn publish_draft_pull_request_once<W: DraftPullRequestWriter>(
     writer: &W,
+    policy: &RepositoryPolicy,
+    store: &mut Store,
+    now: u64,
+    owner: &str,
+    lease_seconds: u64,
+    authorization_valid: bool,
+) -> Result<DraftPullRequestCycle, DraftPullRequestError> {
+    let publisher = GitPublisher::new(
+        ProcessGitRunner,
+        "git",
+        Duration::from_secs(30),
+        1024 * 1024,
+    )?;
+    publish_draft_pull_request_once_with(
+        writer,
+        &publisher,
+        policy,
+        store,
+        now,
+        owner,
+        lease_seconds,
+        authorization_valid,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn publish_draft_pull_request_once_with<W: DraftPullRequestWriter, P: BranchPublisher>(
+    writer: &W,
+    publisher: &P,
     policy: &RepositoryPolicy,
     store: &mut Store,
     now: u64,
@@ -150,6 +232,32 @@ pub fn publish_draft_pull_request_once<W: DraftPullRequestWriter>(
         "{}repo-{}/issue-{}/workflow-{}",
         policy.branch_prefix, case.repository_id, case.issue_number, case.workflow_version
     );
+    let worktree_root = PathBuf::from(&policy.workspace);
+    let worktree = worktree_root.join(format!(
+        "repo-{}-issue-{}-workflow-{}",
+        case.repository_id, case.issue_number, case.workflow_version
+    ));
+    let publication = publisher.publish_branch(&BranchPublicationRequest {
+        worktree_root,
+        worktree,
+        remote: "origin".into(),
+        expected_remote_url: format!(
+            "https://github.com/{}/{}.git",
+            policy.repository.owner, policy.repository.name
+        ),
+        branch: branch.clone(),
+        local_head: head_sha.into(),
+        expected_remote_head: case.head_sha.clone(),
+    });
+    let branch_publication = match publication {
+        Ok(PublicationResult::Created) => "created",
+        Ok(PublicationResult::Updated) => "updated",
+        Ok(PublicationResult::Existing) => "existing",
+        Err(error) => {
+            store.release_effect(&claimed.effect_id, owner)?;
+            return Err(error.into());
+        }
+    };
     let body = render_body(&case, &build)?;
     let result = writer.ensure_draft_pull_request(&PullRequestSpec {
         owner: policy.repository.owner.clone(),
@@ -190,6 +298,7 @@ pub fn publish_draft_pull_request_once<W: DraftPullRequestWriter>(
         payload: json!({
             "actor_id": expected_actor,
             "branch": branch,
+            "branch_publication": branch_publication,
             "head_sha": head_sha,
             "mutation": mutation,
             "pull_request_number": pr_number,

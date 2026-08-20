@@ -39,6 +39,7 @@ pub struct RolePolicy {
 pub struct WorkflowPolicy {
     board: String,
     workspace: String,
+    branch_prefix: String,
     roles: Vec<RolePolicy>,
 }
 
@@ -46,10 +47,12 @@ impl WorkflowPolicy {
     pub fn new(
         board: impl Into<String>,
         workspace: impl Into<String>,
+        branch_prefix: impl Into<String>,
         roles: Vec<RolePolicy>,
     ) -> Result<Self, DispatchError> {
         let board = board.into();
         let workspace = workspace.into();
+        let branch_prefix = branch_prefix.into();
         let expected = [
             WorkerRole::Planner,
             WorkerRole::Builder,
@@ -67,12 +70,18 @@ impl WorkflowPolicy {
                 .iter()
                 .all(|expected| roles.iter().any(|role| role.role == *expected));
         let valid_bindings = roles.iter().all(valid_role_policy);
-        if !valid_id(&board) || !valid_text(&workspace, 4096) || !valid_roles || !valid_bindings {
+        if !valid_id(&board)
+            || !valid_text(&workspace, 4096)
+            || !valid_branch_prefix(&branch_prefix)
+            || !valid_roles
+            || !valid_bindings
+        {
             return Err(DispatchError::InvalidPolicy);
         }
         Ok(Self {
             board,
             workspace,
+            branch_prefix,
             roles,
         })
     }
@@ -392,6 +401,28 @@ fn dispatch(
     if role == WorkerRole::FinalReviewer {
         body.insert("final_review_round".into(), json!(review_round));
     }
+    if role == WorkerRole::Builder {
+        body.insert(
+            "assigned_branch".into(),
+            json!(format!(
+                "{}repo-{}/issue-{}/workflow-{}",
+                policy.branch_prefix,
+                context.case_id.repository().get(),
+                context.case_id.issue().get(),
+                context.case_id.workflow().get(),
+            )),
+        );
+        body.insert(
+            "assigned_worktree".into(),
+            json!(format!(
+                "{}/repo-{}-issue-{}-workflow-{}",
+                policy.workspace.trim_end_matches('/'),
+                context.case_id.repository().get(),
+                context.case_id.issue().get(),
+                context.case_id.workflow().get(),
+            )),
+        );
+    }
     body.insert(
         "execution".into(),
         json!(match binding.execution {
@@ -494,6 +525,12 @@ fn valid_text(value: &str, max_len: usize) -> bool {
     !value.trim().is_empty()
         && value.len() <= max_len
         && value.chars().all(|character| !character.is_control())
+}
+
+fn valid_branch_prefix(value: &str) -> bool {
+    value.ends_with('/')
+        && value.len() <= 128
+        && value.trim_end_matches('/').split('/').all(valid_id)
 }
 
 fn hex_digest(bytes: &[u8]) -> String {

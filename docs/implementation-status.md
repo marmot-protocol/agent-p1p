@@ -26,7 +26,8 @@ exist. It is not evidence of live-host installation or a completed canary.
 | Final-review preflight | A durable observation effect joins the accepted plan/build/reviewer ledger, fresh issue/clarification and authorization evidence, exact numeric GitHub actor and role-stamped approvals, current head CI, clean draft-PR ownership/mergeability, and resolved review threads before final-review dispatch | State-machine, adapter, fixture, drift, and restart-safe lease tests |
 | Review publication | Two distinct controller-held reviewer credentials publish the joined role contracts on the exact head; remediation and final preflight remain blocked until both idempotent reviews exist | Policy, state-machine, mutation, outage/retry, and exact-role fixture tests |
 | Plan publication | Planner results first create a durable `PUBLISH_PLAN` effect; the controller publishes the immutable plan comment and only then applies the typed outcome that releases build, human disposition, or terminal recording | Contract, state-machine, mutation, and outage/retry tests |
-| Draft PR publication | A review-ready builder result records only its pushed commit; a durable controller effect creates or updates the stable case-owned draft PR and only then binds PR/head and releases independent CI observation | Initial/remediation identity, mutation outage/retry, state-machine, and exact-head tests |
+| Draft PR publication | A review-ready builder result records only its clean local commit; after verified controller branch publication, the same durable effect creates or updates the stable case-owned draft PR and only then binds PR/head and releases independent CI observation | Initial/remediation identity, branch/PR outage retry, state-machine, and exact-head tests |
+| Branch publication | Builder tasks receive deterministic case-owned worktree and branch assignments but no GitHub credential; the draft-publication effect canonicalizes the worktree under the controller root, pins and directly uses the sole push URL, disables repository hooks/filesystem monitors/credential helpers/proxies/HTTP headers, forces TLS verification, validates clean local branch/head state, uses exact force-with-lease against the ledger's prior remote head, verifies the remote SHA, and only then mutates the draft PR | Assignment, scope, URL-drift, multiple-push-URL, real-bare-remote, race, retry, and controller-cycle tests |
 | Guarded merge | An explicitly guarded/autonomous policy selects the merge method; the controller revalidates the complete final gate, marks the draft ready, revalidates, emits a separate merge effect, merges with expected-head protection, and verifies the recorded merge commit | Restart-convergence, shadow-disablement, state-machine, GraphQL, and mutation tests |
 | Human disposition | `HOLD_FOR_HUMAN`, `ESCALATE`, and shadow-ready effects publish idempotent provenance-marked issue or draft-PR comments; local completion, block, abandonment, and takeover effects commit evidence without writing after lost authorization | Mutation fixtures and transactional effect/evidence tests |
 
@@ -44,14 +45,11 @@ exist. It is not evidence of live-host installation or a completed canary.
 
 These are implementation gaps, not merely missing operational evidence:
 
-1. Complete the scoped branch-push execution boundary. Draft PRs, planner
-   comments, role-stamped reviews, guarded merge, human-held disposition, and
-   terminal recording are now durable controller effects.
-2. Provision and test a compatible Hermes runtime under the dedicated
+1. Provision and test a compatible Hermes runtime under the dedicated
    `pip-v2-control` identity, including repository board, profiles, exact skill
-   links, shared authentication, provider probes, and the gateway/dispatcher
-   observing the same Hermes root.
-3. Record live Hermes and provider outage/recovery evidence, then seek explicit
+   links, shared authentication, the controller-only Git credential helper,
+   provider probes, and the gateway/dispatcher observing the same Hermes root.
+2. Record live Hermes and provider outage/recovery evidence, then seek explicit
    authorization for one MDK shadow case.
 
 ## Runtime topology decision

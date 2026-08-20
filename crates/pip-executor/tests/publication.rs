@@ -56,6 +56,183 @@ fn publisher(runner: FakeGit) -> GitPublisher<FakeGit> {
 }
 
 #[test]
+fn scoped_publication_rejects_a_worktree_outside_the_controller_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("owned");
+    let inside = root.join("repo-984321-issue-1240-workflow-2");
+    let outside = tmp.path().join("foreign");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::create_dir(&inside).unwrap();
+    std::fs::create_dir(&outside).unwrap();
+
+    assert!(
+        GitPublicationSpec::new_scoped(
+            &root,
+            &inside,
+            "origin",
+            "https://github.com/marmot-protocol/mdk.git",
+            "pip/v2/repo-984321/issue-1240/workflow-2",
+            sha('b'),
+            None,
+        )
+        .is_ok()
+    );
+    assert!(matches!(
+        GitPublicationSpec::new_scoped(
+            &root,
+            &outside,
+            "origin",
+            "https://github.com/marmot-protocol/mdk.git",
+            "pip/v2/repo-984321/issue-1240/workflow-2",
+            sha('b'),
+            None,
+        ),
+        Err(PublicationError::InvalidSpec)
+    ));
+}
+
+#[test]
+fn scoped_publication_rejects_remote_url_drift_before_push() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("owned");
+    let worktree = root.join("repo-984321-issue-1240-workflow-2");
+    std::fs::create_dir_all(&worktree).unwrap();
+    let spec = GitPublicationSpec::new_scoped(
+        &root,
+        &worktree,
+        "origin",
+        "https://github.com/marmot-protocol/mdk.git",
+        "pip/v2/repo-984321/issue-1240/workflow-2",
+        sha('b'),
+        None,
+    )
+    .unwrap();
+    let runner = FakeGit::default();
+    runner.push(0, b"https://attacker.invalid/foreign.git\n".to_vec());
+
+    assert!(matches!(
+        publisher(runner.clone()).publish(&spec),
+        Err(PublicationError::RemoteUrlDrift)
+    ));
+    assert!(
+        !runner
+            .commands
+            .borrow()
+            .iter()
+            .any(|command| command.args.iter().any(|argument| argument == "push"))
+    );
+}
+
+#[test]
+fn scoped_publication_rejects_multiple_push_urls_before_network_access() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("owned");
+    let worktree = root.join("repo-984321-issue-1240-workflow-2");
+    std::fs::create_dir_all(&worktree).unwrap();
+    let spec = GitPublicationSpec::new_scoped(
+        &root,
+        &worktree,
+        "origin",
+        "https://github.com/marmot-protocol/mdk.git",
+        "pip/v2/repo-984321/issue-1240/workflow-2",
+        sha('b'),
+        None,
+    )
+    .unwrap();
+    let runner = FakeGit::default();
+    runner.push(
+        0,
+        b"https://github.com/marmot-protocol/mdk.git\nhttps://attacker.invalid/copy.git\n".to_vec(),
+    );
+
+    assert!(matches!(
+        publisher(runner.clone()).publish(&spec),
+        Err(PublicationError::RemoteUrlDrift)
+    ));
+    let commands = runner.commands.borrow();
+    assert_eq!(
+        commands[0]
+            .args
+            .iter()
+            .rev()
+            .take(5)
+            .rev()
+            .collect::<Vec<_>>(),
+        ["remote", "get-url", "--push", "--all", "origin"]
+    );
+    assert!(
+        !commands
+            .iter()
+            .any(|command| command.args.iter().any(|argument| argument == "push"))
+    );
+}
+
+#[test]
+fn scoped_publication_uses_the_bound_url_for_every_network_command() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("owned");
+    let worktree = root.join("repo-984321-issue-1240-workflow-2");
+    std::fs::create_dir_all(&worktree).unwrap();
+    let bound_url = "https://github.com/marmot-protocol/mdk.git";
+    let spec = GitPublicationSpec::new_scoped(
+        &root,
+        &worktree,
+        "origin",
+        bound_url,
+        "pip/v2/repo-984321/issue-1240/workflow-2",
+        sha('b'),
+        None,
+    )
+    .unwrap();
+    let runner = FakeGit::default();
+    runner.push(0, format!("{bound_url}\n"));
+    runner.push(0, format!("{}\n", sha('b')));
+    runner.push(0, b"pip/v2/repo-984321/issue-1240/workflow-2\n".to_vec());
+    runner.push(0, Vec::new());
+    runner.push(0, Vec::new());
+    runner.push(0, Vec::new());
+    runner.push(
+        0,
+        format!(
+            "{}\trefs/heads/pip/v2/repo-984321/issue-1240/workflow-2\n",
+            sha('b')
+        ),
+    );
+
+    assert_eq!(
+        publisher(runner.clone()).publish(&spec).unwrap(),
+        PublicationResult::Created
+    );
+    for command in runner.commands.borrow().iter().filter(|command| {
+        command
+            .args
+            .iter()
+            .any(|argument| argument == "push" || argument == "ls-remote")
+    }) {
+        assert!(command.args.iter().any(|argument| argument == bound_url));
+        assert!(!command.args.iter().any(|argument| argument == "origin"));
+        assert!(
+            command
+                .args
+                .iter()
+                .any(|argument| argument == &format!("http.{bound_url}.proxy="))
+        );
+        assert!(
+            command
+                .args
+                .iter()
+                .any(|argument| argument == &format!("http.{bound_url}.sslVerify=true"))
+        );
+        assert!(
+            command
+                .args
+                .iter()
+                .any(|argument| argument == &format!("http.{bound_url}.extraHeader="))
+        );
+    }
+}
+
+#[test]
 fn owned_branch_update_uses_an_exact_force_with_lease_and_verifies_remote() {
     let tmp = tempfile::tempdir().unwrap();
     let runner = FakeGit::default();
@@ -92,6 +269,24 @@ fn owned_branch_update_uses_an_exact_force_with_lease_and_verifies_remote() {
     assert_eq!(
         push.args,
         [
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.untrackedCache=false",
+            "-c",
+            "credential.helper=",
+            "-c",
+            "http.proxy=",
+            "-c",
+            "http.sslVerify=true",
+            "-c",
+            "http.followRedirects=initial",
+            "-c",
+            "http.extraHeader=",
+            "-c",
+            "remote.origin.proxy=",
             "push",
             "--porcelain",
             "--force-with-lease=refs/heads/pip/v2/repo-984321/issue-1240/workflow-2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -183,9 +378,11 @@ fn process_publisher_creates_and_updates_a_real_bare_remote() {
     let first = read_sha(&repository);
     let publisher =
         GitPublisher::new(ProcessGitRunner, "git", Duration::from_secs(10), 64 * 1024).unwrap();
-    let first_spec = GitPublicationSpec::new(
+    let first_spec = GitPublicationSpec::new_scoped(
+        tmp.path(),
         &repository,
         "origin",
+        remote.to_str().unwrap(),
         "pip/v2/repo-984321/issue-1240/workflow-2",
         first,
         None,
@@ -199,9 +396,11 @@ fn process_publisher_creates_and_updates_a_real_bare_remote() {
     std::fs::write(repository.join("fixture.txt"), "second\n").unwrap();
     run(&repository, &["commit", "-qam", "second"]);
     let second = read_sha(&repository);
-    let second_spec = GitPublicationSpec::new(
+    let second_spec = GitPublicationSpec::new_scoped(
+        tmp.path(),
         &repository,
         "origin",
+        remote.to_str().unwrap(),
         "pip/v2/repo-984321/issue-1240/workflow-2",
         second,
         Some(first),

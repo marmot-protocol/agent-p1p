@@ -84,9 +84,15 @@ directly to building.
 1. Allocate a case-owned branch and worktree record.
 2. Revalidate plan authorization and current repository policy.
 3. Dispatch one fresh builder with the revision-bound immutable evidence
-   bundle, active plan, and assigned paths.
-4. Validate the returned result and independently fetch the branch/PR/head.
-5. Commit the immutable build run and PR/head binding.
+   bundle, active plan, exact case-owned branch, and assigned worktree.
+4. Validate and commit the returned clean local head without giving the worker
+   GitHub credentials.
+5. Canonicalize the assigned worktree under the controller root, require the
+   policy-bound push URL, disable repository hooks/filesystem monitors, clear
+   repository credential-helper/proxy/header configuration, force TLS
+   verification, publish only the assigned branch with exact force-with-lease,
+   verify the remote head, then create/update and independently verify the
+   draft PR/head.
 6. If CI is pending, enter `WAITING_CI` without redispatching the builder.
 7. If CI fails because of the change, create a builder remediation event.
 8. If CI is green and acceptable on the exact head, enter `REVIEWING` and

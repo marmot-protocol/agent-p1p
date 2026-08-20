@@ -191,7 +191,7 @@ hold according to policy.
 | Role | Target responsibility | Write authority |
 |---|---|---|
 | `planner` | Validate issue, root cause, scope, dependencies, and test plan. | Versioned plan artifacts and a bound result contract only. |
-| `builder` | Manage the assigned worktree, implement the active plan, test, commit, and push the assigned branch. | Assigned Pip branch only; no PR mutation. |
+| `builder` | Manage the assigned worktree, implement the active plan, test, and create the exact local commit. | Assigned worktree/branch only; no GitHub credential or mutation. |
 | `reviewer-general` | Correctness, integration, errors, concurrency, tests, maintenance. | Review evidence/comments only. |
 | `reviewer-secperf` | Security, privacy, authorization, abuse, resource bounds, performance. | Review evidence/comments only. |
 | `final-reviewer` | Reconstruct the complete case and determine the next disposition. | Final evidence/comment only. |
@@ -263,15 +263,28 @@ worktree path, active plan, and expected base context. The builder:
 3. implements only the authorized scope;
 4. adds regression coverage and runs required local checks;
 5. inspects the full diff;
-6. creates signed Pip-attributed commits;
-7. pushes only the assigned Pip branch;
-8. reports the exact pushed head; and
-9. leaves draft-PR creation and CI disposition to the controller.
+6. creates a Pip-attributed commit whose trust comes from the bound worker
+   result and subsequent controller, CI, and review gates rather than Git
+   author metadata;
+7. creates that commit only on the assigned local Pip branch and leaves the
+   assigned worktree clean;
+8. reports the exact local commit without receiving a GitHub credential; and
+9. leaves branch publication, draft-PR creation, and CI disposition to the
+   controller.
 
 The builder result first records `BUILD_RECORDED` and cannot release CI
-observation. The controller creates or updates one draft PR using a stable
-case ownership marker, verifies the repository, branch, author, base, and exact
-head returned by GitHub, then applies `REVIEW_READY` with the PR/head binding.
+observation. The same durable publication effect binds the accepted local head
+to the deterministic case worktree and branch, rejects a dirty worktree or
+branch/head drift, compares the current remote head with the ledger's prior
+head, pushes only through exact `--force-with-lease`, and verifies the remote
+SHA. Before any repository command, the controller canonicalizes the worktree
+as a strict child of its configured root, pins the expected push URL, disables
+repository hooks and filesystem monitors, and clears repository-provided
+credential helpers, proxy settings, and HTTP headers while forcing TLS
+verification and bounded redirect behavior. It then creates or updates one
+draft PR using a stable case ownership marker, verifies the repository, branch,
+author, base, and exact head returned by GitHub, and applies `REVIEW_READY` with
+the PR/head binding. A crash after the push replays as an existing exact branch.
 Remediation reuses the same marker and PR number while advancing only the
 assigned branch head.
 
@@ -415,6 +428,10 @@ emits one recovery event.
 - Builders cannot merge; reviewers cannot push; the final reviewer cannot
   merge; the merge transaction cannot reason about code.
 - Worktrees live under a controller-owned root and are assigned by exact path.
+- Controller Git publication ignores worker-controlled hooks, filesystem
+  monitors, credential helpers, proxies, and HTTP headers; requires the
+  policy-bound push URL; and forces TLS verification before using its
+  separately provisioned credential helper.
 - All external payloads are size-bounded, schema-validated, and attributable.
 - Accepted evidence records numeric actor/repository identity and immutable
   content digests.

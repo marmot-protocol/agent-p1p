@@ -147,7 +147,7 @@ impl RepositoryPolicy {
                 skills: role.skills.clone(),
             })
             .collect();
-        WorkflowPolicy::new(&self.board, &self.workspace, roles)
+        WorkflowPolicy::new(&self.board, &self.workspace, &self.branch_prefix, roles)
             .map_err(|error| PolicyError::Dispatch(error.to_string()))
     }
 

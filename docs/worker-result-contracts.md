@@ -79,11 +79,16 @@ Additional fields:
 - `local_checks`; and
 - `finding_resolutions` with exact finding and resolution-head bindings.
 
-`REVIEW_READY` requires the lowercase 40-hex commit the builder pushed to its
-assigned branch. The worker contract has no PR or CI authority fields. The
-controller creates or updates the case-owned draft PR, binds its numeric
-identity and exact head in the ledger, and independently reads the complete
-GitHub CI attempt history before releasing reviewers.
+`REVIEW_READY` requires the lowercase 40-hex local commit on the task's exact
+`assigned_branch` in its `assigned_worktree`. The clean builder process has no
+GitHub credential and must not push. The controller uses the accepted head and
+the ledger's prior remote head in an exact force-with-lease transaction. It
+requires the policy-bound push URL and ignores repository hooks, filesystem
+monitors, credential helpers, proxies, and HTTP headers while forcing TLS
+verification. After verifying the resulting remote SHA, it creates or updates
+the case-owned draft PR, binds its numeric identity and exact head in the
+ledger, and independently reads the complete GitHub CI attempt history before
+releasing reviewers.
 
 ## Reviewers
 

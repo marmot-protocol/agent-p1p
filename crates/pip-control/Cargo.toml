@@ -11,6 +11,7 @@ ed25519-dalek.workspace = true
 pip-contracts = { path = "../pip-contracts" }
 pip-controller = { path = "../pip-controller" }
 pip-core = { path = "../pip-core" }
+pip-executor = { path = "../pip-executor" }
 pip-github = { path = "../pip-github" }
 pip-hermes = { path = "../pip-hermes" }
 pip-store = { path = "../pip-store" }

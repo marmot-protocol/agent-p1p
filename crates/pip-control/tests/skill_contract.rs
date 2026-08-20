@@ -81,6 +81,18 @@ fn final_reviewer_requires_the_controller_preflight_from_the_bound_bundle() {
 }
 
 #[test]
+fn builder_uses_the_assigned_worktree_and_never_pushes_directly() {
+    let builder = ROLE_SKILLS
+        .iter()
+        .find_map(|(name, skill)| (*name == "builder-grok").then_some(*skill))
+        .unwrap();
+    assert!(builder.contains("`assigned_worktree`"));
+    assert!(builder.contains("`assigned_branch`"));
+    assert!(builder.contains("Do not push"));
+    assert!(builder.contains("controller publishes the branch"));
+}
+
+#[test]
 fn mandatory_reviewers_publish_distinct_machine_readable_role_stamps() {
     for (name, marker) in [
         ("reviewer-general", "Pip reviewer role: reviewer-general"),

@@ -14,12 +14,48 @@ use crate::{GitCommand, GitRunner};
 pub struct GitPublicationSpec {
     worktree: PathBuf,
     remote: String,
+    expected_remote_url: Option<String>,
     branch: String,
     local_head: GitSha,
     expected_remote_head: Option<GitSha>,
 }
 
 impl GitPublicationSpec {
+    pub fn new_scoped(
+        worktree_root: impl AsRef<Path>,
+        worktree: impl AsRef<Path>,
+        remote: impl Into<String>,
+        expected_remote_url: impl Into<String>,
+        branch: impl Into<String>,
+        local_head: GitSha,
+        expected_remote_head: Option<GitSha>,
+    ) -> Result<Self, PublicationError> {
+        let root_input = worktree_root.as_ref();
+        if fs::symlink_metadata(root_input)
+            .map_err(|error| PublicationError::Filesystem(error.to_string()))?
+            .file_type()
+            .is_symlink()
+        {
+            return Err(PublicationError::InvalidSpec);
+        }
+        let root = root_input
+            .canonicalize()
+            .map_err(|error| PublicationError::Filesystem(error.to_string()))?;
+        if !root.is_dir() {
+            return Err(PublicationError::InvalidSpec);
+        }
+        let expected_remote_url = expected_remote_url.into();
+        if !valid_remote_url(&expected_remote_url) {
+            return Err(PublicationError::InvalidSpec);
+        }
+        let mut spec = Self::new(worktree, remote, branch, local_head, expected_remote_head)?;
+        if spec.worktree == root || !spec.worktree.starts_with(&root) {
+            return Err(PublicationError::InvalidSpec);
+        }
+        spec.expected_remote_url = Some(expected_remote_url);
+        Ok(spec)
+    }
+
     pub fn new(
         worktree: impl AsRef<Path>,
         remote: impl Into<String>,
@@ -49,6 +85,7 @@ impl GitPublicationSpec {
         Ok(Self {
             worktree,
             remote,
+            expected_remote_url: None,
             branch,
             local_head,
             expected_remote_head,
@@ -68,6 +105,11 @@ impl GitPublicationSpec {
     #[must_use]
     pub fn branch(&self) -> &str {
         &self.branch
+    }
+
+    #[must_use]
+    pub fn expected_remote_url(&self) -> Option<&str> {
+        self.expected_remote_url.as_deref()
     }
 
     #[must_use]
@@ -96,6 +138,7 @@ pub enum PublicationError {
     LocalHeadDrift,
     BranchDrift,
     RemoteRace,
+    RemoteUrlDrift,
     VerificationFailed,
     TimedOut,
     OutputTooLarge,
@@ -119,6 +162,9 @@ impl fmt::Display for PublicationError {
             Self::BranchDrift => formatter.write_str("worktree is not on the bound Pip branch"),
             Self::RemoteRace => {
                 formatter.write_str("remote Git branch changed outside the transaction")
+            }
+            Self::RemoteUrlDrift => {
+                formatter.write_str("Git remote URL differs from the bound repository")
             }
             Self::VerificationFailed => {
                 formatter.write_str("published Git branch could not be verified")
@@ -173,6 +219,21 @@ impl<R: GitRunner> GitPublisher<R> {
         &self,
         spec: &GitPublicationSpec,
     ) -> Result<PublicationResult, PublicationError> {
+        if let Some(expected) = spec.expected_remote_url() {
+            let output = self.execute(
+                spec,
+                ["remote", "get-url", "--push", "--all", spec.remote()]
+                    .map(str::to_owned)
+                    .to_vec(),
+            )?;
+            let text = std::str::from_utf8(&output.stdout)
+                .map_err(|error| PublicationError::MalformedOutput(error.to_string()))?;
+            let urls = text.lines().collect::<Vec<_>>();
+            if urls.as_slice() != [expected] {
+                return Err(PublicationError::RemoteUrlDrift);
+            }
+        }
+        let network_target = spec.expected_remote_url().unwrap_or(spec.remote());
         let local_head = self.single_line(spec, ["rev-parse", "--verify", "HEAD^{commit}"])?;
         let local_head = GitSha::from_str(&local_head)
             .map_err(|error| PublicationError::MalformedOutput(error.to_string()))?;
@@ -194,7 +255,7 @@ impl<R: GitRunner> GitPublisher<R> {
             return Err(PublicationError::DirtyWorktree);
         }
 
-        let actual_remote = self.remote_head(spec)?;
+        let actual_remote = self.remote_head(spec, network_target)?;
         if actual_remote == Some(spec.local_head()) {
             return Ok(PublicationResult::Existing);
         }
@@ -213,11 +274,11 @@ impl<R: GitRunner> GitPublisher<R> {
                 "push".into(),
                 "--porcelain".into(),
                 format!("--force-with-lease={remote_ref}:{expected}"),
-                spec.remote().into(),
+                network_target.into(),
                 format!("HEAD:{remote_ref}"),
             ],
         )?;
-        if self.remote_head(spec)? != Some(spec.local_head()) {
+        if self.remote_head(spec, network_target)? != Some(spec.local_head()) {
             return Err(PublicationError::VerificationFailed);
         }
         Ok(if spec.expected_remote_head().is_some() {
@@ -227,14 +288,18 @@ impl<R: GitRunner> GitPublisher<R> {
         })
     }
 
-    fn remote_head(&self, spec: &GitPublicationSpec) -> Result<Option<GitSha>, PublicationError> {
+    fn remote_head(
+        &self,
+        spec: &GitPublicationSpec,
+        network_target: &str,
+    ) -> Result<Option<GitSha>, PublicationError> {
         let remote_ref = format!("refs/heads/{}", spec.branch());
         let output = self.execute(
             spec,
             vec![
                 "ls-remote".into(),
                 "--heads".into(),
-                spec.remote().into(),
+                network_target.into(),
                 remote_ref.clone(),
             ],
         )?;
@@ -284,12 +349,43 @@ impl<R: GitRunner> GitPublisher<R> {
         spec: &GitPublicationSpec,
         args: Vec<String>,
     ) -> Result<crate::GitOutput, PublicationError> {
+        let mut safe_args = vec![
+            "-c".into(),
+            "core.hooksPath=/dev/null".into(),
+            "-c".into(),
+            "core.fsmonitor=false".into(),
+            "-c".into(),
+            "core.untrackedCache=false".into(),
+            "-c".into(),
+            "credential.helper=".into(),
+            "-c".into(),
+            "http.proxy=".into(),
+            "-c".into(),
+            "http.sslVerify=true".into(),
+            "-c".into(),
+            "http.followRedirects=initial".into(),
+            "-c".into(),
+            "http.extraHeader=".into(),
+            "-c".into(),
+            format!("remote.{}.proxy=", spec.remote()),
+        ];
+        if let Some(url) = spec.expected_remote_url() {
+            safe_args.extend([
+                "-c".into(),
+                format!("http.{url}.proxy="),
+                "-c".into(),
+                format!("http.{url}.sslVerify=true"),
+                "-c".into(),
+                format!("http.{url}.extraHeader="),
+            ]);
+        }
+        safe_args.extend(args);
         let output = self
             .runner
             .run(&GitCommand {
                 program: self.program.clone(),
                 cwd: spec.worktree().to_owned(),
-                args,
+                args: safe_args,
                 timeout: self.timeout,
                 max_output_bytes: self.max_output_bytes,
             })
@@ -315,6 +411,14 @@ fn valid_remote(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+fn valid_remote_url(value: &str) -> bool {
+    !value.trim().is_empty()
+        && value.len() <= 4096
+        && value
+            .chars()
+            .all(|character| !character.is_control() && !character.is_whitespace())
 }
 
 fn valid_owned_branch(value: &str) -> bool {

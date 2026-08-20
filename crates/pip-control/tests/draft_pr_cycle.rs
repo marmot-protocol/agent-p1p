@@ -1,9 +1,10 @@
 use std::cell::RefCell;
 
 use pip_control::{
-    DraftPullRequestCycle, DraftPullRequestWriter, load_repository_policy,
-    publish_draft_pull_request_once,
+    BranchPublicationRequest, BranchPublisher, DraftPullRequestCycle, DraftPullRequestWriter,
+    load_repository_policy, publish_draft_pull_request_once_with,
 };
+use pip_executor::{PublicationError, PublicationResult};
 use pip_github::{GitHubError, MutationResult, PullRequestSpec};
 use pip_store::{EffectInput, EventInput, NewCase, RunInput, Store, TransitionInput};
 use serde_json::{Value, json};
@@ -28,14 +29,50 @@ impl DraftPullRequestWriter for FixtureWriter {
     }
 }
 
+#[derive(Default)]
+struct FixturePublisher {
+    requests: RefCell<Vec<BranchPublicationRequest>>,
+    remote_head: RefCell<Option<String>>,
+    fail: bool,
+}
+
+impl BranchPublisher for FixturePublisher {
+    fn publish_branch(
+        &self,
+        request: &BranchPublicationRequest,
+    ) -> Result<PublicationResult, PublicationError> {
+        self.requests.borrow_mut().push(request.clone());
+        if self.fail {
+            Err(PublicationError::RemoteRace)
+        } else {
+            let mut remote = self.remote_head.borrow_mut();
+            if remote.as_deref() == Some(request.local_head.as_str()) {
+                return Ok(PublicationResult::Existing);
+            }
+            if *remote != request.expected_remote_head {
+                return Err(PublicationError::RemoteRace);
+            }
+            let result = if remote.is_some() {
+                PublicationResult::Updated
+            } else {
+                PublicationResult::Created
+            };
+            *remote = Some(request.local_head.clone());
+            Ok(result)
+        }
+    }
+}
+
 #[test]
 fn controller_creates_deterministic_draft_pr_before_ci_observation() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = build_store(directory.path().join("ledger.db"));
     let writer = FixtureWriter::default();
+    let publisher = FixturePublisher::default();
 
-    let result = publish_draft_pull_request_once(
+    let result = publish_draft_pull_request_once_with(
         &writer,
+        &publisher,
         &active_policy(),
         &mut store,
         100,
@@ -60,6 +97,26 @@ fn controller_creates_deterministic_draft_pr_before_ci_observation() {
     );
     assert_eq!(specs[0].head_sha, "b".repeat(40));
     assert_eq!(specs[0].effect_id, "repo:984321#1240@1:draft-pr");
+    let publications = publisher.requests.borrow();
+    assert_eq!(publications.len(), 1);
+    assert_eq!(
+        publications[0].worktree_root,
+        std::path::PathBuf::from("/var/lib/pip-v2/worktrees/mdk")
+    );
+    assert_eq!(
+        publications[0].worktree,
+        std::path::PathBuf::from("/var/lib/pip-v2/worktrees/mdk/repo-984321-issue-1240-workflow-1")
+    );
+    assert_eq!(
+        publications[0].branch,
+        "pip/v2/repo-984321/issue-1240/workflow-1"
+    );
+    assert_eq!(
+        publications[0].expected_remote_url,
+        "https://github.com/marmot-protocol/mdk.git"
+    );
+    assert_eq!(publications[0].local_head, "b".repeat(40));
+    assert_eq!(publications[0].expected_remote_head, None);
     let case = store.case("repo:984321#1240@1").unwrap().unwrap();
     assert_eq!(case.state, "WAITING_CI");
     assert_eq!(case.pr_number, Some(77));
@@ -70,6 +127,15 @@ fn controller_creates_deterministic_draft_pr_before_ci_observation() {
             .unwrap()
             .is_some()
     );
+    let history = store
+        .immutable_history_for_case("repo:984321#1240@1")
+        .unwrap();
+    let publication = history
+        .evidence
+        .iter()
+        .find(|evidence| evidence.kind == "GITHUB_DRAFT_PULL_REQUEST_PUBLICATION")
+        .unwrap();
+    assert_eq!(publication.payload["branch_publication"], "created");
 }
 
 #[test]
@@ -80,10 +146,12 @@ fn outage_leaves_build_recorded_and_effect_retryable() {
         fail: true,
         ..FixtureWriter::default()
     };
+    let publisher = FixturePublisher::default();
 
     assert!(
-        publish_draft_pull_request_once(
+        publish_draft_pull_request_once_with(
             &writer,
+            &publisher,
             &active_policy(),
             &mut store,
             100,
@@ -97,6 +165,60 @@ fn outage_leaves_build_recorded_and_effect_retryable() {
         store.case("repo:984321#1240@1").unwrap().unwrap().state,
         "BUILDING"
     );
+    let status = store.status(100).unwrap();
+    assert_eq!(status.outbox_pending, 1);
+    assert_eq!(status.outbox_leased, 0);
+    let retry_writer = FixtureWriter::default();
+    assert!(matches!(
+        publish_draft_pull_request_once_with(
+            &retry_writer,
+            &publisher,
+            &active_policy(),
+            &mut store,
+            101,
+            "draft-pr-retry",
+            30,
+            true,
+        )
+        .unwrap(),
+        DraftPullRequestCycle::Published { .. }
+    ));
+    let history = store
+        .immutable_history_for_case("repo:984321#1240@1")
+        .unwrap();
+    let publication = history
+        .evidence
+        .iter()
+        .find(|evidence| evidence.kind == "GITHUB_DRAFT_PULL_REQUEST_PUBLICATION")
+        .unwrap();
+    assert_eq!(publication.payload["branch_publication"], "existing");
+}
+
+#[test]
+fn branch_publication_failure_never_calls_github_and_leaves_the_effect_retryable() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = build_store(directory.path().join("ledger.db"));
+    let writer = FixtureWriter::default();
+    let publisher = FixturePublisher {
+        fail: true,
+        ..FixturePublisher::default()
+    };
+
+    assert!(
+        publish_draft_pull_request_once_with(
+            &writer,
+            &publisher,
+            &active_policy(),
+            &mut store,
+            100,
+            "draft-pr-publisher",
+            30,
+            true,
+        )
+        .is_err()
+    );
+    assert!(writer.specs.borrow().is_empty());
+    assert_eq!(publisher.requests.borrow().len(), 1);
     assert!(
         store
             .claim_effect_matching("retry", 100, 30, &["PUBLISH_DRAFT_PULL_REQUEST"])
@@ -110,9 +232,14 @@ fn remediation_updates_the_same_owned_pr_to_the_new_exact_head() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = remediation_store(directory.path().join("ledger.db"));
     let writer = FixtureWriter::default();
+    let publisher = FixturePublisher {
+        remote_head: RefCell::new(Some("b".repeat(40))),
+        ..FixturePublisher::default()
+    };
 
-    publish_draft_pull_request_once(
+    publish_draft_pull_request_once_with(
         &writer,
+        &publisher,
         &active_policy(),
         &mut store,
         100,
@@ -125,6 +252,9 @@ fn remediation_updates_the_same_owned_pr_to_the_new_exact_head() {
     let spec = &writer.specs.borrow()[0];
     assert_eq!(spec.effect_id, "repo:984321#1240@1:draft-pr");
     assert_eq!(spec.head_sha, "c".repeat(40));
+    let publications = publisher.requests.borrow();
+    assert_eq!(publications[0].local_head, "c".repeat(40));
+    assert_eq!(publications[0].expected_remote_head, Some("b".repeat(40)));
     let case = store.case("repo:984321#1240@1").unwrap().unwrap();
     assert_eq!(case.pr_number, Some(77));
     assert_eq!(case.head_sha, Some("c".repeat(40)));

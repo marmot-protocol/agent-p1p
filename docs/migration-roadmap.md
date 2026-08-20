@@ -110,7 +110,7 @@ Exit gate:
 
 ## Phase 6: GitHub write boundary
 
-**Implementation status:** Partial. The idempotent write primitives and
+**Implementation status:** Locally complete. The idempotent write primitives and
 adversarial tests exist. Authorization removal and foreign-PR takeover are
 durable, and final-review dispatch now waits for exact published GitHub
 evidence. Distinct role identities now publish the joined reviews before
@@ -118,10 +118,16 @@ remediation or final preflight, planner results cannot release their typed
 outcome until the controller publishes the immutable plan comment, and
 human-held issue/PR disposition comments and local terminal effects are
 consumed transactionally. Builder results are also held until the controller
-creates or updates the stable case-owned draft PR. The scoped branch-push
-execution boundary remains open. Guarded merge is implemented behind explicit
-guarded/autonomous policy and is unreachable under MDK shadow policy, so the
-phase exit gate is not yet met.
+creates or updates the stable case-owned draft PR. Builder tasks now receive an
+exact worktree/branch assignment and no GitHub credential; the controller
+publishes the accepted clean local head with exact force-with-lease and remote
+verification before touching the PR. Publication is confined to a canonical
+controller-root worktree and policy-bound push URL while repository-controlled
+hooks, filesystem monitors, credential helpers, proxies, and HTTP headers are
+disabled and TLS verification is forced. Guarded merge is implemented behind
+explicit guarded/autonomous policy and is unreachable under MDK shadow policy.
+A service-owned Git credential helper and live credential-scope evidence remain
+separate activation gates.
 
 Deliverables:
 

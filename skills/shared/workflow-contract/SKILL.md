@@ -31,8 +31,9 @@ This is the shared contract for every Pip v2 role. Role-specific skills add resp
 11. Human takeover or removed authorization stops the case.
 12. Complete the versioned structured result contract before reporting success.
 13. Never merge directly from a planning, building, or review role.
-14. Parent summaries may be truncated. Resolve every declared parent on the task's assigned board, read the full durable run metadata, and dereference declared result artifacts before relying on PR numbers, findings, or remediation evidence.
-15. Return contract version 1 with exactly these common fields plus the role fields: `contract_version`, `workflow_version`, `case` (`repository_id`, `issue_number`, `workflow_version`), `task_id`, `role`, `requested_model`, `actual_model`, `skills_repository_commit`, integer `started_at_unix`, integer `completed_at_unix`, and object `evidence`. Put supplemental artifact paths or diagnostics inside `evidence`. The full field guide is `docs/worker-result-contracts.md` in the source/release documentation.
+14. Worker processes never push Git branches or receive GitHub credentials. A builder commits only in its exact `assigned_worktree` on `assigned_branch`; the deterministic controller publishes and verifies that branch after accepting the result.
+15. Parent summaries may be truncated. Resolve every declared parent on the task's assigned board, read the full durable run metadata, and dereference declared result artifacts before relying on PR numbers, findings, or remediation evidence.
+16. Return contract version 1 with exactly these common fields plus the role fields: `contract_version`, `workflow_version`, `case` (`repository_id`, `issue_number`, `workflow_version`), `task_id`, `role`, `requested_model`, `actual_model`, `skills_repository_commit`, integer `started_at_unix`, integer `completed_at_unix`, and object `evidence`. Put supplemental artifact paths or diagnostics inside `evidence`. The full field guide is `docs/worker-result-contracts.md` in the source/release documentation.
 
 ## Ownership
 
