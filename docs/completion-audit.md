@@ -30,6 +30,7 @@ authorized issue.
 | Guarded merge | Implemented locally, disabled for MDK | Separate ready-for-review, revalidation, expected-head merge, and restart-convergence transaction |
 | Runtime isolation | Implemented locally | Separate control/worker identities, service-owned Hermes root, credential-free worker surfaces, and systemd contract tests |
 | Release provenance and rollback | Implemented locally; trusted CI run external | Signed source-bound cohort, pinned actions/image, protected release workflow, installer verification, and passing disposable-systemd lifecycle |
+| In-flight policy revision changes | Safe for the frozen canary; Phase 10 expansion | Policy revisions are immutable and mismatches fail closed; explicit restrictive overlays and nonrestrictive hot migration are deferred until after Phase 9 acceptance |
 | Global provider/registry/reporting layer | Sequenced after canary | Shared ledger and global active-case limit exist; registry operations, health aggregation, dependency routing, and multi-board reporting remain Phase 10 |
 
 ## Roadmap disposition

@@ -311,7 +311,7 @@ fn reconcile_validated_evidence(
                 .and_then(NonZeroU64::new)
                 .map(ActorId::new),
             excluded: policy.intake.excluded_issue_numbers.contains(&issue.number),
-            held: false,
+            held: policy.intake.held_issue_numbers.contains(&issue.number),
             already_owned: store.case(&case_key)?.is_some(),
             repository_active_cases: u32::try_from(repository_active_cases).unwrap_or(u32::MAX),
             global_active_cases: u32::try_from(global_active_cases).unwrap_or(u32::MAX),

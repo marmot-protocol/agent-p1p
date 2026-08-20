@@ -24,6 +24,7 @@
     "label": "pip-ok",
     "trusted_actor_ids": [202880, 258432291, 292420120],
     "excluded_issue_numbers": [1366, 1384],
+    "held_issue_numbers": [],
     "repository_active_limit": 1,
     "global_active_limit": 1
   },

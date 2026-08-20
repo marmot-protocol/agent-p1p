@@ -238,6 +238,11 @@ policies, but provider health aggregation, repository registry operations,
 cross-repository dependency routing, and multi-board reporting are not claimed
 complete before the single-repository canary is accepted.
 
+Phase 10 also owns explicit restrictive policy overlays and safe migration of
+in-flight cases across nonrestrictive policy revisions. Phase 9 instead freezes
+the installed policy revision for the duration of its single case and fails
+closed on any mismatch.
+
 Expand one dimension at a time:
 
 1. More MDK issues with bounded concurrency.

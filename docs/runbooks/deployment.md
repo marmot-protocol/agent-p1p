@@ -236,6 +236,7 @@ intake:
   label: pip-ok
   enabled: false
   paused: true
+  held_issue_numbers: []
   repository_active_limit: 1
   global_active_limit: 1
 dispatch_enabled: false

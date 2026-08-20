@@ -100,6 +100,19 @@ fn capacity_is_applied_in_sorted_issue_order() {
 }
 
 #[test]
+fn policy_held_issue_is_never_created() {
+    let directory = tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("cases.db")).unwrap();
+    let mut policy = active_policy(1, 1);
+    policy.intake.held_issue_numbers = vec![42];
+
+    let report = reconcile_intake(&source(&[42]), &policy, &mut store, 100, false).unwrap();
+    assert_eq!(report.candidates[0].decision, "INELIGIBLE");
+    assert_eq!(report.candidates[0].blockers, ["HELD"]);
+    assert!(store.status(100).unwrap().cases.is_empty());
+}
+
+#[test]
 fn disabled_or_paused_activation_does_not_touch_the_ledger() {
     for configure in [
         |policy: &mut RepositoryPolicy| policy.intake.enabled = false,

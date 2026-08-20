@@ -34,6 +34,7 @@ pub struct IntakeConfiguration {
     pub label: String,
     pub trusted_actor_ids: Vec<u64>,
     pub excluded_issue_numbers: Vec<u64>,
+    pub held_issue_numbers: Vec<u64>,
     pub repository_active_limit: u32,
     pub global_active_limit: u32,
 }
@@ -230,6 +231,12 @@ fn validate_policy(policy: &RepositoryPolicy) -> Result<(), PolicyError> {
         .iter()
         .copied()
         .collect::<BTreeSet<_>>();
+    let held = policy
+        .intake
+        .held_issue_numbers
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
     let ci = policy.required_ci_contexts.iter().collect::<BTreeSet<_>>();
     let sensitive_scope = policy
         .sensitive_scope_categories
@@ -279,6 +286,9 @@ fn validate_policy(policy: &RepositoryPolicy) -> Result<(), PolicyError> {
         && trusted.iter().all(|id| *id > 0)
         && exclusions.len() == policy.intake.excluded_issue_numbers.len()
         && exclusions.iter().all(|issue| *issue > 0)
+        && held.len() == policy.intake.held_issue_numbers.len()
+        && held.iter().all(|issue| *issue > 0)
+        && exclusions.is_disjoint(&held)
         && policy.intake.repository_active_limit > 0
         && policy.intake.global_active_limit > 0
         && !(policy.merge.is_shadow() && policy.merge.autonomous)

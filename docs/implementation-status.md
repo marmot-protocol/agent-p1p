@@ -15,7 +15,7 @@ exist. It is not evidence of live-host installation or a completed canary.
 |---|---|---|
 | Deterministic workflow | Exhaustive Rust states, events, effects, exact-head joins, remediation/elapsed-time/repeated-finding/provider-failure bounds, durable escalation, and shadow-only MDK disposition | Workspace tests and frozen fixtures |
 | Authoritative storage | SQLite schema v5, immutable webhook deliveries/events/evidence/runs/findings, current-case projection, durable outbox, leases, immutable direct attempts, transactional effect supersession, backup, migration, and crash injection | Workspace and disposable lifecycle tests |
-| Intake reads | Signed `issues/labeled` webhook ingestion with delivery-ID/payload-digest replay protection and a live exact-issue re-read, plus bounded polling recovery using numeric repository/actor identity, policy validation, and concurrency limits | Adversarial fixture tests plus a read-only live GitHub observation; target ingress remains unconfigured |
+| Intake reads | Signed `issues/labeled` webhook ingestion with delivery-ID/payload-digest replay protection and a live exact-issue re-read, plus bounded polling recovery using numeric repository/actor identity, exclusions, explicit holds, policy validation, and concurrency limits | Adversarial fixture tests plus a read-only live GitHub observation; target ingress remains unconfigured |
 | Worker dispatch routing | Hermes-native roles receive controller-gated, idempotent board projections; direct roles become leased `RUN_DIRECT_WORKER` jobs and cross an immutable filesystem bridge to a separate worker identity; mixed reviews split one role to each path; both paths converge through the same result contract | Fake-runner, restart/recovery, mixed-review, systemd-boundary, and offline integration tests |
 | Worker contracts | Versioned planner, builder, two reviewer, and final-reviewer results bound to case, task, role, model, skills commit, plan, PR, and exact head | Contract fixtures and ingestion tests |
 | Worker evidence bundles | Every projected worker receives the complete ordered ledger history at the claimed state revision, including record digests and a reproducible root digest; final review includes the atomically committed GitHub preflight | Ledger, scheduling, dispatch-command, and exact-final-preflight tests |
@@ -69,6 +69,11 @@ they are not claims that local adapter tests already proved production:
    it cannot trigger a model or personal-profile substitution.
 6. Obtain explicit authorization to enable the inert gateway/controller/direct
    timers and run exactly one deliberately labeled MDK shadow case.
+
+The installed policy revision must remain frozen while the Phase 9 case is
+active. A revision mismatch fails closed. Explicit restrictive overlays and
+safe nonrestrictive migration of an in-flight case are Phase 10 work and are
+not claimed by the single-case canary implementation.
 
 ## Runtime topology decision
 

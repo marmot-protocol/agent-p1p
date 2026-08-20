@@ -143,7 +143,7 @@ pub fn reconcile_read_only<S: IntakeSource>(
                 .and_then(std::num::NonZeroU64::new)
                 .map(ActorId::new),
             excluded: policy.intake.excluded_issue_numbers.contains(&issue.number),
-            held: false,
+            held: policy.intake.held_issue_numbers.contains(&issue.number),
             already_owned: false,
             repository_active_cases,
             global_active_cases,
