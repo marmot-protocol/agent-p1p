@@ -1,0 +1,91 @@
+{
+  "fixture_format": 1,
+  "comparisons": [
+    {
+      "legacy_name": "accepted plan builds",
+      "target_name": "accepted plan becomes dispatchable",
+      "classification": "intentional-difference",
+      "rationale": "The authoritative outbox records builder dispatch intent before the builder becomes active."
+    },
+    {
+      "legacy_name": "planning ambiguity waits",
+      "target_name": "planning ambiguity waits",
+      "classification": "equivalent",
+      "rationale": "Both engines hold unresolved scope for a human decision."
+    },
+    {
+      "legacy_name": "builder opens review",
+      "target_name": "builder result waits for independent CI",
+      "classification": "intentional-difference",
+      "rationale": "A builder CI claim cannot directly release reviewers; GitHub CI is independently re-read first."
+    },
+    {
+      "legacy_name": "review changes remediate",
+      "target_name": "review changes enter remediation",
+      "classification": "intentional-difference",
+      "rationale": "Remediation is explicit so a new head invalidates both earlier reviews and CI evidence."
+    },
+    {
+      "legacy_name": "review loop bound escalates",
+      "target_name": "review loop bound escalates",
+      "classification": "equivalent",
+      "rationale": "Both engines escalate exactly at the configured remediation bound."
+    },
+    {
+      "legacy_name": "approved reviews reach final",
+      "target_name": "approved reviews reach final",
+      "classification": "equivalent",
+      "rationale": "Two accepted reviews release a fresh holistic final review."
+    },
+    {
+      "legacy_name": "shadow final waits for human",
+      "target_name": "shadow final waits for human",
+      "classification": "intentional-difference",
+      "rationale": "The target worker reports READY; deterministic shadow policy, not the model, chooses SHADOW_READY."
+    },
+    {
+      "legacy_name": "final can return to builder",
+      "target_name": "final can return to remediation",
+      "classification": "intentional-difference",
+      "rationale": "Final-review rework uses the same explicit remediation and exact-head invalidation path."
+    },
+    {
+      "legacy_name": "final return bound escalates",
+      "target_name": "final return bound escalates",
+      "classification": "equivalent",
+      "rationale": "Both engines escalate when final-review rework reaches the configured bound."
+    },
+    {
+      "legacy_name": "human merge completes shadow case",
+      "target_name": "human merge completes shadow case",
+      "classification": "equivalent",
+      "rationale": "Externally observed human merge completes a shadow case without autonomous merge authority."
+    }
+  ],
+  "target_only": [
+    {
+      "target_name": "builder dispatch becomes active",
+      "rationale": "Separates recorded dispatch intent from observed worker activation."
+    },
+    {
+      "target_name": "accepted CI releases reviewers",
+      "rationale": "Makes independent exact-head CI acceptance a first-class gate."
+    },
+    {
+      "target_name": "remediation result waits for new exact-head CI",
+      "rationale": "Invalidates stale CI and reviews after every remediation head."
+    },
+    {
+      "target_name": "guarded final reaches deterministic merge gate",
+      "rationale": "Keeps optional guarded merge separate from shadow disposition."
+    },
+    {
+      "target_name": "guarded merge transaction starts",
+      "rationale": "Records merge intent before the guarded GitHub mutation."
+    },
+    {
+      "target_name": "verified merge completes case",
+      "rationale": "Requires a post-write GitHub observation before completion."
+    }
+  ]
+}
