@@ -343,7 +343,10 @@ dependencies = [
 name = "pip-executor"
 version = "0.1.0"
 dependencies = [
+ "pip-contracts",
  "pip-core",
+ "serde",
+ "serde_json",
  "tempfile",
  "wait-timeout",
 ]

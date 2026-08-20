@@ -6,7 +6,10 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+pip-contracts = { path = "../pip-contracts" }
 pip-core = { path = "../pip-core" }
+serde.workspace = true
+serde_json.workspace = true
 wait-timeout.workspace = true
 
 [dev-dependencies]

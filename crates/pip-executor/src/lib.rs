@@ -2,8 +2,11 @@
 
 #![forbid(unsafe_code)]
 
+mod cursor;
 mod process;
 mod provider;
+
+pub use cursor::{CursorExecutionError, CursorExecutor, CursorTask};
 mod worktree;
 
 pub use process::{
