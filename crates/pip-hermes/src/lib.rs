@@ -2,7 +2,12 @@
 
 #![forbid(unsafe_code)]
 
+mod gate;
 mod projection;
+
+pub use gate::{
+    GateCreateSpec, GateError, GateProjectionResult, GateReleaseResult, HermesGateController,
+};
 
 pub use projection::{HermesProjector, ProjectionError, ProjectionResult, TaskCreateSpec};
 
