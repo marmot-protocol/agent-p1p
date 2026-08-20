@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use pip_store::{
-    ApplyResult, EffectInput, EventInput, FaultPoint, NewCase, RunInput, Store, StoreError,
-    TransitionInput,
+    ApplyResult, EffectInput, EventInput, EvidenceInput, FaultPoint, FindingInput, NewCase,
+    PolicyInput, RunInput, Store, StoreError, TransitionInput,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -57,6 +57,18 @@ fn transition() -> TransitionInput {
             role: "planner".into(),
             payload: json!({"outcome": "PROCEED"}),
         }),
+        evidence: vec![EvidenceInput {
+            evidence_id: "evidence-plan-comment-1".into(),
+            kind: "GITHUB_COMMENT".into(),
+            source: "github".into(),
+            payload: json!({"comment_id": 10001}),
+        }],
+        findings: vec![FindingInput {
+            finding_id: "GENERAL-R1-001".into(),
+            origin_role: "reviewer-general".into(),
+            reviewed_head_sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            payload: json!({"status": "OPEN"}),
+        }],
         effects: vec![EffectInput {
             effect_id: "effect-builder-1".into(),
             effect_type: "DISPATCH_BUILDER".into(),
@@ -97,6 +109,7 @@ fn crash_injection_rolls_back_every_transition_boundary() {
     for fault in [
         FaultPoint::AfterEvent,
         FaultPoint::AfterRun,
+        FaultPoint::AfterEvidence,
         FaultPoint::AfterProjection,
         FaultPoint::AfterOutbox,
     ] {
@@ -110,6 +123,8 @@ fn crash_injection_rolls_back_every_transition_boundary() {
         assert_eq!((case.state.as_str(), case.state_revision), ("PLANNING", 1));
         assert_eq!(store.event_count().unwrap(), 1);
         assert_eq!(store.run_count().unwrap(), 0);
+        assert_eq!(store.evidence_count().unwrap(), 0);
+        assert_eq!(store.finding_count().unwrap(), 0);
         assert_eq!(store.outbox_count().unwrap(), 1);
     }
 }
@@ -128,6 +143,8 @@ fn accepted_transition_replays_without_duplicate_history_or_effects() {
     );
     assert_eq!(store.event_count().unwrap(), 2);
     assert_eq!(store.run_count().unwrap(), 1);
+    assert_eq!(store.evidence_count().unwrap(), 1);
+    assert_eq!(store.finding_count().unwrap(), 1);
     assert_eq!(store.outbox_count().unwrap(), 2);
 
     let projected = store.case("repo:984321#1240@1").unwrap().unwrap();
@@ -197,6 +214,7 @@ fn same_id_with_different_payload_is_a_conflict() {
 fn immutable_history_rejects_direct_update_and_delete() {
     let (directory, mut store) = open();
     store.create_case(&new_case()).unwrap();
+    store.apply_transition(&transition(), None).unwrap();
     drop(store);
     let connection = Connection::open(directory.path().join("ledger.db")).unwrap();
     assert!(
@@ -205,6 +223,31 @@ fn immutable_history_rejects_direct_update_and_delete() {
             .is_err()
     );
     assert!(connection.execute("DELETE FROM events", []).is_err());
+    assert!(
+        connection
+            .execute("UPDATE evidence SET source = 'tampered'", [])
+            .is_err()
+    );
+    assert!(connection.execute("DELETE FROM findings", []).is_err());
+}
+
+#[test]
+fn versioned_policy_is_immutable_idempotent_evidence() {
+    let (_directory, mut store) = open();
+    let policy = PolicyInput {
+        repository_id: 984_321,
+        revision: 1,
+        accepted_at: 1_787_000_000,
+        payload: json!({"merge_mode": "shadow", "intake_label": "pip-ok"}),
+    };
+    assert_eq!(store.record_policy(&policy).unwrap(), ApplyResult::Applied);
+    assert_eq!(store.record_policy(&policy).unwrap(), ApplyResult::Replayed);
+    let mut conflicting = policy.clone();
+    conflicting.payload["merge_mode"] = json!("guarded");
+    assert!(matches!(
+        store.record_policy(&conflicting),
+        Err(StoreError::IdempotencyConflict { ref id }) if id == "policy:984321:1"
+    ));
 }
 
 #[test]
@@ -241,6 +284,41 @@ fn online_backup_is_a_complete_reopenable_ledger() {
         (case.state.as_str(), case.state_revision),
         ("READY_TO_BUILD", 2)
     );
+}
+
+#[test]
+fn backup_restores_only_to_a_new_destination() {
+    let (directory, mut store) = open();
+    store.create_case(&new_case()).unwrap();
+    let backup = directory.path().join("ledger.backup.db");
+    store.backup_to(&backup).unwrap();
+
+    let restored = directory.path().join("ledger.restored.db");
+    Store::restore_backup_to_new(&backup, &restored).unwrap();
+    assert!(
+        Store::open_read_only(&restored)
+            .unwrap()
+            .case("repo:984321#1240@1")
+            .unwrap()
+            .is_some()
+    );
+    assert!(matches!(
+        Store::restore_backup_to_new(&backup, &restored),
+        Err(StoreError::DestinationExists(_))
+    ));
+}
+
+#[test]
+fn newer_schema_fails_closed() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("future.db");
+    let connection = Connection::open(&path).unwrap();
+    connection.pragma_update(None, "user_version", 99).unwrap();
+    drop(connection);
+    assert!(matches!(
+        Store::open(&path),
+        Err(StoreError::UnsupportedSchema(99))
+    ));
 }
 
 #[test]

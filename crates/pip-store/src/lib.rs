@@ -180,6 +180,30 @@ pub struct RunInput {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct EvidenceInput {
+    pub evidence_id: String,
+    pub kind: String,
+    pub source: String,
+    pub payload: Value,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct FindingInput {
+    pub finding_id: String,
+    pub origin_role: String,
+    pub reviewed_head_sha: String,
+    pub payload: Value,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PolicyInput {
+    pub repository_id: u64,
+    pub revision: u64,
+    pub accepted_at: u64,
+    pub payload: Value,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct NewCase {
     pub case_key: String,
     pub repository_id: u64,
@@ -204,6 +228,8 @@ pub struct TransitionInput {
     pub observed_at: u64,
     pub event: EventInput,
     pub run: Option<RunInput>,
+    pub evidence: Vec<EvidenceInput>,
+    pub findings: Vec<FindingInput>,
     pub effects: Vec<EffectInput>,
 }
 
@@ -211,6 +237,7 @@ pub struct TransitionInput {
 pub enum FaultPoint {
     AfterEvent,
     AfterRun,
+    AfterEvidence,
     AfterProjection,
     AfterOutbox,
 }
@@ -256,6 +283,7 @@ pub enum StoreError {
     InjectedFault(FaultPoint),
     LeaseLost(String),
     ReadOnly,
+    DestinationExists(PathBuf),
     UnsupportedSchema(u32),
 }
 
@@ -277,6 +305,13 @@ impl fmt::Display for StoreError {
             Self::InjectedFault(point) => write!(formatter, "injected fault: {point:?}"),
             Self::LeaseLost(effect) => write!(formatter, "outbox lease lost: {effect}"),
             Self::ReadOnly => formatter.write_str("ledger handle is read-only"),
+            Self::DestinationExists(path) => {
+                write!(
+                    formatter,
+                    "restore destination already exists: {}",
+                    path.display()
+                )
+            }
             Self::UnsupportedSchema(version) => {
                 write!(formatter, "unsupported schema version: {version}")
             }
@@ -361,6 +396,44 @@ impl Store {
         Ok(self
             .connection
             .pragma_query_value(None, "journal_mode", |row| row.get(0))?)
+    }
+
+    pub fn record_policy(&mut self, input: &PolicyInput) -> Result<ApplyResult> {
+        self.ensure_writable()?;
+        if input.repository_id == 0 || input.revision == 0 || !input.payload.is_object() {
+            return Err(StoreError::InvalidInput(
+                "policy repository, revision, and object payload are required",
+            ));
+        }
+        let (payload_json, payload_hash) = payload(&input.payload)?;
+        let existing: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT payload_sha256 FROM policies WHERE repository_id = ?1 AND revision = ?2",
+                params![sql_u64(input.repository_id)?, sql_u64(input.revision)?],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(existing_hash) = existing {
+            if existing_hash == payload_hash {
+                return Ok(ApplyResult::Replayed);
+            }
+            return Err(StoreError::IdempotencyConflict {
+                id: format!("policy:{}:{}", input.repository_id, input.revision),
+            });
+        }
+        self.connection.execute(
+            "INSERT INTO policies(repository_id, revision, payload_json, payload_sha256, accepted_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                sql_u64(input.repository_id)?,
+                sql_u64(input.revision)?,
+                payload_json,
+                payload_hash,
+                sql_u64(input.accepted_at)?,
+            ],
+        )?;
+        Ok(ApplyResult::Applied)
     }
 
     pub fn create_case(&mut self, input: &NewCase) -> Result<ApplyResult> {
@@ -478,6 +551,19 @@ impl Store {
             )?;
         }
         inject(fault, FaultPoint::AfterRun)?;
+        insert_evidence(
+            &transaction,
+            &input.case_key,
+            input.observed_at,
+            &input.evidence,
+        )?;
+        insert_findings(
+            &transaction,
+            &input.case_key,
+            input.observed_at,
+            &input.findings,
+        )?;
+        inject(fault, FaultPoint::AfterEvidence)?;
         let updated = transaction.execute(
             "UPDATE cases SET state = ?1, state_revision = ?2, remediation_round = ?3, plan_version = ?4, pr_number = ?5, head_sha = ?6, updated_at = ?7
              WHERE case_key = ?8 AND state_revision = ?9",
@@ -585,6 +671,14 @@ impl Store {
         count(&self.connection, "outbox")
     }
 
+    pub fn evidence_count(&self) -> Result<u64> {
+        count(&self.connection, "evidence")
+    }
+
+    pub fn finding_count(&self) -> Result<u64> {
+        count(&self.connection, "findings")
+    }
+
     pub fn claim_effect(
         &mut self,
         owner: &str,
@@ -662,6 +756,23 @@ impl Store {
 
     pub fn backup_to(&self, destination: impl AsRef<Path>) -> Result<()> {
         self.connection.backup(MAIN_DB, destination, None)?;
+        Ok(())
+    }
+
+    pub fn restore_backup_to_new(
+        source: impl AsRef<Path>,
+        destination: impl AsRef<Path>,
+    ) -> Result<()> {
+        let destination = destination.as_ref();
+        if destination.exists() {
+            return Err(StoreError::DestinationExists(destination.to_path_buf()));
+        }
+        let source = Self::open_read_only(source)?;
+        source.backup_to(destination)?;
+        let restored = Self::open_read_only(destination)?;
+        if restored.schema_version()? != SCHEMA_VERSION {
+            return Err(StoreError::UnsupportedSchema(restored.schema_version()?));
+        }
         Ok(())
     }
 }
@@ -809,6 +920,74 @@ fn insert_run(
     Ok(())
 }
 
+fn insert_evidence(
+    transaction: &Transaction<'_>,
+    case_key: &str,
+    observed_at: u64,
+    evidence: &[EvidenceInput],
+) -> Result<()> {
+    for item in evidence {
+        if item.evidence_id.trim().is_empty()
+            || item.kind.trim().is_empty()
+            || item.source.trim().is_empty()
+            || !item.payload.is_object()
+        {
+            return Err(StoreError::InvalidInput(
+                "evidence identity, kind, source, and object payload are required",
+            ));
+        }
+        let (payload_json, payload_hash) = payload(&item.payload)?;
+        transaction.execute(
+            "INSERT INTO evidence(evidence_id, case_key, kind, source, observed_at, payload_json, payload_sha256)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                item.evidence_id,
+                case_key,
+                item.kind,
+                item.source,
+                sql_u64(observed_at)?,
+                payload_json,
+                payload_hash,
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+fn insert_findings(
+    transaction: &Transaction<'_>,
+    case_key: &str,
+    recorded_at: u64,
+    findings: &[FindingInput],
+) -> Result<()> {
+    for item in findings {
+        if item.finding_id.trim().is_empty()
+            || item.origin_role.trim().is_empty()
+            || item.reviewed_head_sha.len() != 40
+            || !item.payload.is_object()
+        {
+            return Err(StoreError::InvalidInput(
+                "finding identity, origin, exact head, and object payload are required",
+            ));
+        }
+        let (payload_json, payload_hash) = payload(&item.payload)?;
+        transaction.execute(
+            "INSERT INTO findings(finding_id, case_key, origin_role, reviewed_head_sha, payload_json, payload_sha256, recorded_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                item.finding_id,
+                case_key,
+                item.origin_role,
+                item.reviewed_head_sha,
+                payload_json,
+                payload_hash,
+                sql_u64(recorded_at)?,
+            ],
+        )?;
+    }
+    Ok(())
+}
+
 fn insert_effects(
     transaction: &Transaction<'_>,
     case_key: &str,
@@ -903,6 +1082,8 @@ fn count(connection: &Connection, table: &str) -> Result<u64> {
         "events" => "SELECT COUNT(*) FROM events",
         "runs" => "SELECT COUNT(*) FROM runs",
         "outbox" => "SELECT COUNT(*) FROM outbox",
+        "evidence" => "SELECT COUNT(*) FROM evidence",
+        "findings" => "SELECT COUNT(*) FROM findings",
         _ => return Err(StoreError::InvalidInput("unknown count table")),
     };
     let value: i64 = connection.query_row(sql, [], |row| row.get(0))?;
