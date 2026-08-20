@@ -91,12 +91,13 @@ Exit gate:
 
 ## Phase 5: Projection and worker execution
 
-**Implementation status:** Partial. Hermes projections, the direct Cursor
-adapter, and worktree allocation each have isolated fixture/process tests, but
-they are not joined into a compatible runtime. Current Hermes requires typed
-`dir:`/`worktree:` workspace values and always executes an assigned task through
-`hermes -p`; therefore direct Cursor roles need a separate durable Rust queue
-instead of the current `provider=cursor` Hermes projection.
+**Implementation status:** Partial. Policy now routes Hermes-native roles to
+controller-gated board projections and direct Cursor roles to leased,
+transactionally enqueued `RUN_DIRECT_WORKER` effects; mixed reviewer dispatch
+uses both paths without model substitution. The tested Cursor adapter and
+worktree allocator are not yet connected to a direct-job consumer. Hermes paths
+are typed but still name the configured workspace root rather than a reconciled
+checkout.
 
 Deliverables:
 

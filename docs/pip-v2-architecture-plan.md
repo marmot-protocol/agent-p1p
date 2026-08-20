@@ -39,7 +39,8 @@ policy, not special-purpose code.
   code validates evidence and chooses transitions.
 - **One authoritative ledger.** The control-plane database owns case state,
   accepted evidence, immutable runs, and dispatch intent.
-- **Hermes as queue and UI.** A board presents and executes work but is not a
+- **Executor queues are projections.** Hermes presents and executes
+  Hermes-native work; the ledger queues direct-provider work. Neither is a
   second workflow database.
 - **Plan before implementation.** The builder never invents missing product or
   protocol intent.
@@ -78,13 +79,13 @@ policy, not special-purpose code.
                                   v
                     DETERMINISTIC WORKFLOW ENGINE
                                   |
-                       +----------+----------+
-                       |                     |
-                  GitHub adapter        Hermes adapter
-                       |                     |
-                       |              repository board
-                       |                     |
-                       +---- fresh role workers
+                       +----------+------------------+
+                       |          |                  |
+                  GitHub adapter  |             Hermes adapter
+                                  |                  |
+                          direct-job queue     repository board
+                                  |                  |
+                                  +--- fresh role workers
 ```
 
 The global layer owns only cross-board policy and resources. It does not

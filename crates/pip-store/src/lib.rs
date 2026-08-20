@@ -1312,16 +1312,35 @@ impl Store {
         now: u64,
         fault: Option<FaultPoint>,
     ) -> Result<ApplyResult> {
+        let effect_id = inputs.first().map(|input| input.effect_id.as_str()).ok_or(
+            StoreError::InvalidInput("at least one task projection is required"),
+        )?;
+        self.complete_dispatch_outputs(effect_id, inputs, &[], owner, now, fault)
+    }
+
+    pub fn complete_dispatch_outputs(
+        &mut self,
+        source_effect_id: &str,
+        inputs: &[TaskProjectionInput],
+        direct_jobs: &[EffectInput],
+        owner: &str,
+        now: u64,
+        fault: Option<FaultPoint>,
+    ) -> Result<ApplyResult> {
         self.ensure_writable()?;
-        let effect_id = inputs.first().map(|input| input.effect_id.as_str());
         let unique = inputs
             .iter()
             .map(|input| input.projection_id.as_str())
             .collect::<std::collections::BTreeSet<_>>();
-        if inputs.is_empty()
+        let unique_jobs = direct_jobs
+            .iter()
+            .map(|job| job.effect_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        if (inputs.is_empty() && direct_jobs.is_empty())
+            || source_effect_id.trim().is_empty()
             || unique.len() != inputs.len()
+            || unique_jobs.len() != direct_jobs.len()
             || owner.trim().is_empty()
-            || effect_id.is_none()
             || inputs.iter().any(|input| {
                 input.projection_id.trim().is_empty()
                     || input.effect_id.trim().is_empty()
@@ -1329,14 +1348,21 @@ impl Store {
                     || input.task_id.trim().is_empty()
                     || !input.desired.is_object()
                     || !input.observed.is_object()
-                    || Some(input.effect_id.as_str()) != effect_id
+                    || input.effect_id != source_effect_id
+            })
+            || direct_jobs.iter().any(|job| {
+                job.effect_id.trim().is_empty()
+                    || job.effect_id == source_effect_id
+                    || job.effect_type != "RUN_DIRECT_WORKER"
+                    || !job.payload.is_object()
+                    || job.payload.get("source_effect_id").and_then(Value::as_str)
+                        != Some(source_effect_id)
             })
         {
             return Err(StoreError::InvalidInput(
-                "unique projections for one effect, board, task, object evidence, and owner are required",
+                "unique dispatch projections or bound direct jobs and an owner are required",
             ));
         }
-        let effect_id = effect_id.expect("validated effect ID");
         let serialized = inputs
             .iter()
             .map(|input| {
@@ -1347,26 +1373,34 @@ impl Store {
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
+        let serialized_jobs = direct_jobs
+            .iter()
+            .map(|job| {
+                let (payload_json, payload_hash) = payload(&job.payload)?;
+                Ok((job, payload_json, payload_hash))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (case_key, delivered, superseded): (String, Option<i64>, Option<i64>) = transaction
+        let (case_key, state_revision, delivered, superseded):
+            (String, i64, Option<i64>, Option<i64>) = transaction
             .query_row(
-                "SELECT case_key, delivered_at, superseded_at FROM outbox WHERE effect_id = ?1",
-                [effect_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                "SELECT case_key, state_revision, delivered_at, superseded_at FROM outbox WHERE effect_id = ?1",
+                [source_effect_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()?
-            .ok_or_else(|| StoreError::LeaseLost(effect_id.to_owned()))?;
+            .ok_or_else(|| StoreError::LeaseLost(source_effect_id.to_owned()))?;
         let existing_count: i64 = transaction.query_row(
             "SELECT COUNT(*) FROM task_projections WHERE effect_id = ?1",
-            [effect_id],
+            [source_effect_id],
             |row| row.get(0),
         )?;
         if delivered.is_some() {
             if usize::try_from(existing_count).ok() != Some(inputs.len()) {
                 return Err(StoreError::IdempotencyConflict {
-                    id: effect_id.to_owned(),
+                    id: source_effect_id.to_owned(),
                 });
             }
             for (input, desired_json, observed_json) in &serialized {
@@ -1400,11 +1434,42 @@ impl Store {
                     });
                 }
             }
+            for (job, payload_json, payload_hash) in &serialized_jobs {
+                let existing: Option<(String, i64, String, String, String)> = transaction
+                    .query_row(
+                        "SELECT case_key, state_revision, effect_type, payload_json, payload_sha256
+                         FROM outbox WHERE effect_id = ?1",
+                        [&job.effect_id],
+                        |row| {
+                            Ok((
+                                row.get(0)?,
+                                row.get(1)?,
+                                row.get(2)?,
+                                row.get(3)?,
+                                row.get(4)?,
+                            ))
+                        },
+                    )
+                    .optional()?;
+                if existing.as_ref()
+                    != Some(&(
+                        case_key.clone(),
+                        state_revision,
+                        job.effect_type.clone(),
+                        payload_json.clone(),
+                        payload_hash.clone(),
+                    ))
+                {
+                    return Err(StoreError::IdempotencyConflict {
+                        id: job.effect_id.clone(),
+                    });
+                }
+            }
             transaction.commit()?;
             return Ok(ApplyResult::Replayed);
         }
         if superseded.is_some() {
-            return Err(StoreError::LeaseLost(effect_id.to_owned()));
+            return Err(StoreError::LeaseLost(source_effect_id.to_owned()));
         }
         let lease_valid: bool = transaction.query_row(
             "SELECT EXISTS(
@@ -1412,11 +1477,11 @@ impl Store {
                     WHERE effect_id = ?1 AND delivered_at IS NULL AND superseded_at IS NULL
                       AND lease_owner = ?2 AND lease_until >= ?3
                 )",
-            params![effect_id, owner, sql_u64(now)?],
+            params![source_effect_id, owner, sql_u64(now)?],
             |row| row.get(0),
         )?;
         if !lease_valid || existing_count != 0 {
-            return Err(StoreError::LeaseLost(effect_id.to_owned()));
+            return Err(StoreError::LeaseLost(source_effect_id.to_owned()));
         }
         for (input, desired_json, observed_json) in &serialized {
             let existing_projection: Option<String> = transaction
@@ -1447,14 +1512,40 @@ impl Store {
             )?;
         }
         inject(fault, FaultPoint::AfterProjection)?;
+        for (job, payload_json, payload_hash) in &serialized_jobs {
+            let existing: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM outbox WHERE effect_id = ?1)",
+                [&job.effect_id],
+                |row| row.get(0),
+            )?;
+            if existing {
+                return Err(StoreError::IdempotencyConflict {
+                    id: job.effect_id.clone(),
+                });
+            }
+            transaction.execute(
+                "INSERT INTO outbox(effect_id, case_key, state_revision, effect_type, payload_json, payload_sha256, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    job.effect_id,
+                    case_key,
+                    state_revision,
+                    job.effect_type,
+                    payload_json,
+                    payload_hash,
+                    sql_u64(now)?,
+                ],
+            )?;
+        }
+        inject(fault, FaultPoint::AfterOutbox)?;
         let updated = transaction.execute(
             "UPDATE outbox SET delivered_at = ?1, lease_owner = NULL, lease_until = NULL
              WHERE effect_id = ?2 AND lease_owner = ?3 AND lease_until >= ?1
                AND delivered_at IS NULL AND superseded_at IS NULL",
-            params![sql_u64(now)?, effect_id, owner],
+            params![sql_u64(now)?, source_effect_id, owner],
         )?;
         if updated != 1 {
-            return Err(StoreError::LeaseLost(effect_id.to_owned()));
+            return Err(StoreError::LeaseLost(source_effect_id.to_owned()));
         }
         transaction.commit()?;
         Ok(ApplyResult::Applied)

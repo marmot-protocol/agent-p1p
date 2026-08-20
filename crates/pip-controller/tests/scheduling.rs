@@ -116,6 +116,11 @@ fn planner_and_builder_dispatches_are_blocked_behind_controller_gates() {
     .unwrap();
     assert_eq!(planner.len(), 1);
     assert_eq!(planner[0].role, WorkerRole::Planner);
+    assert_eq!(planner[0].execution(), ExecutionKind::Hermes);
+    assert!(matches!(
+        planner[0].direct_task(),
+        Err(DispatchError::WrongExecutor)
+    ));
     assert!(planner[0].gate.body["case_key"].is_string());
     let worker = planner[0].bind_gate("gate-1").unwrap();
     assert_eq!(worker.parent_task_ids, ["gate-1"]);
@@ -135,6 +140,21 @@ fn planner_and_builder_dispatches_are_blocked_behind_controller_gates() {
     )
     .unwrap();
     assert_eq!(builder[0].role, WorkerRole::Builder);
+    assert_eq!(builder[0].execution(), ExecutionKind::Direct);
+    assert!(matches!(
+        builder[0].bind_gate("gate-1"),
+        Err(DispatchError::WrongExecutor)
+    ));
+    let direct = builder[0].direct_task().unwrap();
+    assert_eq!(direct.source_effect_id, "effect-builder-r2");
+    assert_eq!(direct.role, WorkerRole::Builder);
+    assert_eq!(direct.task_id, builder[0].worker_projection_key);
+    assert_eq!(direct.provider, "cursor");
+    assert_eq!(direct.model, "composer-2.5");
+    assert_eq!(
+        direct.workspace,
+        "/var/lib/pip-v2/worktrees/mdk/repo-984321-issue-1240-workflow-1"
+    );
     assert_eq!(builder[0].worker_body["remediation_round"], 2);
     assert_eq!(
         builder[0].worker_body["assigned_branch"],
@@ -168,7 +188,17 @@ fn review_effect_expands_to_two_independent_same_head_dispatches() {
         assert_eq!(dispatch.worker_body["pr_number"], 77);
         assert_eq!(dispatch.worker_body["expected_head_sha"], "b".repeat(40));
         assert_eq!(dispatch.worker_body["review_round"], 3);
-        assert!(dispatch.bind_gate("gate-1").unwrap().parent_task_ids == ["gate-1"]);
+        match dispatch.execution() {
+            ExecutionKind::Hermes => {
+                assert!(dispatch.bind_gate("gate-1").unwrap().parent_task_ids == ["gate-1"]);
+            }
+            ExecutionKind::Direct => {
+                assert_eq!(
+                    dispatch.direct_task().unwrap().role,
+                    WorkerRole::ReviewerSecperf
+                );
+            }
+        }
     }
 }
 

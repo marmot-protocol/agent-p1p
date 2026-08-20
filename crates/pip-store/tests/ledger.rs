@@ -695,3 +695,56 @@ fn one_dispatch_effect_atomically_records_gate_and_worker_projections() {
         ApplyResult::Replayed
     );
 }
+
+#[test]
+fn direct_worker_enqueue_and_dispatch_ack_are_atomic_and_retry_safe() {
+    let (_directory, mut store) = open();
+    store.create_case(&new_case()).unwrap();
+    let claimed = store.claim_effect("projector-a", 100, 30).unwrap().unwrap();
+    let jobs = [EffectInput {
+        effect_id: "effect-planner-1:direct:builder".into(),
+        effect_type: "RUN_DIRECT_WORKER".into(),
+        payload: json!({
+            "schema_version": 1,
+            "source_effect_id": claimed.effect_id,
+            "task_id": "direct-builder-1",
+            "role": "builder"
+        }),
+    }];
+
+    assert!(matches!(
+        store.complete_dispatch_outputs(
+            &claimed.effect_id,
+            &[],
+            &jobs,
+            "projector-a",
+            110,
+            Some(FaultPoint::AfterOutbox),
+        ),
+        Err(StoreError::InjectedFault(FaultPoint::AfterOutbox))
+    ));
+    let status = store.status(110).unwrap();
+    assert_eq!(status.outbox_total, 1);
+    assert_eq!(status.outbox_delivered, 0);
+
+    let reclaimed = store.claim_effect("projector-b", 131, 30).unwrap().unwrap();
+    assert_eq!(reclaimed.effect_id, claimed.effect_id);
+    assert_eq!(
+        store
+            .complete_dispatch_outputs(&claimed.effect_id, &[], &jobs, "projector-b", 132, None,)
+            .unwrap(),
+        ApplyResult::Applied
+    );
+    assert_eq!(
+        store
+            .complete_dispatch_outputs(&claimed.effect_id, &[], &jobs, "projector-c", 133, None,)
+            .unwrap(),
+        ApplyResult::Replayed
+    );
+    let job = store
+        .claim_effect_matching("direct-worker", 134, 30, &["RUN_DIRECT_WORKER"])
+        .unwrap()
+        .unwrap();
+    assert_eq!(job.effect_id, "effect-planner-1:direct:builder");
+    assert_eq!(job.payload["task_id"], "direct-builder-1");
+}

@@ -194,7 +194,7 @@ After restart the controller:
 1. opens and migrates the ledger transactionally;
 2. expires bounded leases using injected time;
 3. replays unsatisfied outbox entries idempotently;
-4. reconciles active Hermes projections and GitHub objects;
+4. reconciles active Hermes projections, direct-job leases, and GitHub objects;
 5. accepts completed results at most once;
 6. releases no task based only on cached external state; and
 7. emits a durable discrepancy event for foreign or conflicting state.

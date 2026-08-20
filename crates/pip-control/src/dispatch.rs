@@ -4,14 +4,14 @@ use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
 
-use pip_controller::{DispatchError, schedule_claimed_dispatch};
+use pip_controller::{DispatchError, ExecutionKind, schedule_claimed_dispatch};
 use pip_core::GitSha;
 use pip_hermes::{
     CommandRunner, GateError, GateProjectionResult, GateReleaseResult, HermesError,
     HermesGateController, HermesProjector, HermesReader, ProcessRunner, ProjectionError,
     ProjectionResult, TaskSnapshot,
 };
-use pip_store::{ApplyResult, Store, StoreError, TaskProjectionInput};
+use pip_store::{ApplyResult, EffectInput, Store, StoreError, TaskProjectionInput};
 use serde::Serialize;
 
 use crate::{PolicyError, RepositoryPolicy};
@@ -31,6 +31,7 @@ pub enum DispatchCycleResult {
     Projected {
         effect_id: String,
         projection_count: usize,
+        direct_job_count: usize,
         released_gate_count: usize,
         ledger_result: String,
     },
@@ -141,25 +142,73 @@ pub fn dispatch_once_with<R: CommandRunner + Clone>(
         &policy.workflow_policy()?,
         skills_repository_commit,
     )?;
+    let has_hermes = dispatches
+        .iter()
+        .any(|dispatch| dispatch.execution() == ExecutionKind::Hermes);
     let timeout = Duration::from_secs(20);
     let output_bound = 4 * 1024 * 1024;
-    let reader = HermesReader::new(
-        runner.clone(),
-        context.hermes_program,
-        timeout,
-        output_bound,
-    )?;
-    let gate_controller = HermesGateController::new(
-        runner.clone(),
-        context.hermes_program,
-        timeout,
-        output_bound,
-    )?;
-    let projector = HermesProjector::new(runner, context.hermes_program, timeout, output_bound)?;
-    let mut observed = reader.list_tasks(&policy.board)?;
+    let reader = has_hermes
+        .then(|| {
+            HermesReader::new(
+                runner.clone(),
+                context.hermes_program,
+                timeout,
+                output_bound,
+            )
+        })
+        .transpose()?;
+    let gate_controller = has_hermes
+        .then(|| {
+            HermesGateController::new(
+                runner.clone(),
+                context.hermes_program,
+                timeout,
+                output_bound,
+            )
+        })
+        .transpose()?;
+    let projector = has_hermes
+        .then(|| HermesProjector::new(runner, context.hermes_program, timeout, output_bound))
+        .transpose()?;
+    let mut observed = if has_hermes {
+        reader
+            .as_ref()
+            .expect("Hermes reader exists for Hermes dispatch")
+            .list_tasks(&policy.board)?
+    } else {
+        Vec::new()
+    };
     let mut projections = Vec::with_capacity(dispatches.len() * 2);
+    let mut direct_jobs = Vec::with_capacity(dispatches.len());
     let mut gates = Vec::with_capacity(dispatches.len());
     for dispatch in dispatches {
+        if dispatch.execution() == ExecutionKind::Direct {
+            let task = dispatch.direct_task()?;
+            let role = task
+                .body
+                .get("role")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    DispatchCycleError::Serialization("direct task role is missing".into())
+                })?;
+            let payload = serde_json::to_value(&task)
+                .map_err(|error| DispatchCycleError::Serialization(error.to_string()))?;
+            direct_jobs.push(EffectInput {
+                effect_id: format!("{}:direct:{role}", claimed.effect_id),
+                effect_type: "RUN_DIRECT_WORKER".into(),
+                payload,
+            });
+            continue;
+        }
+        let reader = reader
+            .as_ref()
+            .expect("Hermes reader exists for Hermes dispatch");
+        let gate_controller = gate_controller
+            .as_ref()
+            .expect("Hermes gate controller exists for Hermes dispatch");
+        let projector = projector
+            .as_ref()
+            .expect("Hermes projector exists for Hermes dispatch");
         let gate_id = match gate_controller.project(&dispatch.gate, &observed)? {
             GateProjectionResult::Created(id) | GateProjectionResult::Existing(id) => id,
         };
@@ -189,19 +238,31 @@ pub fn dispatch_once_with<R: CommandRunner + Clone>(
     }
     let mut released = 0;
     for (gate_spec, gate) in &gates {
-        if gate_controller.release(
-            gate_spec,
-            gate,
-            &format!("pip-controller accepted {}", claimed.effect_id),
-        )? == GateReleaseResult::Released
+        if gate_controller
+            .as_ref()
+            .expect("Hermes gate controller exists for projected gates")
+            .release(
+                gate_spec,
+                gate,
+                &format!("pip-controller accepted {}", claimed.effect_id),
+            )?
+            == GateReleaseResult::Released
         {
             released += 1;
         }
     }
-    let ledger = store.complete_task_projections(&projections, context.owner, context.now, None)?;
+    let ledger = store.complete_dispatch_outputs(
+        &claimed.effect_id,
+        &projections,
+        &direct_jobs,
+        context.owner,
+        context.now,
+        None,
+    )?;
     Ok(DispatchCycleResult::Projected {
         effect_id: claimed.effect_id,
         projection_count: projections.len(),
+        direct_job_count: direct_jobs.len(),
         released_gate_count: released,
         ledger_result: match ledger {
             ApplyResult::Applied => "applied",

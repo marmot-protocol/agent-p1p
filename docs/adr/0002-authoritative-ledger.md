@@ -12,7 +12,9 @@ consumer does not. This creates two partial workflow representations and leaves
 restart, replay, DAG upgrade, and audit behavior ambiguous.
 
 Hermes is valuable as a persistent repository-scoped queue, worker dispatcher,
-and operator-facing board. It should not have to become the domain database for
+and operator-facing board for Hermes-native roles. Direct-provider roles cannot
+be represented as unsupported Hermes providers and require a controller-owned
+durable queue. Neither execution path should become the domain database for
 Pip's exact-head evidence and transition rules.
 
 ## Decision
@@ -28,9 +30,12 @@ The Rust control-plane ledger is the sole authority for:
 - transition history, leases, and retry/escalation counters; and
 - intended external effects in a transactional outbox.
 
-Hermes Kanban is a projection and execution boundary. The controller creates
-tasks from committed outbox intent, observes task/run results, validates them,
-and commits accepted results before dispatching children.
+Hermes Kanban is one projection and execution boundary. The controller creates
+Hermes-native tasks from committed outbox intent and records direct-provider
+jobs as leased outbox work. It observes results from both paths, validates them,
+and commits accepted results before dispatching children. A direct job may be
+mirrored to Hermes for operator visibility only if the mirror cannot be claimed
+or executed by the Hermes dispatcher.
 
 GitHub is authoritative for GitHub object state, but a fetched GitHub snapshot
 does not alter workflow state until the controller validates and records it.
@@ -50,7 +55,8 @@ observed completion creates another event; it does not rewrite the prior one.
 
 ## Consequences
 
-- A board can be rebuilt from ledger projections without inventing case state.
+- A Hermes board can be rebuilt from ledger projections, while a direct job
+  remains the original durable outbox intent; neither invents case state.
 - Board drift is a discrepancy to reconcile, not a source of transitions.
 - Every worker completion is accepted at most once.
 - DAG/version upgrades become new projections over durable case state rather

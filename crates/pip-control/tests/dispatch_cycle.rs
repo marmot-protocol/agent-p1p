@@ -6,7 +6,7 @@ use pip_control::{
     DispatchCycleContext, DispatchCycleResult, dispatch_once_with, load_repository_policy,
 };
 use pip_hermes::{CommandOutput, CommandRunner, CommandSpec, HermesError, TaskSnapshot};
-use pip_store::{EffectInput, EventInput, NewCase, PolicyInput, Store};
+use pip_store::{EffectInput, EventInput, NewCase, PolicyInput, Store, TransitionInput};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -57,6 +57,7 @@ fn planner_dispatch_projects_gate_and_worker_then_atomically_acks_outbox() {
         DispatchCycleResult::Projected {
             effect_id: "effect-intake-planner".into(),
             projection_count: 2,
+            direct_job_count: 0,
             released_gate_count: 1,
             ledger_result: "applied".into(),
         }
@@ -110,6 +111,140 @@ fn planner_dispatch_projects_gate_and_worker_then_atomically_acks_outbox() {
         DispatchCycleResult::Idle
     );
     assert!(idle_runner.commands.borrow().is_empty());
+}
+
+#[test]
+fn direct_builder_is_durably_queued_without_any_hermes_command() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = seeded_store(directory.path());
+    store
+        .apply_transition(
+            &TransitionInput {
+                case_key: "repo:1055628515#1240@2".into(),
+                expected_revision: 1,
+                next_state: "BUILDING".into(),
+                remediation_round: 1,
+                plan_version: 1,
+                pr_number: None,
+                head_sha: None,
+                observed_at: 91,
+                event: EventInput {
+                    event_id: "event-plan-published".into(),
+                    event_type: "PLAN_PUBLISHED".into(),
+                    payload: json!({"plan_version": 1}),
+                },
+                run: None,
+                evidence: Vec::new(),
+                findings: Vec::new(),
+                effects: vec![EffectInput {
+                    effect_id: "effect-dispatch-builder".into(),
+                    effect_type: "DISPATCH_BUILDER".into(),
+                    payload: json!({"plan_version": 1}),
+                }],
+            },
+            None,
+        )
+        .unwrap();
+    let runner = FakeRunner::default();
+    let mut direct_context = context("controller-1", 100);
+    direct_context.hermes_program = "";
+
+    assert_eq!(
+        dispatch_once_with(&mut store, &active_policy(), runner.clone(), direct_context,).unwrap(),
+        DispatchCycleResult::Projected {
+            effect_id: "effect-dispatch-builder".into(),
+            projection_count: 0,
+            direct_job_count: 1,
+            released_gate_count: 0,
+            ledger_result: "applied".into(),
+        }
+    );
+    assert!(runner.commands.borrow().is_empty());
+
+    let job = store
+        .claim_effect_matching("direct-worker-1", 101, 30, &["RUN_DIRECT_WORKER"])
+        .unwrap()
+        .expect("durable direct worker job");
+    assert_eq!(job.case_key, "repo:1055628515#1240@2");
+    assert_eq!(job.state_revision, 2);
+    assert_eq!(
+        job.payload["task_id"],
+        "repo:1055628515#1240@2:builder:round:1:revision:2:worker"
+    );
+    assert_eq!(job.payload["role"], "builder");
+    assert_eq!(job.payload["provider"], "cursor");
+    assert_eq!(job.payload["model"], "composer-2.5");
+    assert_eq!(
+        job.payload["workspace"],
+        "/var/lib/pip-v2/worktrees/mdk/repo-1055628515-issue-1240-workflow-2"
+    );
+    assert_eq!(job.payload["body"]["state_revision"], 2);
+    assert_eq!(job.payload["body"]["execution"], "direct");
+}
+
+#[test]
+fn independent_review_dispatch_splits_hermes_and_direct_work_without_model_substitution() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = seeded_store(directory.path());
+    store
+        .apply_transition(
+            &TransitionInput {
+                case_key: "repo:1055628515#1240@2".into(),
+                expected_revision: 1,
+                next_state: "REVIEWING".into(),
+                remediation_round: 0,
+                plan_version: 1,
+                pr_number: Some(77),
+                head_sha: Some("c".repeat(40)),
+                observed_at: 91,
+                event: EventInput {
+                    event_id: "event-ci-green".into(),
+                    event_type: "CI_GREEN".into(),
+                    payload: json!({"head_sha": "c".repeat(40)}),
+                },
+                run: None,
+                evidence: Vec::new(),
+                findings: Vec::new(),
+                effects: vec![EffectInput {
+                    effect_id: "effect-dispatch-reviewers".into(),
+                    effect_type: "DISPATCH_REVIEWERS".into(),
+                    payload: json!({"pr_number": 77, "head_sha": "c".repeat(40)}),
+                }],
+            },
+            None,
+        )
+        .unwrap();
+    let runner = review_creation_runner();
+
+    assert_eq!(
+        dispatch_once_with(
+            &mut store,
+            &active_policy(),
+            runner.clone(),
+            context("controller-1", 100),
+        )
+        .unwrap(),
+        DispatchCycleResult::Projected {
+            effect_id: "effect-dispatch-reviewers".into(),
+            projection_count: 2,
+            direct_job_count: 1,
+            released_gate_count: 1,
+            ledger_result: "applied".into(),
+        }
+    );
+    assert!(runner.commands.borrow().iter().all(|command| {
+        !command
+            .args
+            .windows(2)
+            .any(|pair| pair[0] == "--provider" && pair[1] == "cursor")
+    }));
+    let job = store
+        .claim_effect_matching("direct-worker", 101, 30, &["RUN_DIRECT_WORKER"])
+        .unwrap()
+        .unwrap();
+    assert_eq!(job.payload["role"], "reviewer-secperf");
+    assert_eq!(job.payload["model"], "claude-opus-4-8-thinking-high");
+    assert_eq!(job.payload["body"]["expected_head_sha"], "c".repeat(40));
 }
 
 fn projected_worker_body(runner: &FakeRunner) -> Value {
@@ -262,6 +397,19 @@ fn creation_runner() -> FakeRunner {
     runner
 }
 
+fn review_creation_runner() -> FakeRunner {
+    let runner = FakeRunner::default();
+    let gate = review_gate("blocked");
+    let worker = review_worker("blocked");
+    runner.json(&Vec::<TaskSnapshot>::new());
+    runner.json(&gate);
+    runner.json(&gate);
+    runner.json(&worker);
+    runner.json(&worker);
+    runner.output(0, Vec::new());
+    runner
+}
+
 fn gate(status: &str) -> TaskSnapshot {
     TaskSnapshot {
         id: "gate-1".into(),
@@ -298,6 +446,49 @@ fn worker(status: &str) -> TaskSnapshot {
             "provider": "openai-codex",
             "model": "gpt-5.6-sol",
             "projection_key": "repo:1055628515#1240@2:planner:round:1:revision:1:worker"
+        })
+        .to_string(),
+    }
+}
+
+fn review_gate(status: &str) -> TaskSnapshot {
+    TaskSnapshot {
+        id: "review-gate-1".into(),
+        title: "Activate reviewer-general for repo:1055628515#1240@2".into(),
+        status: status.into(),
+        assignee: None,
+        created_by: Some("pip-controller".into()),
+        body: json!({
+            "case_key": "repo:1055628515#1240@2",
+            "state_revision": 2,
+            "activation_gate": "reviewer-general",
+            "projection_key": "repo:1055628515#1240@2:reviewer-general:round:1:revision:2:gate"
+        })
+        .to_string(),
+    }
+}
+
+fn review_worker(status: &str) -> TaskSnapshot {
+    TaskSnapshot {
+        id: "review-worker-1".into(),
+        title: "Run reviewer-general for repo:1055628515#1240@2".into(),
+        status: status.into(),
+        assignee: Some("reviewer-general".into()),
+        created_by: Some("pip-controller".into()),
+        body: json!({
+            "case_key": "repo:1055628515#1240@2",
+            "repository_id": 1055628515_u64,
+            "issue_number": 1240,
+            "workflow_version": 2,
+            "state_revision": 2,
+            "role": "reviewer-general",
+            "remediation_round": 0,
+            "review_round": 1,
+            "execution": "hermes",
+            "provider": "openai-codex",
+            "model": "gpt-5.6-sol",
+            "expected_head_sha": "c".repeat(40),
+            "projection_key": "repo:1055628515#1240@2:reviewer-general:round:1:revision:2:worker"
         })
         .to_string(),
     }

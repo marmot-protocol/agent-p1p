@@ -8,13 +8,13 @@ Hermes Kanban boards.
 ## Status
 
 The repository is migrating from a Python single-issue prototype to the target
-Rust control plane. Phases 0 through 5 and the Phase 7 non-dispatching release
-lifecycle are implemented locally. Phase 6 is partial: the GitHub write
-adapters are tested, authorization removal and takeover are durable, and the
-final-review evidence gate is wired; several write effects are not yet consumed
-by the active controller. Phase 8 has live read-only GitHub evidence,
-but not live Hermes/provider evidence. No live MDK intake or dispatch has been
-authorized.
+Rust control plane. The deterministic ledger, workflow, GitHub boundaries,
+release lifecycle, Hermes-native projection, and direct-provider adapter have
+substantial local test coverage. Dispatch now separates Hermes-native roles
+from durable Rust-owned direct jobs without substituting models. The direct-job
+consumer, repository checkout/worktree allocation, Hermes bootstrap, and live
+recovery evidence remain cutover blockers. No live MDK intake or dispatch has
+been authorized.
 
 The Python implementation is useful as a safety prototype and behavioral
 reference, but it is not the target runtime and must not be installed from the
@@ -41,8 +41,8 @@ The documentation distinguishes three things explicitly:
 - [`docs/adr/0001-rust-control-plane.md`](docs/adr/0001-rust-control-plane.md) —
   decision to implement the target runtime in Rust.
 - [`docs/adr/0002-authoritative-ledger.md`](docs/adr/0002-authoritative-ledger.md) —
-  decision that the control-plane ledger is authoritative and Hermes is the
-  execution queue and operator UI.
+  decision that the control-plane ledger is authoritative and executor queues
+  are projections of committed intent.
 - [`docs/runbooks/deployment.md`](docs/runbooks/deployment.md) — target build,
   provenance, install, rollback, and canary-activation contract.
 - [`docs/migration-roadmap.md`](docs/migration-roadmap.md) — incremental Python
@@ -79,18 +79,22 @@ authoritative Rust case ledger
           v
 deterministic transition engine
           |
-          v
-repository Hermes board
-          |
-          v
-fresh planner/builder/reviewer task
-          |
-          +---- validated immutable result ----> ledger
+          +-----------------------+
+          |                       |
+          v                       v
+repository Hermes board   durable Rust direct-job queue
+          |                       |
+          v                       v
+fresh Hermes-native task  fresh Cursor task
+          |                       |
+          +--- validated immutable result ---> ledger
 ```
 
-Hermes Kanban is the repository-scoped queue and operational view. It is not a
-second workflow database. A Kanban completion cannot release downstream work
-until the control plane has independently validated and committed it.
+Hermes Kanban is the repository-scoped queue and operational view for
+Hermes-native roles. Direct-provider jobs use the ledger's durable queue and
+may later be mirrored to the board for visibility, but Hermes never executes
+them. Neither queue is a second workflow database: no completion can release
+downstream work until the control plane validates and commits it.
 
 ## Canary policy
 

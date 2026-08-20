@@ -12,6 +12,7 @@ use pip_core::{
 };
 use pip_hermes::{GateCreateSpec, TaskCreateSpec};
 use pip_store::{ClaimedEffect, Store, StoredCase};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
@@ -120,8 +121,11 @@ pub struct WorkflowDispatch {
     pub worker_body: Value,
     worker_effect_id: String,
     worker_title: String,
+    source_effect_id: String,
     profile: String,
     workspace: String,
+    direct_workspace: String,
+    execution: ExecutionKind,
     skills: Vec<String>,
     provider: String,
     model: String,
@@ -130,8 +134,34 @@ pub struct WorkflowDispatch {
     board: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DirectTaskSpec {
+    pub schema_version: u32,
+    pub source_effect_id: String,
+    pub task_id: String,
+    pub title: String,
+    pub body: Value,
+    pub role: WorkerRole,
+    pub profile: String,
+    pub workspace: String,
+    pub skills: Vec<String>,
+    pub provider: String,
+    pub model: String,
+    pub max_runtime: String,
+    pub priority: u32,
+}
+
 impl WorkflowDispatch {
+    #[must_use]
+    pub const fn execution(&self) -> ExecutionKind {
+        self.execution
+    }
+
     pub fn bind_gate(&self, gate_task_id: &str) -> Result<TaskCreateSpec, DispatchError> {
+        if self.execution != ExecutionKind::Hermes {
+            return Err(DispatchError::WrongExecutor);
+        }
         if !valid_id(gate_task_id) {
             return Err(DispatchError::InvalidGateTask);
         }
@@ -151,6 +181,27 @@ impl WorkflowDispatch {
             parent_task_ids: vec![gate_task_id.into()],
         })
     }
+
+    pub fn direct_task(&self) -> Result<DirectTaskSpec, DispatchError> {
+        if self.execution != ExecutionKind::Direct {
+            return Err(DispatchError::WrongExecutor);
+        }
+        Ok(DirectTaskSpec {
+            schema_version: 1,
+            source_effect_id: self.source_effect_id.clone(),
+            task_id: self.worker_projection_key.clone(),
+            title: self.worker_title.clone(),
+            body: self.worker_body.clone(),
+            role: self.role,
+            profile: self.profile.clone(),
+            workspace: self.direct_workspace.clone(),
+            skills: self.skills.clone(),
+            provider: self.provider.clone(),
+            model: self.model.clone(),
+            max_runtime: self.max_runtime.clone(),
+            priority: self.priority,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -161,6 +212,7 @@ pub enum DispatchError {
     MissingPullRequest,
     MissingExactHead,
     InvalidGateTask,
+    WrongExecutor,
     InvalidStoredCase,
     InvalidEvidenceBundle,
     StaleEffect,
@@ -176,6 +228,7 @@ impl fmt::Display for DispatchError {
             Self::MissingPullRequest => "review dispatch requires a pull request",
             Self::MissingExactHead => "review dispatch requires an exact head",
             Self::InvalidGateTask => "invalid activation gate task identity",
+            Self::WrongExecutor => "worker dispatch is bound to a different executor",
             Self::InvalidStoredCase => "ledger case cannot form a dispatch binding",
             Self::InvalidEvidenceBundle => {
                 "worker dispatch requires a bounded immutable evidence bundle"
@@ -285,6 +338,7 @@ pub fn schedule_effect(
     match effect {
         Effect::DispatchPlanner => Ok(vec![dispatch(
             effect_id,
+            effect_id,
             WorkerRole::Planner,
             context,
             policy,
@@ -292,6 +346,7 @@ pub fn schedule_effect(
         Effect::DispatchBuilder => {
             context.plan_version.ok_or(DispatchError::MissingPlan)?;
             Ok(vec![dispatch(
+                effect_id,
                 effect_id,
                 WorkerRole::Builder,
                 context,
@@ -303,12 +358,14 @@ pub fn schedule_effect(
             Ok(vec![
                 dispatch(
                     &format!("{effect_id}:general"),
+                    effect_id,
                     WorkerRole::ReviewerGeneral,
                     context,
                     policy,
                 )?,
                 dispatch(
                     &format!("{effect_id}:secperf"),
+                    effect_id,
                     WorkerRole::ReviewerSecperf,
                     context,
                     policy,
@@ -318,6 +375,7 @@ pub fn schedule_effect(
         Effect::DispatchFinalReviewer => {
             require_review_binding(context)?;
             Ok(vec![dispatch(
+                effect_id,
                 effect_id,
                 WorkerRole::FinalReviewer,
                 context,
@@ -337,6 +395,7 @@ fn require_review_binding(context: &DispatchContext) -> Result<(), DispatchError
 
 fn dispatch(
     effect_id: &str,
+    source_effect_id: &str,
     role: WorkerRole,
     context: &DispatchContext,
     policy: &WorkflowPolicy,
@@ -464,8 +523,17 @@ fn dispatch(
         worker_body: Value::Object(body),
         worker_effect_id: format!("{effect_id}:worker"),
         worker_title: format!("Run {role_name} for {}", context.case_id),
+        source_effect_id: source_effect_id.into(),
         profile: binding.profile.clone(),
         workspace: policy.workspace.clone(),
+        direct_workspace: format!(
+            "{}/repo-{}-issue-{}-workflow-{}",
+            policy.workspace.trim_end_matches('/'),
+            context.case_id.repository().get(),
+            context.case_id.issue().get(),
+            context.case_id.workflow().get(),
+        ),
+        execution: binding.execution,
         skills: binding.skills.clone(),
         provider: binding.provider.clone(),
         model: binding.model.clone(),
