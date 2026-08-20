@@ -3,11 +3,15 @@
 #![forbid(unsafe_code)]
 
 mod cli;
+mod install;
 mod policy;
 mod release;
 mod shadow;
 
 pub use cli::{CliError, run_cli};
+pub use install::{
+    InstallError, InstallFault, InstallLayout, InstallOutcome, InstallResult, install_release,
+};
 pub use policy::{
     IntakeConfiguration, MergeConfiguration, PolicyError, RepositoryIdentity, RepositoryPolicy,
     RoleConfiguration, load_repository_policy,
