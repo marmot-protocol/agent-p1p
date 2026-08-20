@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/pip-contracts", "crates/pip-controller", "crates/pip-core", "crates/pip-executor", "crates/pip-github", "crates/pip-hermes", "crates/pip-store"]
+members = ["crates/pip-contracts", "crates/pip-control", "crates/pip-controller", "crates/pip-core", "crates/pip-executor", "crates/pip-github", "crates/pip-hermes", "crates/pip-store"]
 resolver = "3"
 
 [workspace.package]
@@ -8,6 +8,8 @@ rust-version = "1.96.1"
 version = "0.1.0"
 
 [workspace.dependencies]
+base64 = "0.22.1"
+ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }
 proptest = "1.9.0"
 hmac = "0.13.0"
 rusqlite = { version = "0.40.2", default-features = false, features = ["backup", "bundled"] }
