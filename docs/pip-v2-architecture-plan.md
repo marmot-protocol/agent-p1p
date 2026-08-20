@@ -216,6 +216,24 @@ Exact models are policy values rather than role names. A provider adapter must:
 Provider-side model routing may not be cryptographically attestable. The run
 must record the precise assurance available rather than claim more.
 
+Execution mode is also a policy value and selects an executor, not merely a
+task-body annotation:
+
+- `hermes` roles are projected to the repository board with an existing Hermes
+  profile and Hermes-supported exact provider/model override. Their workspace
+  is encoded as `dir:<absolute-path>` or `worktree:<absolute-path>`.
+- `direct` roles are committed to a durable controller queue and consumed by
+  the Rust direct-provider service. The board may show a controller-owned
+  mirror for operator visibility, but the Hermes gateway cannot claim or run
+  it, and `cursor` is never passed to Hermes as a provider.
+- Both paths persist the same immutable binding, artifacts, result contract,
+  lease/attempt history, and typed terminal outcome before the state machine can
+  advance.
+
+The controller allocates or reconciles the repository checkout and exact
+case/head worktree before either executor receives a job. A workspace-root path
+is never treated as an executable task workspace.
+
 ## 9. Planning contract
 
 The planner establishes:

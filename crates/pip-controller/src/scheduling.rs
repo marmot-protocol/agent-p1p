@@ -71,6 +71,7 @@ impl WorkflowPolicy {
                 .all(|expected| roles.iter().any(|role| role.role == *expected));
         let valid_bindings = roles.iter().all(valid_role_policy);
         if !valid_id(&board)
+            || !workspace.starts_with('/')
             || !valid_text(&workspace, 4096)
             || !valid_branch_prefix(&branch_prefix)
             || !valid_roles
@@ -141,7 +142,7 @@ impl WorkflowDispatch {
             title: self.worker_title.clone(),
             body: self.worker_body.clone(),
             assignee: self.profile.clone(),
-            workspace: self.workspace.clone(),
+            workspace: format!("dir:{}", self.workspace),
             skills: self.skills.clone(),
             provider: self.provider.clone(),
             model: self.model.clone(),

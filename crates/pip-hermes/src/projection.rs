@@ -215,10 +215,11 @@ fn validate_spec(spec: &TaskCreateSpec) -> Result<(), ProjectionError> {
         && valid_text(&spec.title, 512)
         && spec.body.is_object()
         && valid_id(&spec.assignee)
-        && valid_text(&spec.workspace, 4096)
+        && valid_workspace(&spec.workspace)
         && !spec.skills.is_empty()
         && spec.skills.iter().all(|skill| valid_id(skill))
         && valid_id(&spec.provider)
+        && spec.provider != "cursor"
         && valid_id(&spec.model)
         && valid_id(&spec.max_runtime)
         && spec.parent_task_ids.iter().all(|parent| valid_id(parent));
@@ -231,6 +232,16 @@ fn validate_spec(spec: &TaskCreateSpec) -> Result<(), ProjectionError> {
         return Err(ProjectionError::InvalidSpec);
     }
     Ok(())
+}
+
+fn valid_workspace(value: &str) -> bool {
+    if matches!(value, "scratch" | "worktree") {
+        return true;
+    }
+    ["dir:", "worktree:"]
+        .iter()
+        .find_map(|prefix| value.strip_prefix(prefix))
+        .is_some_and(|path| path.starts_with('/') && valid_text(path, 4096))
 }
 
 fn valid_opaque(value: &str, max_len: usize) -> bool {

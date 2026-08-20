@@ -91,6 +91,13 @@ Exit gate:
 
 ## Phase 5: Projection and worker execution
 
+**Implementation status:** Partial. Hermes projections, the direct Cursor
+adapter, and worktree allocation each have isolated fixture/process tests, but
+they are not joined into a compatible runtime. Current Hermes requires typed
+`dir:`/`worktree:` workspace values and always executes an assigned task through
+`hermes -p`; therefore direct Cursor roles need a separate durable Rust queue
+instead of the current `provider=cursor` Hermes projection.
+
 Deliverables:
 
 - Idempotent Hermes task projection from outbox entries.
@@ -107,6 +114,11 @@ Exit gate:
 - Offline end-to-end cases survive restart at every phase.
 - Dynamic remediation supports more than one round and respects policy bounds.
 - A worker cannot release its own child task.
+- Hermes-native and direct-provider jobs are routed to different executors
+  without model substitution, and both converge into the same bound result
+  ingestion path.
+- Every dispatched workspace is allocated first and encoded using the selected
+  executor's exact path contract.
 
 ## Phase 6: GitHub write boundary
 

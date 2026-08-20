@@ -168,3 +168,26 @@ fn malformed_create_result_cannot_be_accepted() {
         Err(ProjectionError::MalformedResult(_))
     ));
 }
+
+#[test]
+fn direct_cursor_and_untyped_workspaces_never_reach_hermes() {
+    let runner = FakeRunner::default();
+    let projector =
+        HermesProjector::new(runner.clone(), "hermes", Duration::from_secs(2), 4096).unwrap();
+
+    let mut direct = spec();
+    direct.provider = "cursor".into();
+    direct.model = "composer-2.5".into();
+    assert!(matches!(
+        projector.project(&direct, &[]),
+        Err(ProjectionError::InvalidSpec)
+    ));
+
+    let mut untyped = spec();
+    untyped.workspace = "/var/lib/pip-v2/worktrees/mdk".into();
+    assert!(matches!(
+        projector.project(&untyped, &[]),
+        Err(ProjectionError::InvalidSpec)
+    ));
+    assert!(runner.commands.borrow().is_empty());
+}
