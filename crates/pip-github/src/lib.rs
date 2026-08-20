@@ -9,7 +9,7 @@ use std::time::Duration;
 use hmac::{Hmac, KeyInit, Mac};
 use serde::Deserialize;
 use serde_json::Value;
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -162,6 +162,122 @@ pub struct IntakeSnapshot {
     pub label_events: Vec<LabelEvent>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckStatus {
+    Queued,
+    InProgress,
+    Completed,
+    Waiting,
+    Requested,
+    Pending,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckConclusion {
+    ActionRequired,
+    Cancelled,
+    Failure,
+    Neutral,
+    Skipped,
+    Stale,
+    StartupFailure,
+    Success,
+    TimedOut,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CheckRunSnapshot {
+    pub id: u64,
+    pub app_id: u64,
+    pub name: String,
+    pub head_sha: String,
+    pub status: CheckStatus,
+    pub conclusion: Option<CheckConclusion>,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum CommitStatusState {
+    Error,
+    Failure,
+    Pending,
+    Success,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommitStatusSnapshot {
+    pub id: u64,
+    pub creator_id: u64,
+    pub context: String,
+    pub state: CommitStatusState,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ReviewState {
+    Approved,
+    ChangesRequested,
+    Commented,
+    Dismissed,
+    Pending,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReviewSnapshot {
+    pub id: u64,
+    pub actor_id: u64,
+    pub state: ReviewState,
+    pub commit_id: Option<String>,
+    pub exact_head: bool,
+    pub submitted_at: Option<String>,
+    pub body: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PullRequestSnapshot {
+    pub id: u64,
+    pub number: u64,
+    pub open: bool,
+    pub draft: bool,
+    pub merged: bool,
+    pub mergeable: Option<bool>,
+    pub mergeable_state: String,
+    pub author_id: u64,
+    pub head_repository_id: u64,
+    pub head_repository: String,
+    pub head_branch: String,
+    pub head_sha: String,
+    pub base_branch: String,
+    pub base_sha: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PullRequestEvidence {
+    pub pull_request: PullRequestSnapshot,
+    pub check_runs: Vec<CheckRunSnapshot>,
+    pub commit_status_state: CommitStatusState,
+    pub commit_statuses: Vec<CommitStatusSnapshot>,
+    pub reviews: Vec<ReviewSnapshot>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IssueCommentSnapshot {
+    pub id: u64,
+    pub actor_id: u64,
+    pub issue_number: u64,
+    pub html_url: String,
+    pub body: String,
+    pub body_sha256: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 #[derive(Deserialize)]
 struct RepositoryDto {
     id: u64,
@@ -196,6 +312,108 @@ struct EventDto {
     actor: Option<ActorDto>,
     label: Option<LabelDto>,
     created_at: String,
+}
+
+#[derive(Deserialize)]
+struct UserDto {
+    id: u64,
+}
+
+#[derive(Deserialize)]
+struct HeadRepositoryDto {
+    id: u64,
+    full_name: String,
+}
+
+#[derive(Deserialize)]
+struct PullHeadDto {
+    #[serde(rename = "ref")]
+    branch: String,
+    sha: String,
+    repo: Option<HeadRepositoryDto>,
+}
+
+#[derive(Deserialize)]
+struct PullBaseDto {
+    #[serde(rename = "ref")]
+    branch: String,
+    sha: String,
+}
+
+#[derive(Deserialize)]
+struct PullRequestDto {
+    id: u64,
+    number: u64,
+    state: String,
+    draft: bool,
+    merged: bool,
+    mergeable: Option<bool>,
+    mergeable_state: String,
+    user: UserDto,
+    head: PullHeadDto,
+    base: PullBaseDto,
+}
+
+#[derive(Deserialize)]
+struct AppDto {
+    id: u64,
+}
+
+#[derive(Deserialize)]
+struct CheckRunDto {
+    id: u64,
+    name: String,
+    head_sha: String,
+    status: CheckStatus,
+    conclusion: Option<CheckConclusion>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+    app: AppDto,
+}
+
+#[derive(Deserialize)]
+struct CheckRunsPageDto {
+    total_count: usize,
+    check_runs: Vec<CheckRunDto>,
+}
+
+#[derive(Deserialize)]
+struct CommitStatusDto {
+    id: u64,
+    context: String,
+    state: CommitStatusState,
+    creator: UserDto,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Deserialize)]
+struct CombinedStatusDto {
+    sha: String,
+    state: CommitStatusState,
+    statuses: Vec<CommitStatusDto>,
+}
+
+#[derive(Deserialize)]
+struct ReviewDto {
+    id: u64,
+    user: UserDto,
+    state: ReviewState,
+    commit_id: Option<String>,
+    submitted_at: Option<String>,
+    #[serde(default)]
+    body: String,
+}
+
+#[derive(Deserialize)]
+struct IssueCommentDto {
+    id: u64,
+    user: UserDto,
+    issue_url: String,
+    html_url: String,
+    body: String,
+    created_at: String,
+    updated_at: String,
 }
 
 pub struct GitHubReader<T> {
@@ -306,6 +524,189 @@ impl<T: ReadTransport> GitHubReader<T> {
         })
     }
 
+    pub fn read_pull_request(
+        &self,
+        owner: &str,
+        repository: &str,
+        repository_id: u64,
+        pull_request_number: u64,
+    ) -> Result<PullRequestEvidence, GitHubError> {
+        if !valid_segment(owner) || !valid_segment(repository) {
+            return Err(GitHubError::InvalidRepository);
+        }
+        if repository_id == 0 || pull_request_number == 0 {
+            return Err(GitHubError::InvalidIdentity);
+        }
+        let root = format!("/repos/{owner}/{repository}");
+        let expected_repository = format!("{owner}/{repository}");
+        let pull: PullRequestDto = self.get_json(&format!("{root}/pulls/{pull_request_number}"))?;
+        let head_repository = pull.head.repo.ok_or(GitHubError::InvalidIdentity)?;
+        if pull.id == 0
+            || pull.number != pull_request_number
+            || !matches!(pull.state.as_str(), "open" | "closed")
+            || pull.user.id == 0
+            || head_repository.id != repository_id
+            || head_repository.full_name != expected_repository
+            || pull.head.branch.trim().is_empty()
+            || !valid_sha(&pull.head.sha)
+            || pull.base.branch.trim().is_empty()
+            || !valid_sha(&pull.base.sha)
+            || pull.mergeable_state.trim().is_empty()
+        {
+            return Err(GitHubError::InvalidIdentity);
+        }
+
+        let check_dtos = self.get_check_pages(&format!(
+            "{root}/commits/{}/check-runs?filter=all&per_page=100&page=1",
+            pull.head.sha
+        ))?;
+        let mut check_ids = BTreeSet::new();
+        let mut check_runs = Vec::with_capacity(check_dtos.len());
+        for check in check_dtos {
+            let conclusion_valid = match check.status {
+                CheckStatus::Completed => check.conclusion.is_some(),
+                _ => check.conclusion.is_none(),
+            };
+            if check.id == 0
+                || check.app.id == 0
+                || !check_ids.insert(check.id)
+                || check.name.trim().is_empty()
+                || check.head_sha != pull.head.sha
+                || !conclusion_valid
+            {
+                return Err(GitHubError::InvalidIdentity);
+            }
+            check_runs.push(CheckRunSnapshot {
+                id: check.id,
+                app_id: check.app.id,
+                name: check.name,
+                head_sha: check.head_sha,
+                status: check.status,
+                conclusion: check.conclusion,
+                started_at: check.started_at,
+                completed_at: check.completed_at,
+            });
+        }
+
+        let combined: CombinedStatusDto =
+            self.get_json(&format!("{root}/commits/{}/status", pull.head.sha))?;
+        if combined.sha != pull.head.sha {
+            return Err(GitHubError::InvalidIdentity);
+        }
+        let mut status_ids = BTreeSet::new();
+        let mut commit_statuses = Vec::with_capacity(combined.statuses.len());
+        for status in combined.statuses {
+            if status.id == 0
+                || status.creator.id == 0
+                || !status_ids.insert(status.id)
+                || status.context.trim().is_empty()
+                || status.created_at.trim().is_empty()
+                || status.updated_at.trim().is_empty()
+            {
+                return Err(GitHubError::InvalidIdentity);
+            }
+            commit_statuses.push(CommitStatusSnapshot {
+                id: status.id,
+                creator_id: status.creator.id,
+                context: status.context,
+                state: status.state,
+                created_at: status.created_at,
+                updated_at: status.updated_at,
+            });
+        }
+
+        let review_dtos = self.get_pages::<ReviewDto>(&format!(
+            "{root}/pulls/{pull_request_number}/reviews?per_page=100&page=1"
+        ))?;
+        let mut review_ids = BTreeSet::new();
+        let mut reviews = Vec::with_capacity(review_dtos.len());
+        for review in review_dtos {
+            if review.id == 0
+                || review.user.id == 0
+                || !review_ids.insert(review.id)
+                || review
+                    .commit_id
+                    .as_deref()
+                    .is_some_and(|sha| !valid_sha(sha))
+            {
+                return Err(GitHubError::InvalidIdentity);
+            }
+            let exact_head = review.commit_id.as_deref() == Some(pull.head.sha.as_str());
+            reviews.push(ReviewSnapshot {
+                id: review.id,
+                actor_id: review.user.id,
+                state: review.state,
+                commit_id: review.commit_id,
+                exact_head,
+                submitted_at: review.submitted_at,
+                body: review.body,
+            });
+        }
+
+        Ok(PullRequestEvidence {
+            pull_request: PullRequestSnapshot {
+                id: pull.id,
+                number: pull.number,
+                open: pull.state == "open",
+                draft: pull.draft,
+                merged: pull.merged,
+                mergeable: pull.mergeable,
+                mergeable_state: pull.mergeable_state,
+                author_id: pull.user.id,
+                head_repository_id: head_repository.id,
+                head_repository: head_repository.full_name,
+                head_branch: pull.head.branch,
+                head_sha: pull.head.sha,
+                base_branch: pull.base.branch,
+                base_sha: pull.base.sha,
+            },
+            check_runs,
+            commit_status_state: combined.state,
+            commit_statuses,
+            reviews,
+        })
+    }
+
+    pub fn read_issue_comment(
+        &self,
+        owner: &str,
+        repository: &str,
+        issue_number: u64,
+        comment_id: u64,
+    ) -> Result<IssueCommentSnapshot, GitHubError> {
+        if !valid_segment(owner) || !valid_segment(repository) {
+            return Err(GitHubError::InvalidRepository);
+        }
+        if issue_number == 0 || comment_id == 0 {
+            return Err(GitHubError::InvalidIdentity);
+        }
+        let root = format!("/repos/{owner}/{repository}");
+        let comment: IssueCommentDto =
+            self.get_json(&format!("{root}/issues/comments/{comment_id}"))?;
+        let expected_issue_url = format!("{}{root}/issues/{issue_number}", self.base_url);
+        if comment.id != comment_id
+            || comment.user.id == 0
+            || comment.issue_url != expected_issue_url
+            || comment.html_url.trim().is_empty()
+            || comment.body.trim().is_empty()
+            || comment.created_at.trim().is_empty()
+            || comment.updated_at.trim().is_empty()
+        {
+            return Err(GitHubError::InvalidIdentity);
+        }
+        let body_sha256 = hex_digest(&Sha256::digest(comment.body.as_bytes()));
+        Ok(IssueCommentSnapshot {
+            id: comment.id,
+            actor_id: comment.user.id,
+            issue_number,
+            html_url: comment.html_url,
+            body: comment.body,
+            body_sha256,
+            created_at: comment.created_at,
+            updated_at: comment.updated_at,
+        })
+    }
+
     fn request(&self, path: &str) -> Result<ReadResponse, GitHubError> {
         if !path.starts_with('/') {
             return Err(GitHubError::UnsafePaginationUrl);
@@ -358,6 +759,37 @@ impl<T: ReadTransport> GitHubReader<T> {
         Err(GitHubError::PaginationLimit)
     }
 
+    fn get_check_pages(&self, first: &str) -> Result<Vec<CheckRunDto>, GitHubError> {
+        let mut path = first.to_owned();
+        let mut results = Vec::new();
+        let mut expected_total = None;
+        for page in 0..self.max_pages {
+            let response = self.request(&path)?;
+            let payload: CheckRunsPageDto = serde_json::from_slice(&response.body)
+                .map_err(|error| GitHubError::MalformedJson(error.to_string()))?;
+            if expected_total
+                .replace(payload.total_count)
+                .is_some_and(|expected| expected != payload.total_count)
+            {
+                return Err(GitHubError::InvalidIdentity);
+            }
+            results.extend(payload.check_runs);
+            let next = response
+                .headers
+                .get("link")
+                .and_then(|link| next_link(link));
+            match next {
+                None if results.len() == payload.total_count => return Ok(results),
+                None => return Err(GitHubError::InvalidIdentity),
+                Some(_) if page + 1 == self.max_pages => {
+                    return Err(GitHubError::PaginationLimit);
+                }
+                Some(next) => path = self.safe_path(&next)?,
+            }
+        }
+        Err(GitHubError::PaginationLimit)
+    }
+
     fn safe_path(&self, url: &str) -> Result<String, GitHubError> {
         if let Some(path) = url.strip_prefix(&self.base_url)
             && path.starts_with('/')
@@ -376,6 +808,23 @@ fn valid_segment(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+fn valid_sha(value: &str) -> bool {
+    value.len() == 40
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut result = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        result.push(char::from(HEX[usize::from(byte >> 4)]));
+        result.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    result
 }
 
 fn next_link(header: &str) -> Option<String> {

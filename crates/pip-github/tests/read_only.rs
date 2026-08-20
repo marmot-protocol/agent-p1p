@@ -3,7 +3,8 @@ use std::collections::{BTreeMap, VecDeque};
 use std::rc::Rc;
 
 use pip_github::{
-    GitHubError, GitHubReader, ReadRequest, ReadResponse, ReadTransport, verify_webhook,
+    CheckConclusion, GitHubError, GitHubReader, ReadRequest, ReadResponse, ReadTransport,
+    ReviewState, verify_webhook,
 };
 
 #[derive(Clone, Default)]
@@ -178,5 +179,108 @@ fn pagination_limit_blocks_unbounded_history() {
     assert!(matches!(
         reader(transport).read_intake("owner", "repo", 1),
         Err(GitHubError::PaginationLimit)
+    ));
+}
+
+#[test]
+fn pull_request_evidence_retains_all_attempts_and_exact_head_reviews() {
+    let transport = FakeTransport::default();
+    transport.push(response(
+        r#"{"id":9001,"number":77,"state":"open","draft":true,"merged":false,"mergeable":true,"mergeable_state":"clean","user":{"id":1001},"head":{"ref":"pip/v2/repo-984321/issue-1240/workflow-1","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repo":{"id":984321,"full_name":"marmot-protocol/mdk"}},"base":{"ref":"main","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#,
+    ));
+    let mut first_checks = response(
+        r#"{"total_count":2,"check_runs":[{"id":1,"name":"ci","head_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","status":"completed","conclusion":"failure","started_at":"2026-08-20T00:00:00Z","completed_at":"2026-08-20T00:01:00Z","app":{"id":10}}]}"#,
+    );
+    first_checks.headers.insert(
+        "link".into(),
+        r#"<https://api.github.test/repos/marmot-protocol/mdk/commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/check-runs?filter=all&per_page=100&page=2>; rel="next""#.into(),
+    );
+    transport.push(first_checks);
+    transport.push(response(
+        r#"{"total_count":2,"check_runs":[{"id":2,"name":"ci","head_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","status":"completed","conclusion":"success","started_at":"2026-08-20T00:02:00Z","completed_at":"2026-08-20T00:03:00Z","app":{"id":10}}]}"#,
+    ));
+    transport.push(response(
+        r#"{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","state":"success","statuses":[{"id":3,"context":"legacy-ci","state":"success","creator":{"id":1002},"created_at":"2026-08-20T00:03:00Z","updated_at":"2026-08-20T00:04:00Z"}]}"#,
+    ));
+    transport.push(response(
+        r#"[{"id":4,"user":{"id":1003},"state":"APPROVED","commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","submitted_at":"2026-08-20T00:05:00Z","body":"looks good"},{"id":5,"user":{"id":1004},"state":"CHANGES_REQUESTED","commit_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","submitted_at":"2026-08-20T00:01:00Z","body":"stale"}]"#,
+    ));
+
+    let evidence = reader(transport.clone())
+        .read_pull_request("marmot-protocol", "mdk", 984_321, 77)
+        .unwrap();
+    assert_eq!(evidence.pull_request.id, 9001);
+    assert_eq!(evidence.pull_request.head_sha, "b".repeat(40));
+    assert_eq!(evidence.check_runs.len(), 2);
+    assert_eq!(
+        evidence.check_runs[0].conclusion,
+        Some(CheckConclusion::Failure)
+    );
+    assert_eq!(
+        evidence.check_runs[1].conclusion,
+        Some(CheckConclusion::Success)
+    );
+    assert_eq!(evidence.commit_statuses.len(), 1);
+    assert_eq!(evidence.reviews[0].state, ReviewState::Approved);
+    assert!(evidence.reviews[0].exact_head);
+    assert!(!evidence.reviews[1].exact_head);
+
+    let requests = transport.requests.borrow();
+    assert_eq!(requests.len(), 5);
+    assert!(requests.iter().all(|request| request.method == "GET"));
+    assert!(requests[1].url.contains("filter=all"));
+}
+
+#[test]
+fn pull_request_evidence_rejects_wrong_repository_head_and_duplicate_attempts() {
+    let transport = FakeTransport::default();
+    transport.push(response(
+        r#"{"id":9001,"number":77,"state":"open","draft":true,"merged":false,"mergeable":true,"mergeable_state":"clean","user":{"id":1001},"head":{"ref":"pip/v2/case","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repo":{"id":111,"full_name":"foreign/repo"}},"base":{"ref":"main","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#,
+    ));
+    assert!(matches!(
+        reader(transport).read_pull_request("owner", "repo", 222, 77),
+        Err(GitHubError::InvalidIdentity)
+    ));
+
+    let transport = FakeTransport::default();
+    transport.push(response(
+        r#"{"id":9001,"number":77,"state":"open","draft":true,"merged":false,"mergeable":null,"mergeable_state":"unknown","user":{"id":1001},"head":{"ref":"pip/v2/case","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repo":{"id":222,"full_name":"owner/repo"}},"base":{"ref":"main","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#,
+    ));
+    transport.push(response(
+        r#"{"total_count":2,"check_runs":[{"id":1,"name":"ci","head_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","status":"completed","conclusion":"success","started_at":null,"completed_at":null,"app":{"id":10}},{"id":1,"name":"ci","head_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","status":"completed","conclusion":"success","started_at":null,"completed_at":null,"app":{"id":10}}]}"#,
+    ));
+    assert!(matches!(
+        reader(transport).read_pull_request("owner", "repo", 222, 77),
+        Err(GitHubError::InvalidIdentity)
+    ));
+}
+
+#[test]
+fn issue_comment_evidence_is_bound_to_numeric_actor_issue_and_content_digest() {
+    let transport = FakeTransport::default();
+    transport.push(response(
+        r#"{"id":10001,"user":{"id":1001},"issue_url":"https://api.github.test/repos/marmot-protocol/mdk/issues/1240","html_url":"https://github.test/marmot-protocol/mdk/issues/1240#issuecomment-10001","body":"immutable plan","created_at":"2026-08-20T00:00:00Z","updated_at":"2026-08-20T00:00:00Z"}"#,
+    ));
+    let comment = reader(transport.clone())
+        .read_issue_comment("marmot-protocol", "mdk", 1240, 10001)
+        .unwrap();
+    assert_eq!(comment.id, 10001);
+    assert_eq!(comment.actor_id, 1001);
+    assert_eq!(comment.issue_number, 1240);
+    assert_eq!(comment.body, "immutable plan");
+    assert_eq!(comment.body_sha256.len(), 64);
+    assert!(
+        transport.requests.borrow()[0]
+            .url
+            .ends_with("/repos/marmot-protocol/mdk/issues/comments/10001")
+    );
+
+    let transport = FakeTransport::default();
+    transport.push(response(
+        r#"{"id":10001,"user":{"id":1001},"issue_url":"https://api.github.test/repos/marmot-protocol/mdk/issues/999","html_url":"https://github.test/comment","body":"wrong issue","created_at":"2026-08-20T00:00:00Z","updated_at":"2026-08-20T00:00:00Z"}"#,
+    ));
+    assert!(matches!(
+        reader(transport).read_issue_comment("marmot-protocol", "mdk", 1240, 10001),
+        Err(GitHubError::InvalidIdentity)
     ));
 }
