@@ -2,7 +2,10 @@
 
 #![forbid(unsafe_code)]
 
+mod ledger;
 mod scheduling;
+
+pub use ledger::{ControllerError, LedgerController, WorkflowCommand};
 
 pub use scheduling::{
     DispatchContext, DispatchError, ExecutionKind, RolePolicy, WorkflowDispatch, WorkflowPolicy,

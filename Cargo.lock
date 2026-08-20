@@ -337,8 +337,10 @@ dependencies = [
  "pip-contracts",
  "pip-core",
  "pip-hermes",
+ "pip-store",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
