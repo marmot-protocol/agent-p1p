@@ -1,8 +1,9 @@
 use std::path::Path;
 
 use pip_store::{
-    ApplyResult, EffectInput, EventInput, EvidenceInput, FaultPoint, FindingInput, NewCase,
-    PolicyInput, RunInput, Store, StoreError, TaskProjectionInput, TransitionInput,
+    ApplyResult, DirectAttemptStatus, EffectInput, EventInput, EvidenceInput, FaultPoint,
+    FindingInput, NewCase, PolicyInput, RunInput, Store, StoreError, TaskProjectionInput,
+    TransitionInput,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -80,9 +81,103 @@ fn transition() -> TransitionInput {
 #[test]
 fn migration_creates_hardened_authoritative_schema() {
     let (_directory, store) = open();
-    assert_eq!(store.schema_version().unwrap(), 3);
+    assert_eq!(store.schema_version().unwrap(), 4);
     assert!(store.foreign_keys_enabled().unwrap());
     assert_eq!(store.journal_mode().unwrap(), "wal");
+}
+
+#[test]
+fn direct_attempts_preserve_terminal_results_and_audit_history() {
+    let (directory, mut store) = open();
+    store.create_case(&new_case()).unwrap();
+    let claimed = store
+        .claim_effect("direct-worker-1", 100, 30)
+        .unwrap()
+        .unwrap();
+
+    let attempt_id = store
+        .begin_direct_attempt(&claimed, "planner-task-1", 101)
+        .unwrap();
+    assert_eq!(attempt_id, 1);
+    store
+        .complete_direct_attempt(
+            attempt_id,
+            "direct-worker-1",
+            102,
+            &json!({"schema_version": 1, "outcome": "PROCEED"}),
+        )
+        .unwrap();
+
+    let attempt = store
+        .completed_direct_attempt("effect-planner-1")
+        .unwrap()
+        .unwrap();
+    assert_eq!(attempt.attempt_id, 1);
+    assert_eq!(attempt.task_id, "planner-task-1");
+    assert_eq!(attempt.status, DirectAttemptStatus::Complete);
+    assert_eq!(attempt.started_at, 101);
+    assert_eq!(attempt.completed_at, Some(102));
+    assert_eq!(
+        attempt.result,
+        Some(json!({"schema_version": 1, "outcome": "PROCEED"}))
+    );
+    assert_eq!(attempt.result_sha256.unwrap().len(), 64);
+    assert_eq!(store.status(102).unwrap().direct_attempts_complete, 1);
+
+    assert!(matches!(
+        store.complete_direct_attempt(
+            attempt_id,
+            "direct-worker-1",
+            103,
+            &json!({"schema_version": 1, "outcome": "STOP"}),
+        ),
+        Err(StoreError::LeaseLost(_))
+    ));
+    let connection = Connection::open(directory.path().join("ledger.db")).unwrap();
+    assert!(
+        connection
+            .execute(
+                "UPDATE direct_attempts SET error = 'tampered' WHERE attempt_id = 1",
+                [],
+            )
+            .is_err()
+    );
+    assert!(
+        connection
+            .execute("DELETE FROM direct_attempts WHERE attempt_id = 1", [])
+            .is_err()
+    );
+}
+
+#[test]
+fn a_new_lease_closes_an_abandoned_attempt_before_starting_another() {
+    let (_directory, mut store) = open();
+    store.create_case(&new_case()).unwrap();
+    let first = store
+        .claim_effect("direct-worker-1", 100, 10)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        store
+            .begin_direct_attempt(&first, "planner-task-1", 100)
+            .unwrap(),
+        1
+    );
+
+    let second = store
+        .claim_effect("direct-worker-2", 111, 10)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        store
+            .begin_direct_attempt(&second, "planner-task-1", 111)
+            .unwrap(),
+        2
+    );
+    let status = store.status(111).unwrap();
+    assert_eq!(status.direct_attempts_running, 1);
+    assert_eq!(status.direct_attempts_failed, 1);
+    assert_eq!(status.direct_attempts_complete, 0);
 }
 
 #[test]
@@ -142,7 +237,7 @@ fn operator_status_separates_pending_leased_and_delivered_work() {
         .unwrap();
 
     let status = store.status(110).unwrap();
-    assert_eq!(status.schema_version, 3);
+    assert_eq!(status.schema_version, 4);
     assert_eq!(status.cases.len(), 1);
     assert_eq!(status.cases[0].case_key, "repo:984321#1240@1");
     assert_eq!(status.events, 1);
@@ -543,6 +638,7 @@ fn schema_one_upgrades_forward_without_losing_existing_projections() {
     connection
         .execute_batch(
             "PRAGMA foreign_keys = OFF;
+             DROP TABLE direct_attempts;
              DROP INDEX outbox_dispatchable;
              ALTER TABLE outbox DROP COLUMN superseded_by_event_id;
              ALTER TABLE outbox DROP COLUMN superseded_at;
@@ -566,7 +662,7 @@ fn schema_one_upgrades_forward_without_losing_existing_projections() {
     drop(connection);
 
     let upgraded = Store::open(&path).unwrap();
-    assert_eq!(upgraded.schema_version().unwrap(), 3);
+    assert_eq!(upgraded.schema_version().unwrap(), 4);
     assert_eq!(
         upgraded
             .task_projection("legacy-projection")

@@ -80,7 +80,7 @@ fn production_runtime_probes_exact_model_reads_canonical_skills_and_retains_arti
     .unwrap();
 
     assert!(matches!(
-        runtime.execute(&direct_task(&worktree)).unwrap(),
+        runtime.execute(&direct_task(&worktree), 7).unwrap(),
         WorkerResult::Builder(_)
     ));
     let commands = runner.commands.borrow();
@@ -110,6 +110,7 @@ fn production_runtime_probes_exact_model_reads_canonical_skills_and_retains_arti
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0].file_name(), "attempt-00007");
     assert!(attempts[0].path().join("result.json").is_file());
     assert_eq!(
         serde_json::from_slice::<Value>(

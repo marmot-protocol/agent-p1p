@@ -65,7 +65,11 @@ impl fmt::Display for DirectWorkerRuntimeError {
 impl std::error::Error for DirectWorkerRuntimeError {}
 
 pub trait DirectWorkerRuntime {
-    fn execute(&self, task: &DirectTaskSpec) -> Result<WorkerResult, DirectWorkerRuntimeError>;
+    fn execute(
+        &self,
+        task: &DirectTaskSpec,
+        attempt_id: u64,
+    ) -> Result<WorkerResult, DirectWorkerRuntimeError>;
 }
 
 pub struct CursorDirectRuntime<R> {
@@ -114,6 +118,7 @@ impl<R: ProcessRunner + Clone> CursorDirectRuntime<R> {
     fn execute_task(
         &self,
         task: &DirectTaskSpec,
+        attempt_id: u64,
     ) -> Result<WorkerResult, DirectWorkerRuntimeError> {
         let worktree = canonical_directory(Path::new(&task.workspace))?;
         if worktree == self.worktree_root || !worktree.starts_with(&self.worktree_root) {
@@ -143,7 +148,7 @@ impl<R: ProcessRunner + Clone> CursorDirectRuntime<R> {
         )
         .map_err(provider_error)?;
         let health = probe.probe(&task.model).map_err(provider_error)?;
-        let artifact_dir = next_artifact_dir(&self.artifact_root, &task.task_id)?;
+        let artifact_dir = attempt_artifact_dir(&self.artifact_root, &task.task_id, attempt_id)?;
         let executor = CursorExecutor::new(
             self.runner.clone(),
             &self.cursor_program,
@@ -170,8 +175,12 @@ impl<R: ProcessRunner + Clone> CursorDirectRuntime<R> {
 }
 
 impl<R: ProcessRunner + Clone> DirectWorkerRuntime for CursorDirectRuntime<R> {
-    fn execute(&self, task: &DirectTaskSpec) -> Result<WorkerResult, DirectWorkerRuntimeError> {
-        self.execute_task(task)
+    fn execute(
+        &self,
+        task: &DirectTaskSpec,
+        attempt_id: u64,
+    ) -> Result<WorkerResult, DirectWorkerRuntimeError> {
+        self.execute_task(task, attempt_id)
     }
 }
 
@@ -244,7 +253,7 @@ pub fn run_direct_worker_once_with<R: DirectWorkerRuntime>(
         return Ok(DirectWorkerCycle::Idle);
     };
 
-    let processed = process_claimed(store, policy, runtime, &claimed);
+    let processed = process_claimed(store, policy, runtime, &claimed, context.now);
     match processed {
         Ok((task_id, IngestResult::Applied { transition_count })) => {
             Ok(DirectWorkerCycle::Ingested {
@@ -268,6 +277,7 @@ fn process_claimed<R: DirectWorkerRuntime>(
     policy: &RepositoryPolicy,
     runtime: &R,
     claimed: &ClaimedEffect,
+    now: u64,
 ) -> Result<(String, IngestResult), DirectWorkerError> {
     let task: DirectTaskSpec = serde_json::from_value(claimed.payload.clone())
         .map_err(|_| DirectWorkerError::InvalidJob)?;
@@ -275,7 +285,34 @@ fn process_claimed<R: DirectWorkerRuntime>(
         .case(&claimed.case_key)?
         .ok_or(DirectWorkerError::InvalidJob)?;
     let binding = validate_job(claimed, &case, &task, policy)?;
-    let result = runtime.execute(&task).map_err(DirectWorkerError::Runtime)?;
+    let result = if let Some(attempt) = store.completed_direct_attempt(&claimed.effect_id)? {
+        if attempt.case_key != claimed.case_key
+            || attempt.state_revision != claimed.state_revision
+            || attempt.task_id != task.task_id
+        {
+            return Err(DirectWorkerError::InvalidJob);
+        }
+        serde_json::from_value(attempt.result.ok_or(DirectWorkerError::InvalidJob)?)
+            .map_err(|_| DirectWorkerError::InvalidJob)?
+    } else {
+        let attempt_id = store.begin_direct_attempt(claimed, &task.task_id, now)?;
+        match runtime.execute(&task, attempt_id) {
+            Ok(result) => {
+                let stored = serde_json::to_value(&result).map_err(StoreError::from)?;
+                store.complete_direct_attempt(attempt_id, &claimed.lease_owner, now, &stored)?;
+                result
+            }
+            Err(error) => {
+                store.fail_direct_attempt(
+                    attempt_id,
+                    &claimed.lease_owner,
+                    now,
+                    &error.to_string(),
+                )?;
+                return Err(DirectWorkerError::Runtime(error));
+            }
+        }
+    };
     let ingested = ingest_worker_result(store, &policy.case_policy(), &binding, &result)?;
     Ok((task.task_id, ingested))
 }
@@ -583,7 +620,14 @@ fn read_skill(root: &Path, relative: &Path) -> Result<String, DirectWorkerRuntim
     Ok(value)
 }
 
-fn next_artifact_dir(root: &Path, task_id: &str) -> Result<PathBuf, DirectWorkerRuntimeError> {
+fn attempt_artifact_dir(
+    root: &Path,
+    task_id: &str,
+    attempt_id: u64,
+) -> Result<PathBuf, DirectWorkerRuntimeError> {
+    if attempt_id == 0 {
+        return Err(runtime_error("direct worker attempt id is required"));
+    }
     let task_digest = hex_digest(&Sha256::digest(task_id.as_bytes()));
     let task_root = root.join(task_digest);
     if task_root.exists() {
@@ -599,13 +643,13 @@ fn next_artifact_dir(root: &Path, task_id: &str) -> Result<PathBuf, DirectWorker
         fs::set_permissions(&task_root, fs::Permissions::from_mode(0o700))
             .map_err(|error| runtime_error(format!("artifact root unavailable: {error}")))?;
     }
-    for attempt in 1..=10_000_u32 {
-        let path = task_root.join(format!("attempt-{attempt:05}"));
-        if !path.exists() {
-            return Ok(path);
-        }
+    let path = task_root.join(format!("attempt-{attempt_id:05}"));
+    if path.exists() {
+        return Err(runtime_error(
+            "direct worker attempt artifacts already exist",
+        ));
     }
-    Err(runtime_error("direct worker attempt limit exhausted"))
+    Ok(path)
 }
 
 fn provider_error(error: ProviderProbeError) -> DirectWorkerRuntimeError {

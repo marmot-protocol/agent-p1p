@@ -13,12 +13,16 @@ use serde_json::{Value, json};
 #[derive(Clone)]
 struct FakeRuntime {
     result: Result<WorkerResult, DirectWorkerRuntimeError>,
-    tasks: Rc<RefCell<Vec<DirectTaskSpec>>>,
+    tasks: Rc<RefCell<Vec<(DirectTaskSpec, u64)>>>,
 }
 
 impl DirectWorkerRuntime for FakeRuntime {
-    fn execute(&self, task: &DirectTaskSpec) -> Result<WorkerResult, DirectWorkerRuntimeError> {
-        self.tasks.borrow_mut().push(task.clone());
+    fn execute(
+        &self,
+        task: &DirectTaskSpec,
+        attempt_id: u64,
+    ) -> Result<WorkerResult, DirectWorkerRuntimeError> {
+        self.tasks.borrow_mut().push((task.clone(), attempt_id));
         self.result.clone()
     }
 }
@@ -43,12 +47,14 @@ fn leased_direct_builder_executes_and_enters_the_shared_ingestion_path() {
         }
     );
     assert_eq!(runtime.tasks.borrow().len(), 1);
-    assert_eq!(runtime.tasks.borrow()[0].model, "composer-2.5");
+    assert_eq!(runtime.tasks.borrow()[0].0.model, "composer-2.5");
+    assert_eq!(runtime.tasks.borrow()[0].1, 1);
     assert_eq!(store.run_count().unwrap(), 1);
     assert!(store.run_by_task_id(task_id()).unwrap().is_some());
     let status = store.status(101).unwrap();
     assert_eq!(status.outbox_leased, 0);
     assert_eq!(status.outbox_superseded, 1);
+    assert_eq!(status.direct_attempts_complete, 1);
 }
 
 #[test]
@@ -76,12 +82,54 @@ fn provider_failure_releases_the_job_for_immediate_retry_without_state_change() 
     let status = store.status(100).unwrap();
     assert_eq!(status.outbox_pending, 1);
     assert_eq!(status.outbox_leased, 0);
+    assert_eq!(status.direct_attempts_failed, 1);
     assert!(
         store
             .claim_effect_matching("direct-worker-2", 100, 30, &["RUN_DIRECT_WORKER"])
             .unwrap()
             .is_some()
     );
+}
+
+#[test]
+fn completed_result_is_ingested_after_a_crash_without_rerunning_the_provider() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = queued_builder(directory.path());
+    let claimed = store
+        .claim_effect_matching("crashed-worker", 90, 30, &["RUN_DIRECT_WORKER"])
+        .unwrap()
+        .unwrap();
+    let attempt_id = store.begin_direct_attempt(&claimed, task_id(), 90).unwrap();
+    store
+        .complete_direct_attempt(
+            attempt_id,
+            "crashed-worker",
+            91,
+            &serde_json::to_value(builder_result()).unwrap(),
+        )
+        .unwrap();
+    store
+        .release_effect(&claimed.effect_id, "crashed-worker")
+        .unwrap();
+    let runtime = runtime(Err(DirectWorkerRuntimeError::Unavailable(
+        "must not execute".into(),
+    )));
+
+    assert_eq!(
+        run_direct_worker_once_with(
+            &mut store,
+            &active_policy(),
+            &runtime,
+            context("recovery-worker", 100),
+        )
+        .unwrap(),
+        DirectWorkerCycle::Ingested {
+            task_id: task_id().into(),
+            transition_count: 2,
+        }
+    );
+    assert!(runtime.tasks.borrow().is_empty());
+    assert_eq!(store.status(101).unwrap().direct_attempts_complete, 1);
 }
 
 #[test]

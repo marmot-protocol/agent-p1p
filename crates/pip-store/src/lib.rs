@@ -13,7 +13,7 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: u32 = 3;
+const SCHEMA_VERSION: u32 = 4;
 
 const MIGRATION_1: &str = r#"
 CREATE TABLE schema_migrations (
@@ -191,6 +191,60 @@ CREATE INDEX outbox_dispatchable
     ON outbox(delivered_at, superseded_at, lease_until, created_at);
 "#;
 
+const MIGRATION_4: &str = r#"
+CREATE TABLE direct_attempts (
+    attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    effect_id TEXT NOT NULL REFERENCES outbox(effect_id),
+    case_key TEXT NOT NULL REFERENCES cases(case_key),
+    state_revision INTEGER NOT NULL CHECK (state_revision > 0),
+    task_id TEXT NOT NULL,
+    lease_owner TEXT NOT NULL,
+    lease_until INTEGER NOT NULL,
+    started_at INTEGER NOT NULL,
+    completed_at INTEGER,
+    status TEXT NOT NULL CHECK (status IN ('RUNNING', 'COMPLETE', 'FAILED')),
+    result_json TEXT,
+    result_sha256 TEXT,
+    error TEXT,
+    CHECK (
+        (status = 'RUNNING' AND completed_at IS NULL AND result_json IS NULL
+            AND result_sha256 IS NULL AND error IS NULL)
+        OR (status = 'COMPLETE' AND completed_at IS NOT NULL AND result_json IS NOT NULL
+            AND result_sha256 IS NOT NULL AND error IS NULL)
+        OR (status = 'FAILED' AND completed_at IS NOT NULL AND result_json IS NULL
+            AND result_sha256 IS NULL AND error IS NOT NULL)
+    )
+) STRICT;
+
+CREATE INDEX direct_attempts_effect ON direct_attempts(effect_id, attempt_id);
+CREATE UNIQUE INDEX direct_attempts_one_running
+    ON direct_attempts(effect_id) WHERE status = 'RUNNING';
+CREATE UNIQUE INDEX direct_attempts_one_complete
+    ON direct_attempts(effect_id) WHERE status = 'COMPLETE';
+
+CREATE TRIGGER direct_attempts_terminal_no_update
+BEFORE UPDATE ON direct_attempts WHEN OLD.status <> 'RUNNING' BEGIN
+    SELECT RAISE(ABORT, 'terminal direct attempts are immutable');
+END;
+CREATE TRIGGER direct_attempts_running_transition_only
+BEFORE UPDATE ON direct_attempts
+WHEN OLD.status = 'RUNNING' AND (
+    NEW.status NOT IN ('COMPLETE', 'FAILED')
+    OR NEW.effect_id <> OLD.effect_id
+    OR NEW.case_key <> OLD.case_key
+    OR NEW.state_revision <> OLD.state_revision
+    OR NEW.task_id <> OLD.task_id
+    OR NEW.lease_owner <> OLD.lease_owner
+    OR NEW.lease_until <> OLD.lease_until
+    OR NEW.started_at <> OLD.started_at
+) BEGIN
+    SELECT RAISE(ABORT, 'direct attempt identity is immutable');
+END;
+CREATE TRIGGER direct_attempts_no_delete BEFORE DELETE ON direct_attempts BEGIN
+    SELECT RAISE(ABORT, 'direct attempts are immutable');
+END;
+"#;
+
 #[derive(Clone, Debug, Serialize)]
 pub struct EventInput {
     pub event_id: String,
@@ -358,6 +412,31 @@ pub struct StoredCase {
     pub head_sha: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DirectAttemptStatus {
+    Running,
+    Complete,
+    Failed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StoredDirectAttempt {
+    pub attempt_id: u64,
+    pub effect_id: String,
+    pub case_key: String,
+    pub state_revision: u64,
+    pub task_id: String,
+    pub lease_owner: String,
+    pub lease_until: u64,
+    pub started_at: u64,
+    pub completed_at: Option<u64>,
+    pub status: DirectAttemptStatus,
+    pub result: Option<Value>,
+    pub result_sha256: Option<String>,
+    pub error: Option<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct LedgerStatus {
     pub schema_version: u32,
@@ -372,6 +451,9 @@ pub struct LedgerStatus {
     pub outbox_delivered: u64,
     pub outbox_superseded: u64,
     pub task_projections: u64,
+    pub direct_attempts_running: u64,
+    pub direct_attempts_complete: u64,
+    pub direct_attempts_failed: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1043,6 +1125,16 @@ impl Store {
             [now],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
+        let (attempts_running, attempts_complete, attempts_failed): (i64, i64, i64) =
+            self.connection.query_row(
+                "SELECT
+                    COALESCE(SUM(CASE WHEN status = 'RUNNING' THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN status = 'COMPLETE' THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END), 0)
+                 FROM direct_attempts",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
         Ok(LedgerStatus {
             schema_version: self.schema_version()?,
             cases,
@@ -1056,6 +1148,9 @@ impl Store {
             outbox_delivered: unsigned(delivered),
             outbox_superseded: unsigned(superseded),
             task_projections: self.task_projection_count()?,
+            direct_attempts_running: unsigned(attempts_running),
+            direct_attempts_complete: unsigned(attempts_complete),
+            direct_attempts_failed: unsigned(attempts_failed),
         })
     }
 
@@ -1242,6 +1337,184 @@ impl Store {
             return Err(StoreError::LeaseLost(effect_id.to_owned()));
         }
         Ok(())
+    }
+
+    pub fn begin_direct_attempt(
+        &mut self,
+        claimed: &ClaimedEffect,
+        task_id: &str,
+        started_at: u64,
+    ) -> Result<u64> {
+        self.ensure_writable()?;
+        if task_id.trim().is_empty()
+            || claimed.effect_id.trim().is_empty()
+            || claimed.case_key.trim().is_empty()
+            || claimed.lease_owner.trim().is_empty()
+            || started_at > claimed.lease_until
+        {
+            return Err(StoreError::InvalidInput(
+                "a valid leased effect, task id, and start time are required",
+            ));
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let leased: bool = transaction.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM outbox
+                WHERE effect_id = ?1 AND case_key = ?2 AND state_revision = ?3
+                  AND lease_owner = ?4 AND lease_until = ?5 AND lease_until >= ?6
+                  AND delivered_at IS NULL AND superseded_at IS NULL
+             )",
+            params![
+                claimed.effect_id,
+                claimed.case_key,
+                sql_u64(claimed.state_revision)?,
+                claimed.lease_owner,
+                sql_u64(claimed.lease_until)?,
+                sql_u64(started_at)?,
+            ],
+            |row| row.get(0),
+        )?;
+        if !leased {
+            return Err(StoreError::LeaseLost(claimed.effect_id.clone()));
+        }
+        transaction.execute(
+            "UPDATE direct_attempts
+             SET completed_at = ?1, status = 'FAILED',
+                 error = 'worker lease expired before completion'
+             WHERE effect_id = ?2 AND status = 'RUNNING' AND lease_until < ?1",
+            params![sql_u64(started_at)?, claimed.effect_id],
+        )?;
+        transaction.execute(
+            "INSERT INTO direct_attempts(
+                effect_id, case_key, state_revision, task_id, lease_owner,
+                lease_until, started_at, status
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'RUNNING')",
+            params![
+                claimed.effect_id,
+                claimed.case_key,
+                sql_u64(claimed.state_revision)?,
+                task_id,
+                claimed.lease_owner,
+                sql_u64(claimed.lease_until)?,
+                sql_u64(started_at)?,
+            ],
+        )?;
+        let attempt_id = u64::try_from(transaction.last_insert_rowid())
+            .map_err(|_| StoreError::InvalidInteger)?;
+        transaction.commit()?;
+        Ok(attempt_id)
+    }
+
+    pub fn complete_direct_attempt(
+        &mut self,
+        attempt_id: u64,
+        owner: &str,
+        completed_at: u64,
+        result: &Value,
+    ) -> Result<()> {
+        self.ensure_writable()?;
+        if attempt_id == 0 || owner.trim().is_empty() || !result.is_object() {
+            return Err(StoreError::InvalidInput(
+                "attempt, owner, and object result are required",
+            ));
+        }
+        let (result_json, result_sha256) = payload(result)?;
+        if result_json.len() > 4 * 1024 * 1024 {
+            return Err(StoreError::InvalidInput("direct result is too large"));
+        }
+        let updated = self.connection.execute(
+            "UPDATE direct_attempts
+             SET completed_at = ?1, status = 'COMPLETE', result_json = ?2,
+                 result_sha256 = ?3
+             WHERE attempt_id = ?4 AND lease_owner = ?5 AND status = 'RUNNING'
+               AND started_at <= ?1 AND lease_until >= ?1
+               AND EXISTS(
+                   SELECT 1 FROM outbox o
+                   WHERE o.effect_id = direct_attempts.effect_id
+                     AND o.lease_owner = ?5 AND o.lease_until >= ?1
+                     AND o.delivered_at IS NULL AND o.superseded_at IS NULL
+               )",
+            params![
+                sql_u64(completed_at)?,
+                result_json,
+                result_sha256,
+                sql_u64(attempt_id)?,
+                owner,
+            ],
+        )?;
+        if updated != 1 {
+            return Err(StoreError::LeaseLost(format!(
+                "direct-attempt:{attempt_id}"
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn fail_direct_attempt(
+        &mut self,
+        attempt_id: u64,
+        owner: &str,
+        completed_at: u64,
+        error: &str,
+    ) -> Result<()> {
+        self.ensure_writable()?;
+        let error = error.trim();
+        if attempt_id == 0 || owner.trim().is_empty() || error.is_empty() || error.len() > 4096 {
+            return Err(StoreError::InvalidInput(
+                "attempt, owner, and bounded error are required",
+            ));
+        }
+        let updated = self.connection.execute(
+            "UPDATE direct_attempts
+             SET completed_at = ?1, status = 'FAILED', error = ?2
+             WHERE attempt_id = ?3 AND lease_owner = ?4 AND status = 'RUNNING'
+               AND started_at <= ?1",
+            params![sql_u64(completed_at)?, error, sql_u64(attempt_id)?, owner],
+        )?;
+        if updated != 1 {
+            return Err(StoreError::LeaseLost(format!(
+                "direct-attempt:{attempt_id}"
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn completed_direct_attempt(&self, effect_id: &str) -> Result<Option<StoredDirectAttempt>> {
+        if effect_id.trim().is_empty() {
+            return Err(StoreError::InvalidInput("effect id is required"));
+        }
+        let attempt = self
+            .connection
+            .query_row(
+                "SELECT attempt_id, effect_id, case_key, state_revision, task_id,
+                        lease_owner, lease_until, started_at, completed_at, status,
+                        result_json, result_sha256, error
+                 FROM direct_attempts
+                 WHERE effect_id = ?1 AND status = 'COMPLETE'",
+                [effect_id],
+                direct_attempt_from_row,
+            )
+            .optional()
+            .map_err(StoreError::from)?;
+        if let Some(stored) = &attempt {
+            let result = stored
+                .result
+                .as_ref()
+                .ok_or(StoreError::InvalidInput("completed attempt has no result"))?;
+            let (_, actual) = payload(result)?;
+            if stored.result_sha256.as_deref() != Some(actual.as_str()) {
+                return Err(StoreError::IdempotencyConflict {
+                    id: format!("direct-attempt:{}", stored.attempt_id),
+                });
+            }
+        }
+        Ok(attempt)
+    }
+
+    pub fn direct_attempt_count(&self) -> Result<u64> {
+        count(&self.connection, "direct_attempts")
     }
 
     pub fn release_effect(&mut self, effect_id: &str, owner: &str) -> Result<()> {
@@ -1674,6 +1947,17 @@ fn migrate(connection: &mut Connection) -> Result<()> {
         transaction.commit()?;
         version = 3;
     }
+    if version == 3 {
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Exclusive)?;
+        transaction.execute_batch(MIGRATION_4)?;
+        transaction.execute(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (4, 0)",
+            [],
+        )?;
+        transaction.pragma_update(None, "user_version", 4)?;
+        transaction.commit()?;
+        version = 4;
+    }
     if version != SCHEMA_VERSION {
         return Err(StoreError::UnsupportedSchema(version));
     }
@@ -1704,6 +1988,41 @@ fn sql_u64(value: u64) -> Result<i64> {
 
 fn unsigned(value: i64) -> u64 {
     u64::try_from(value).unwrap_or_default()
+}
+
+fn direct_attempt_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredDirectAttempt> {
+    let status: String = row.get(9)?;
+    let result_json: Option<String> = row.get(10)?;
+    let result = result_json
+        .map(|value| serde_json::from_str(&value))
+        .transpose()
+        .map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                10,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?;
+    Ok(StoredDirectAttempt {
+        attempt_id: unsigned(row.get(0)?),
+        effect_id: row.get(1)?,
+        case_key: row.get(2)?,
+        state_revision: unsigned(row.get(3)?),
+        task_id: row.get(4)?,
+        lease_owner: row.get(5)?,
+        lease_until: unsigned(row.get(6)?),
+        started_at: unsigned(row.get(7)?),
+        completed_at: row.get::<_, Option<i64>>(8)?.map(unsigned),
+        status: match status.as_str() {
+            "RUNNING" => DirectAttemptStatus::Running,
+            "COMPLETE" => DirectAttemptStatus::Complete,
+            "FAILED" => DirectAttemptStatus::Failed,
+            _ => return Err(rusqlite::Error::InvalidQuery),
+        },
+        result,
+        result_sha256: row.get(11)?,
+        error: row.get(12)?,
+    })
 }
 
 fn hash_bytes(bytes: &[u8]) -> String {
