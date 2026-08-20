@@ -23,6 +23,7 @@ exist. It is not evidence of live-host installation or a completed canary.
 | Release/install | Signed source-bound release cohort, artifact verification, content-addressed install, rollback, schema migration, and hardened non-dispatching timer | Local tests and disposable systemd container |
 | Active controller | One `controller-cycle` command that ingests completed runs, reconciles CI, performs generic intake, commits authorization removal or foreign-PR takeover, verifies the final-review preflight, publishes human-held disposition comments, records local terminal effects, and projects dispatch effects only while fresh gates pass | Local tests; active unit template is packaged but not installed or enabled |
 | Final-review preflight | A durable observation effect joins the accepted plan/build/reviewer ledger, exact numeric GitHub actor and role-stamped approvals, current head CI, clean draft-PR ownership/mergeability, and resolved review threads before final-review dispatch | State-machine, adapter, fixture, and restart-safe lease tests |
+| Review publication | Two distinct controller-held reviewer credentials publish the joined role contracts on the exact head; remediation and final preflight remain blocked until both idempotent reviews exist | Policy, state-machine, mutation, outage/retry, and exact-role fixture tests |
 | Human disposition | `HOLD_FOR_HUMAN`, `ESCALATE`, and shadow-ready effects publish idempotent provenance-marked issue or draft-PR comments; local completion, block, abandonment, and takeover effects commit evidence without writing after lost authorization | Mutation fixtures and transactional effect/evidence tests |
 
 ## What is deliberately inert
@@ -41,8 +42,8 @@ These are implementation gaps, not merely missing operational evidence:
 
 1. Consume every durable GitHub effect through the Rust controller. In
    particular, independently verify and publish planner comments, case-owned
-   branches/draft PRs and role-stamped reviews without giving workers direct
-   workflow authority. Human-held disposition and terminal recording are now
+   branches/draft PRs without giving workers direct workflow authority.
+   Role-stamped reviews, human-held disposition, and terminal recording are now
    durable controller effects.
 2. Build the complete deterministic final-review bundle from immutable ledger
    references and fresh GitHub observations. A valid final worker result alone
@@ -82,3 +83,4 @@ Upstream references:
 - [Hermes Kanban guide](https://github.com/nousresearch/hermes-agent/blob/main/website/docs/user-guide/features/kanban.md)
 - [Hermes environment layout](https://github.com/NousResearch/hermes-agent/blob/main/AGENTS.md)
 - [GitHub GraphQL pull-request and review-thread schema](https://docs.github.com/en/graphql/reference/pulls)
+- [GitHub review rules, including the self-approval prohibition](https://docs.github.com/en/pull-requests/how-tos/review-pull-requests/approving-a-pull-request-with-required-reviews)

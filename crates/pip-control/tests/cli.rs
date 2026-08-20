@@ -181,6 +181,18 @@ fn controller_cycle_is_inert_before_credentials_database_or_hermes_when_policy_i
             database.to_str().unwrap(),
             "--github-token",
             directory.path().join("missing-token").to_str().unwrap(),
+            "--github-reviewer-general-token",
+            directory
+                .path()
+                .join("missing-general-token")
+                .to_str()
+                .unwrap(),
+            "--github-reviewer-secperf-token",
+            directory
+                .path()
+                .join("missing-secperf-token")
+                .to_str()
+                .unwrap(),
             "--hermes",
             "/missing/hermes",
             "--owner",

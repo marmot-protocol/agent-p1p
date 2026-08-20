@@ -12,7 +12,9 @@
   "workspace": "/var/lib/pip-v2/worktrees/mdk",
   "branch_prefix": "pip/v2/",
   "github": {
-    "automation_actor_id": null
+    "automation_actor_id": null,
+    "reviewer_general_actor_id": null,
+    "reviewer_secperf_actor_id": null
   },
   "intake": {
     "enabled": false,

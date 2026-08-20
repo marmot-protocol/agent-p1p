@@ -13,6 +13,7 @@ mod intake;
 mod policy;
 mod release;
 mod results;
+mod reviews;
 mod shadow;
 mod takeover;
 
@@ -47,6 +48,9 @@ pub use release::{
 };
 pub use results::{
     ResultCycle, ResultCycleError, ingest_completed_once, ingest_completed_once_with,
+};
+pub use reviews::{
+    ReviewPublicationCycle, ReviewPublicationError, ReviewWriter, publish_reviews_once,
 };
 pub use shadow::{IntakeSource, ShadowCandidate, ShadowError, ShadowReport, reconcile_read_only};
 pub use takeover::{TakeoverCycle, TakeoverError, reconcile_takeover_once};

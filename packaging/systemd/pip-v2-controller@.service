@@ -10,11 +10,13 @@ Type=oneshot
 User=pip-v2-control
 Group=pip-v2-control
 LoadCredential=github.token:/etc/pip-v2/github.token
+LoadCredential=github-reviewer-general.token:/etc/pip-v2/github-reviewer-general.token
+LoadCredential=github-reviewer-secperf.token:/etc/pip-v2/github-reviewer-secperf.token
 Environment=HERMES_HOME=/var/lib/pip-v2/hermes
 Environment=HERMES_KANBAN_HOME=/var/lib/pip-v2/hermes
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 WorkingDirectory=/var/lib/pip-v2
-ExecStart=/opt/pip-v2/current/bin/pip-control controller-cycle --policy /etc/pip-v2/repositories/%i.json --database /var/lib/pip-v2/ledger.db --github-token %d/github.token --hermes hermes --owner pip-v2-controller-%i --skills-commit-file /opt/pip-v2/current/SOURCE.COMMIT
+ExecStart=/opt/pip-v2/current/bin/pip-control controller-cycle --policy /etc/pip-v2/repositories/%i.json --database /var/lib/pip-v2/ledger.db --github-token %d/github.token --github-reviewer-general-token %d/github-reviewer-general.token --github-reviewer-secperf-token %d/github-reviewer-secperf.token --hermes hermes --owner pip-v2-controller-%i --skills-commit-file /opt/pip-v2/current/SOURCE.COMMIT
 UMask=0077
 NoNewPrivileges=yes
 PrivateDevices=yes

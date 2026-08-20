@@ -35,7 +35,7 @@
       "legacy_name": "approved reviews reach final",
       "target_name": "approved reviews reach final",
       "classification": "equivalent",
-      "rationale": "Both engines enter final review after two accepted worker results; the target separately withholds dispatch behind its target-only final preflight."
+      "rationale": "Both engines enter final review after two accepted worker results; the target separately withholds dispatch behind controller-owned review publication and final preflight."
     },
     {
       "legacy_name": "shadow final waits for human",
@@ -82,6 +82,14 @@
     {
       "target_name": "verified final preflight releases final reviewer",
       "rationale": "Requires independent current GitHub reviews, threads, CI, ownership, authorization, and mergeability before final-review dispatch."
+    },
+    {
+      "target_name": "published approvals release final preflight",
+      "rationale": "Uses distinct role credentials to publish both exact-head approvals before GitHub evidence can be joined."
+    },
+    {
+      "target_name": "published changes release remediation builder",
+      "rationale": "Publishes the complete independent review pair before remediation starts."
     },
     {
       "target_name": "guarded final reaches deterministic merge gate",

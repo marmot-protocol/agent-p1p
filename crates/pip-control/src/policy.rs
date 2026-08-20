@@ -41,6 +41,8 @@ pub struct IntakeConfiguration {
 #[serde(deny_unknown_fields)]
 pub struct GitHubConfiguration {
     pub automation_actor_id: Option<u64>,
+    pub reviewer_general_actor_id: Option<u64>,
+    pub reviewer_secperf_actor_id: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -209,6 +211,19 @@ fn validate_policy(policy: &RepositoryPolicy) -> Result<(), PolicyError> {
         .copied()
         .collect::<BTreeSet<_>>();
     let ci = policy.required_ci_contexts.iter().collect::<BTreeSet<_>>();
+    let github_actor_ids = [
+        policy.github.automation_actor_id,
+        policy.github.reviewer_general_actor_id,
+        policy.github.reviewer_secperf_actor_id,
+    ];
+    let configured_github_actor_ids = github_actor_ids
+        .into_iter()
+        .flatten()
+        .collect::<BTreeSet<_>>();
+    let github_identities_valid = (configured_github_actor_ids.is_empty()
+        && github_actor_ids.iter().all(Option::is_none))
+        || (configured_github_actor_ids.len() == github_actor_ids.len()
+            && github_actor_ids.iter().all(Option::is_some));
     let valid = policy.policy_format == 1
         && policy.revision > 0
         && policy.repository.id > 0
@@ -220,8 +235,9 @@ fn validate_policy(policy: &RepositoryPolicy) -> Result<(), PolicyError> {
         && !policy.workspace.trim().is_empty()
         && policy.workspace.starts_with('/')
         && valid_branch_prefix(&policy.branch_prefix)
-        && policy.github.automation_actor_id.is_none_or(|id| id > 0)
-        && (!policy.dispatch_enabled || policy.github.automation_actor_id.is_some())
+        && configured_github_actor_ids.iter().all(|id| *id > 0)
+        && github_identities_valid
+        && (!policy.dispatch_enabled || github_actor_ids.iter().all(Option::is_some))
         && valid_segment(&policy.intake.label)
         && !trusted.is_empty()
         && trusted.len() == policy.intake.trusted_actor_ids.len()

@@ -109,9 +109,11 @@ Exit gate:
 **Implementation status:** Partial. The idempotent write primitives and
 adversarial tests exist. Authorization removal and foreign-PR takeover are
 durable, and final-review dispatch now waits for exact published GitHub
-evidence. Human-held issue/PR disposition comments and local terminal effects
-are also consumed transactionally. Planner, branch/draft-PR, role-review, and
-guarded-merge effects remain open, so the phase exit gate is not met.
+evidence. Distinct role identities now publish the joined reviews before
+remediation or final preflight, and human-held issue/PR disposition comments
+and local terminal effects are consumed transactionally. Planner,
+branch/draft-PR, and guarded-merge effects remain open, so the phase exit gate
+is not met.
 
 Deliverables:
 

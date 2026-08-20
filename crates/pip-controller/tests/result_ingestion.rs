@@ -210,6 +210,7 @@ fn accept_ci(store: &mut Store) {
 }
 
 fn accept_final_preflight(store: &mut Store) {
+    publish_reviews(store);
     let current = case(store);
     let workflow = WorkflowCommand {
         case_id: case_id(),
@@ -229,6 +230,33 @@ fn accept_final_preflight(store: &mut Store) {
         next_pr_number: None,
         next_head_sha: None,
         event_payload: json!({"verdict": "ACCEPTED"}),
+        run: None,
+        evidence: Vec::new(),
+        findings: Vec::new(),
+    };
+    LedgerController::apply(store, &policy(), &workflow).unwrap();
+}
+
+fn publish_reviews(store: &mut Store) {
+    let current = case(store);
+    let workflow = WorkflowCommand {
+        case_id: case_id(),
+        event_id: EventId::from_str("event-reviews-published").unwrap(),
+        observed_at: ObservedAt::new(29),
+        expected_state: CaseState::FinalReview,
+        expected_state_revision: StateRevision::new(
+            NonZeroU64::new(current.state_revision).unwrap(),
+        ),
+        accepted_policy_revision: PolicyRevision::new(NonZeroU64::new(1).unwrap()),
+        remediation_round: current.remediation_round,
+        plan_version: Some(PlanVersion::new(NonZeroU32::new(1).unwrap())),
+        pr_number: Some(PullRequestNumber::new(NonZeroU64::new(77).unwrap())),
+        head_sha: Some(GitSha::from_str(&"b".repeat(40)).unwrap()),
+        event: Event::ReviewsPublished,
+        accepted_plan_version: None,
+        next_pr_number: None,
+        next_head_sha: None,
+        event_payload: json!({"fixture": true}),
         run: None,
         evidence: Vec::new(),
         findings: Vec::new(),

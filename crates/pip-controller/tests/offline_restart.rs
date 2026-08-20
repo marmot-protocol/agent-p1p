@@ -113,12 +113,15 @@ fn full_shadow_workflow_survives_restart_and_multiple_remediation_rounds() {
         (Event::ReviewReady, None, Some(77), Some("b".repeat(40))),
         (Event::CiAccepted, None, None, None),
         (Event::RequestChanges, None, None, None),
+        (Event::ReviewsPublished, None, None, None),
         (Event::ReviewReady, None, None, Some("c".repeat(40))),
         (Event::CiAccepted, None, None, None),
         (Event::RequestChanges, None, None, None),
+        (Event::ReviewsPublished, None, None, None),
         (Event::ReviewReady, None, None, Some("d".repeat(40))),
         (Event::CiAccepted, None, None, None),
         (Event::ReviewsApproved, None, None, None),
+        (Event::ReviewsPublished, None, None, None),
         (Event::FinalPreflightAccepted, None, None, None),
         (Event::Ready, None, None, None),
     ];
@@ -154,11 +157,11 @@ fn full_shadow_workflow_survives_restart_and_multiple_remediation_rounds() {
             .projection_matches_history(&case_id().to_string())
             .unwrap()
     );
-    assert_eq!(store.event_count().unwrap(), 14);
+    assert_eq!(store.event_count().unwrap(), 17);
 
     assert_eq!(
         LedgerController::apply(&mut store, &policy(), &replay.unwrap()).unwrap(),
         ApplyResult::Replayed
     );
-    assert_eq!(store.event_count().unwrap(), 14);
+    assert_eq!(store.event_count().unwrap(), 17);
 }

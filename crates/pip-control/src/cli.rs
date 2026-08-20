@@ -91,6 +91,8 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
             "--policy",
             "--database",
             "--github-token",
+            "--github-reviewer-general-token",
+            "--github-reviewer-secperf-token",
             "--hermes",
             "--owner",
             "--skills-commit-file",
@@ -119,6 +121,30 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         .trim();
     if token.is_empty() {
         return Err(CliError::InvalidArgument("--github-token".into()));
+    }
+    let general_token = read_secret(
+        Path::new(required(&options, "--github-reviewer-general-token")?),
+        1024,
+    )?;
+    let general_token = std::str::from_utf8(&general_token)
+        .map_err(|_| CliError::InvalidArgument("--github-reviewer-general-token".into()))?
+        .trim();
+    if general_token.is_empty() {
+        return Err(CliError::InvalidArgument(
+            "--github-reviewer-general-token".into(),
+        ));
+    }
+    let secperf_token = read_secret(
+        Path::new(required(&options, "--github-reviewer-secperf-token")?),
+        1024,
+    )?;
+    let secperf_token = std::str::from_utf8(&secperf_token)
+        .map_err(|_| CliError::InvalidArgument("--github-reviewer-secperf-token".into()))?
+        .trim();
+    if secperf_token.is_empty() {
+        return Err(CliError::InvalidArgument(
+            "--github-reviewer-secperf-token".into(),
+        ));
     }
     let skills_commit = read_bounded(Path::new(required(&options, "--skills-commit-file")?), 128)?;
     let skills_commit = std::str::from_utf8(&skills_commit)
@@ -161,9 +187,25 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
     )
     .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     let writer = GitHubWriter::new(
-        transport,
+        transport.clone(),
         "https://api.github.com",
         token,
+        4 * 1024 * 1024,
+        10,
+    )
+    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let general_review_writer = GitHubWriter::new(
+        transport.clone(),
+        "https://api.github.com",
+        general_token,
+        4 * 1024 * 1024,
+        10,
+    )
+    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let secperf_review_writer = GitHubWriter::new(
+        transport,
+        "https://api.github.com",
+        secperf_token,
         4 * 1024 * 1024,
         10,
     )
@@ -187,6 +229,17 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     let authorization = crate::reconcile_active_authorization(&reader, &policy, &mut store, now)
         .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let review_publication = crate::publish_reviews_once(
+        &general_review_writer,
+        &secperf_review_writer,
+        &policy,
+        &mut store,
+        now,
+        required(&options, "--owner")?,
+        lease_seconds,
+        authorization.is_authorized(),
+    )
+    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     let final_preflight = crate::reconcile_final_preflight_once(
         &reader,
         &policy,
@@ -231,6 +284,7 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         "intake": intake,
         "takeover": takeover,
         "authorization": authorization,
+        "review_publication": review_publication,
         "final_preflight": final_preflight,
         "disposition": disposition,
         "dispatch": dispatch,

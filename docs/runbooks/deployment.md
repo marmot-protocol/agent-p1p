@@ -137,7 +137,11 @@ profile used by Pip must observe that same root. Personal operator state under
 `~/.hermes` is not an acceptable production dependency.
 
 Credentials and provider secrets are provisioned outside this repository and
-outside the release manifest.
+outside the release manifest. An active repository requires three distinct
+GitHub identities and credentials: the controller/PR author,
+`reviewer-general`, and `reviewer-secperf`. The two review tokens are delivered
+only to the controller service and are never placed in worker profiles, prompts,
+task metadata, or environments.
 
 ## Install ordering
 
@@ -218,6 +222,8 @@ intake_enabled: false
 dispatch_enabled: false
 github:
   automation_actor_id: null
+  reviewer_general_actor_id: null
+  reviewer_secperf_actor_id: null
 max_active_cases: 1
 merge_mode: shadow
 autonomous_merge: false

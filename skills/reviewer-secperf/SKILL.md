@@ -1,7 +1,7 @@
 ---
 name: reviewer-secperf
 description: Use when reviewing a Pip v2 PR for security and performance.
-version: 0.4.0
+version: 0.5.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -32,8 +32,9 @@ The Hermes `cursor-reviewer` profile is the v1-style task orchestrator. It deleg
 5. Reject any model identifier Cursor reports that differs from the request. Record that Cursor does not independently attest provider-side routing.
 6. Review trust boundaries, data exposure, unsafe parsing, misuse/abuse paths, resource bounds, algorithmic regressions, concurrency, and denial-of-service risk. Treat any unexpected MLS/CGKA, key, trust-anchor, authorization-semantic, or push-context change as blocking and escalate to JG.
 7. Independently verify every material claim against the exact checkout and GitHub. Do not alter branches, commits, PR text, labels, or code.
-8. Post the GitHub review against the exact reviewed commit and include this
-   exact line in its body:
+8. Do not mutate GitHub. The controller publishes the accepted contract through
+   the role-scoped reviewer identity. Include this exact line in the returned
+   review evidence so the publication contract remains explicit:
    ```text
    Pip reviewer role: reviewer-secperf
    ```

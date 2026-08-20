@@ -119,7 +119,16 @@ fn accepted_work_emits_only_the_next_declared_effect() {
         TransitionContext::default(),
     )
     .unwrap();
-    assert_eq!(final_review.effects, [Effect::ObserveFinalPreflight]);
+    assert_eq!(final_review.effects, [Effect::PublishReviews]);
+
+    let published = transition(
+        CaseState::FinalReview,
+        Event::ReviewsPublished,
+        TransitionContext::default(),
+    )
+    .unwrap();
+    assert_eq!(published.next_state, CaseState::FinalReview);
+    assert_eq!(published.effects, [Effect::ObserveFinalPreflight]);
 
     let verified = transition(
         CaseState::FinalReview,
@@ -129,6 +138,26 @@ fn accepted_work_emits_only_the_next_declared_effect() {
     .unwrap();
     assert_eq!(verified.next_state, CaseState::FinalReview);
     assert_eq!(verified.effects, [Effect::DispatchFinalReviewer]);
+}
+
+#[test]
+fn remediation_builder_waits_until_both_reviews_are_published() {
+    let remediation = transition(
+        CaseState::Reviewing,
+        Event::RequestChanges,
+        TransitionContext::default(),
+    )
+    .unwrap();
+    assert_eq!(remediation.next_state, CaseState::Remediating);
+    assert_eq!(remediation.effects, [Effect::PublishReviews]);
+
+    let published = transition(
+        CaseState::Remediating,
+        Event::ReviewsPublished,
+        TransitionContext::default(),
+    )
+    .unwrap();
+    assert_eq!(published.effects, [Effect::DispatchBuilder]);
 }
 
 #[test]

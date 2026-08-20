@@ -187,6 +187,13 @@ hold according to policy.
 | `reviewer-secperf` | Security, privacy, authorization, abuse, resource bounds, performance. | Review evidence/comments only. |
 | `final-reviewer` | Reconstruct the complete case and determine the next disposition. | Final evidence/comment only. |
 
+Write authority is exercised by deterministic controller adapters using
+role-scoped credentials; model processes return contracts and never receive
+GitHub tokens. The PR-author identity and the two reviewer identities must be
+three distinct numeric actors. This is required because GitHub forbids a pull
+request author from approving that pull request and required approval counts
+represent reviewers, not multiple personas of one account.
+
 Exact models are policy values rather than role names. A provider adapter must:
 
 1. probe the required model and authentication path;
@@ -289,12 +296,13 @@ issue authorization remains valid
 GitHub reports clean mergeability
 ```
 
-The controller identifies the two mandatory published GitHub reviews by an
+The controller publishes and identifies the two mandatory GitHub reviews by an
 exact, machine-readable line in the body: `Pip reviewer role:
 reviewer-general` or `Pip reviewer role: reviewer-secperf`. The review actor
-must be the configured numeric automation identity, the review must approve
+must be the configured numeric identity for that role, the review must approve
 the current commit, and the latest same-role stamped review on that commit is
-authoritative. Worker result metadata alone cannot release final review.
+authoritative. The two role actors must differ from each other and from the PR
+author. Worker result metadata alone cannot release final review.
 
 Optional external review is advisory. Its concrete findings may enter the loop,
 but absence, rate limiting, or failure never substitutes for a mandatory review.

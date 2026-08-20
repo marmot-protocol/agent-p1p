@@ -125,6 +125,22 @@ pub fn reconcile_final_preflight_once<S: FinalPreflightSource>(
         .github
         .automation_actor_id
         .ok_or(FinalPreflightError::MissingAutomationActor)?;
+    let review_actors = [
+        (
+            "reviewer-general",
+            policy
+                .github
+                .reviewer_general_actor_id
+                .ok_or(FinalPreflightError::MissingAutomationActor)?,
+        ),
+        (
+            "reviewer-secperf",
+            policy
+                .github
+                .reviewer_secperf_actor_id
+                .ok_or(FinalPreflightError::MissingAutomationActor)?,
+        ),
+    ];
     if !authorization_valid {
         return Ok(FinalPreflightCycle::AuthorizationBlocked);
     }
@@ -186,7 +202,7 @@ pub fn reconcile_final_preflight_once<S: FinalPreflightSource>(
         store.release_effect(&claimed.effect_id, owner)?;
         return Err(error);
     }
-    validate_published_reviews(expected_actor, head_sha, &evidence, &mut blockers);
+    validate_published_reviews(&review_actors, head_sha, &evidence, &mut blockers);
     for thread in &threads {
         if !thread.is_resolved {
             push_unique(
@@ -206,6 +222,7 @@ pub fn reconcile_final_preflight_once<S: FinalPreflightSource>(
         "pull_request": evidence,
         "review_threads": threads,
         "automation_actor_id": expected_actor,
+        "review_actor_ids": review_actors.into_iter().collect::<BTreeMap<_, _>>(),
         "required_role_stamps": REVIEW_ROLES.map(|(_, role)| role),
     });
     let command = workflow(
@@ -373,15 +390,14 @@ fn validate_ledger_join(
 }
 
 fn validate_published_reviews(
-    expected_actor: u64,
+    review_actors: &[(&str, u64); 2],
     head_sha: &str,
     evidence: &PullRequestEvidence,
     blockers: &mut Vec<String>,
 ) {
     let mut latest: BTreeMap<&str, &ReviewSnapshot> = BTreeMap::new();
     for review in &evidence.reviews {
-        if review.actor_id != expected_actor
-            || !review.exact_head
+        if !review.exact_head
             || review.commit_id.as_deref() != Some(head_sha)
             || review.submitted_at.as_deref().is_none_or(str::is_empty)
         {
@@ -390,6 +406,14 @@ fn validate_published_reviews(
         let Some(role) = stamped_role(&review.body) else {
             continue;
         };
+        if review_actors
+            .iter()
+            .find(|(expected_role, _)| *expected_role == role)
+            .map(|(_, actor_id)| *actor_id)
+            != Some(review.actor_id)
+        {
+            continue;
+        }
         let replace = latest.get(role).is_none_or(|prior| {
             (review.submitted_at.as_deref(), review.id) > (prior.submitted_at.as_deref(), prior.id)
         });

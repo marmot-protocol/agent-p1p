@@ -11,6 +11,8 @@ fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
     assert!(policy.intake.paused);
     assert!(!policy.dispatch_enabled);
     assert_eq!(policy.github.automation_actor_id, None);
+    assert_eq!(policy.github.reviewer_general_actor_id, None);
+    assert_eq!(policy.github.reviewer_secperf_actor_id, None);
     assert_eq!(
         policy.intake.trusted_actor_ids,
         [202880, 258432291, 292420120]
@@ -35,7 +37,15 @@ fn policy_rejects_unknown_fields_model_fallback_and_shadow_merge_authority() {
         Err(PolicyError::Invalid)
     ));
     value["github"]["automation_actor_id"] = serde_json::json!(202880);
+    value["github"]["reviewer_general_actor_id"] = serde_json::json!(202881);
+    value["github"]["reviewer_secperf_actor_id"] = serde_json::json!(202882);
     assert!(load_repository_policy(&serde_json::to_vec(&value).unwrap()).is_ok());
+
+    value["github"]["reviewer_secperf_actor_id"] = serde_json::json!(202881);
+    assert!(matches!(
+        load_repository_policy(&serde_json::to_vec(&value).unwrap()),
+        Err(PolicyError::Invalid)
+    ));
 
     let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
     value["canary_issue"] = serde_json::json!(1240);

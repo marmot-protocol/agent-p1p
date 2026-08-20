@@ -241,6 +241,7 @@ fn effect_name(effect: Effect) -> &'static str {
         Effect::DispatchBuilder => "DISPATCH_BUILDER",
         Effect::ObserveCi => "OBSERVE_CI",
         Effect::DispatchReviewers => "DISPATCH_REVIEWERS",
+        Effect::PublishReviews => "PUBLISH_REVIEWS",
         Effect::ObserveFinalPreflight => "OBSERVE_FINAL_PREFLIGHT",
         Effect::DispatchFinalReviewer => "DISPATCH_FINAL_REVIEWER",
         Effect::HoldForHuman => "HOLD_FOR_HUMAN",

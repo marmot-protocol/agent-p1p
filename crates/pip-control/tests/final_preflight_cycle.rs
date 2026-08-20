@@ -71,7 +71,7 @@ fn exact_published_reviews_clean_ci_and_resolved_threads_release_final_review() 
         .claim_effect_matching("dispatcher", 200, 30, &["DISPATCH_FINAL_REVIEWER"])
         .unwrap()
         .unwrap();
-    assert_eq!(effect.state_revision, 8);
+    assert_eq!(effect.state_revision, 9);
 }
 
 #[test]
@@ -214,6 +214,7 @@ fn final_review_store(
         store.case("repo:984321#1240@1").unwrap().unwrap().state,
         "FINAL_REVIEW"
     );
+    mark_reviews_published(&mut store);
     store
 }
 
@@ -319,7 +320,40 @@ fn remediated_final_review_store(
         store.case("repo:984321#1240@1").unwrap().unwrap().state,
         "FINAL_REVIEW"
     );
+    mark_reviews_published(&mut store);
     store
+}
+
+fn mark_reviews_published(store: &mut Store) {
+    let case = store.case("repo:984321#1240@1").unwrap().unwrap();
+    store
+        .apply_transition(
+            &pip_store::TransitionInput {
+                case_key: case.case_key,
+                expected_revision: case.state_revision,
+                next_state: "FINAL_REVIEW".into(),
+                remediation_round: case.remediation_round,
+                plan_version: case.plan_version,
+                pr_number: case.pr_number,
+                head_sha: case.head_sha,
+                observed_at: 250,
+                event: EventInput {
+                    event_id: format!("event-reviews-published-{}", case.state_revision),
+                    event_type: "REVIEWS_PUBLISHED".into(),
+                    payload: json!({"fixture":true}),
+                },
+                run: None,
+                evidence: Vec::new(),
+                findings: Vec::new(),
+                effects: vec![EffectInput {
+                    effect_id: format!("effect-final-preflight-{}", case.state_revision),
+                    effect_type: "OBSERVE_FINAL_PREFLIGHT".into(),
+                    payload: json!({"case_key":"repo:984321#1240@1"}),
+                }],
+            },
+            None,
+        )
+        .unwrap();
 }
 
 fn accepted_source() -> FixtureSource {
@@ -370,7 +404,11 @@ fn accepted_source() -> FixtureSource {
 fn review(id: u64, role: &str) -> ReviewSnapshot {
     ReviewSnapshot {
         id,
-        actor_id: 202_880,
+        actor_id: match role {
+            "reviewer-general" => 202_881,
+            "reviewer-secperf" => 202_882,
+            _ => unreachable!(),
+        },
         state: ReviewState::Approved,
         commit_id: Some("b".repeat(40)),
         exact_head: true,
@@ -428,6 +466,8 @@ fn active_policy() -> pip_control::RepositoryPolicy {
     value["intake"]["paused"] = json!(false);
     value["dispatch_enabled"] = json!(true);
     value["github"]["automation_actor_id"] = json!(202880);
+    value["github"]["reviewer_general_actor_id"] = json!(202881);
+    value["github"]["reviewer_secperf_actor_id"] = json!(202882);
     value["required_ci_contexts"] = json!(["test"]);
     load_repository_policy(&serde_json::to_vec(&value).unwrap()).unwrap()
 }

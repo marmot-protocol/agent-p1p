@@ -1,7 +1,7 @@
 ---
 name: reviewer-general
 description: Use for exact-head correctness review of a Pip v2 PR.
-version: 0.3.0
+version: 0.4.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -33,8 +33,9 @@ Record the reviewed head SHA. Any later commit invalidates the verdict. Confirm 
 
 ## Completion
 
-Post the GitHub review against the exact reviewed commit and include this exact
-line in its body:
+Do not mutate GitHub. The controller publishes the accepted contract through
+the role-scoped reviewer identity. Include this exact line in the returned
+review evidence so the publication contract remains explicit:
 
 ```text
 Pip reviewer role: reviewer-general

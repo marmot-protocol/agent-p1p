@@ -30,6 +30,14 @@ fn staged_active_controller_template_uses_a_dedicated_shared_hermes_root() {
     assert!(service.contains("--policy /etc/pip-v2/repositories/%i.json"));
     assert!(service.contains("--skills-commit-file /opt/pip-v2/current/SOURCE.COMMIT"));
     assert!(service.contains("LoadCredential=github.token:/etc/pip-v2/github.token"));
+    assert!(service.contains(
+        "LoadCredential=github-reviewer-general.token:/etc/pip-v2/github-reviewer-general.token"
+    ));
+    assert!(service.contains(
+        "LoadCredential=github-reviewer-secperf.token:/etc/pip-v2/github-reviewer-secperf.token"
+    ));
+    assert!(service.contains("--github-reviewer-general-token %d/github-reviewer-general.token"));
+    assert!(service.contains("--github-reviewer-secperf-token %d/github-reviewer-secperf.token"));
     assert!(!service.contains("/home/jeff"));
     assert!(timer.contains("OnUnitActiveSec=15s"));
 }

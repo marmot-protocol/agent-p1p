@@ -51,6 +51,7 @@ pub enum Event {
     CiFailed,
     ReviewRecorded,
     ReviewsApproved,
+    ReviewsPublished,
     FinalPreflightAccepted,
     RequestChanges,
     Ready,
@@ -67,7 +68,7 @@ pub enum Event {
 }
 
 impl Event {
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 35] = [
         Self::Proceed,
         Self::WaitingForIssueCreator,
         Self::NeedsHumanScopeDecision,
@@ -89,6 +90,7 @@ impl Event {
         Self::CiFailed,
         Self::ReviewRecorded,
         Self::ReviewsApproved,
+        Self::ReviewsPublished,
         Self::FinalPreflightAccepted,
         Self::RequestChanges,
         Self::Ready,
@@ -193,6 +195,7 @@ string_enum!(Event, "event", {
     "CI_FAILED" => CiFailed,
     "REVIEW_RECORDED" => ReviewRecorded,
     "REVIEWS_APPROVED" => ReviewsApproved,
+    "REVIEWS_PUBLISHED" => ReviewsPublished,
     "FINAL_PREFLIGHT_ACCEPTED" => FinalPreflightAccepted,
     "REQUEST_CHANGES" => RequestChanges,
     "READY" => Ready,
@@ -238,6 +241,7 @@ pub enum Effect {
     DispatchBuilder,
     ObserveCi,
     DispatchReviewers,
+    PublishReviews,
     ObserveFinalPreflight,
     DispatchFinalReviewer,
     HoldForHuman,
@@ -352,7 +356,13 @@ pub fn transition(
         (State::WaitingCi, Ev::CiFailed) => decision(State::Remediating, &[Fx::DispatchBuilder]),
         (State::Reviewing, Ev::ReviewRecorded) => decision(State::Reviewing, &[]),
         (State::Reviewing, Ev::ReviewsApproved) => {
+            decision(State::FinalReview, &[Fx::PublishReviews])
+        }
+        (State::FinalReview, Ev::ReviewsPublished) => {
             decision(State::FinalReview, &[Fx::ObserveFinalPreflight])
+        }
+        (State::Remediating, Ev::ReviewsPublished) => {
+            decision(State::Remediating, &[Fx::DispatchBuilder])
         }
         (State::FinalReview, Ev::FinalPreflightAccepted) => {
             decision(State::FinalReview, &[Fx::DispatchFinalReviewer])
@@ -360,10 +370,10 @@ pub fn transition(
         (State::Reviewing, Ev::RequestChanges)
             if context.remediation_round >= context.max_remediation_rounds =>
         {
-            decision(State::Escalated, &[Fx::Escalate])
+            decision(State::Escalated, &[Fx::PublishReviews, Fx::Escalate])
         }
         (State::Reviewing, Ev::RequestChanges) => {
-            decision(State::Remediating, &[Fx::DispatchBuilder])
+            decision(State::Remediating, &[Fx::PublishReviews])
         }
         (State::FinalReview, Ev::Ready) if context.merge_mode == MergeMode::Shadow => {
             decision(State::ShadowReady, &[Fx::NotifyShadowReady])

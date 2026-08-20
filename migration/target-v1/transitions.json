@@ -11,6 +11,8 @@
     {"name": "review loop bound escalates", "from": "REVIEWING", "event": "REQUEST_CHANGES", "remediation_round": 3, "max_rounds": 3, "to": "ESCALATED"},
     {"name": "remediation result waits for new exact-head CI", "from": "REMEDIATING", "event": "REVIEW_READY", "to": "WAITING_CI"},
     {"name": "approved reviews reach final", "from": "REVIEWING", "event": "REVIEWS_APPROVED", "to": "FINAL_REVIEW"},
+    {"name": "published approvals release final preflight", "from": "FINAL_REVIEW", "event": "REVIEWS_PUBLISHED", "to": "FINAL_REVIEW"},
+    {"name": "published changes release remediation builder", "from": "REMEDIATING", "event": "REVIEWS_PUBLISHED", "to": "REMEDIATING"},
     {"name": "verified final preflight releases final reviewer", "from": "FINAL_REVIEW", "event": "FINAL_PREFLIGHT_ACCEPTED", "to": "FINAL_REVIEW"},
     {"name": "shadow final waits for human", "from": "FINAL_REVIEW", "event": "READY", "merge_mode": "shadow", "to": "SHADOW_READY"},
     {"name": "guarded final reaches deterministic merge gate", "from": "FINAL_REVIEW", "event": "READY", "merge_mode": "guarded", "to": "READY_TO_MERGE"},
