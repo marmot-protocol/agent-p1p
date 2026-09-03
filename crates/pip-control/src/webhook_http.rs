@@ -5,7 +5,6 @@ use std::fmt;
 use std::fs::{self, File};
 use std::io::Read;
 use std::net::SocketAddr;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -222,9 +221,7 @@ fn required<'a>(
 fn read_secret(path: &Path, max_bytes: usize) -> Result<Vec<u8>, WebhookIngressError> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| WebhookIngressError::Filesystem(error.to_string()))?;
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || metadata.permissions().mode() & 0o077 != 0
+    if !crate::secret_file::metadata_is_safe_secret_file(&metadata)
         || metadata.len() > u64::try_from(max_bytes).unwrap_or(u64::MAX)
     {
         return Err(WebhookIngressError::UnsafeInput(path.to_path_buf()));

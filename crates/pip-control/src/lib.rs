@@ -21,6 +21,7 @@ mod release;
 mod results;
 mod reviews;
 mod runtime;
+mod secret_file;
 mod shadow;
 mod takeover;
 mod webhook_consumer;

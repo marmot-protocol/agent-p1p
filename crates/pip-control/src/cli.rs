@@ -1008,7 +1008,7 @@ fn read_bounded(path: &Path, max_bytes: usize) -> Result<Vec<u8>, CliError> {
 fn read_secret(path: &Path, max_bytes: usize) -> Result<Vec<u8>, CliError> {
     let metadata =
         fs::symlink_metadata(path).map_err(|error| CliError::Filesystem(error.to_string()))?;
-    if metadata.permissions().mode() & 0o077 != 0 {
+    if !crate::secret_file::metadata_is_safe_secret_file(&metadata) {
         return Err(CliError::UnsafeInput(path.to_owned()));
     }
     read_bounded(path, max_bytes)
