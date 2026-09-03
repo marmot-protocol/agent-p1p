@@ -112,7 +112,8 @@ fn webhook_ingress_is_loopback_only_token_free_and_ledger_blind() {
     assert!(service.contains("ProtectSystem=strict"));
     assert!(service.contains("IPAddressDeny=any"));
     assert!(service.contains("IPAddressAllow=localhost"));
-    assert!(service.contains(
+    assert!(service.contains("ReadWritePaths=/var/spool/pip-webhooks"));
+    assert!(!service.contains(
         "ReadWritePaths=/var/spool/pip-webhooks/receipts /var/spool/pip-webhooks/pending"
     ));
     assert!(service.contains("InaccessiblePaths=/var/lib/pip"));
