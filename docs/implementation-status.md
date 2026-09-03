@@ -1,13 +1,15 @@
 # Rust implementation status
 
 **Snapshot date:** 2026-09-03
-**Activation state:** no live Rust intake or dispatch is authorized
+**Activation state:** installed inert on Pirate; no live Rust intake or
+dispatch is authorized
 
 This file is the implementation inventory. The target behavior remains defined
 by [`pip-architecture-plan.md`](pip-architecture-plan.md); the migration
 exit gates remain defined by [`migration-roadmap.md`](migration-roadmap.md).
 An entry is `implemented` only when an executable path and its local tests
-exist. It is not evidence of live-host installation or a completed canary.
+exist. Installed-host evidence is identified explicitly and is not evidence of
+a completed canary.
 
 ## What exists
 
@@ -21,7 +23,7 @@ exist. It is not evidence of live-host installation or a completed canary.
 | Worker evidence bundles | Every projected worker receives the complete ordered ledger history at the claimed state revision, including record digests and a reproducible root digest; final review includes the atomically committed GitHub preflight | Ledger, scheduling, dispatch-command, and exact-final-preflight tests |
 | CI reconciliation | Independent current and historical check/status evaluation on the ledger-bound PR head | Fixture and controller-cycle tests |
 | GitHub reads/writes | Bounded REST reads plus bounded GraphQL review-thread pagination; idempotent issue comments, controller-owned draft PRs, exact-head reviews, ready-for-review mutation, and guarded merge. Reviewer Apps use RS256 JWTs to mint repository-scoped, short-lived installation tokens each active controller cycle. | Adapter, App-auth, and controller-cycle tests; live App installation/permission evidence remains external and MDK policy cannot enable the guarded path |
-| Release/install | Signed source-bound release cohort, protected manual CI build/sign/upload workflow, exact action/image pins, artifact verification, content-addressed install, rollback, schema migration, isolated identities, hardened shadow timer, and inert active-runtime templates | Local tests and passing disposable-systemd clean install/reinstall/upgrade/rollback/restart gate; protected CI environment has not been provisioned or run |
+| Release/install | Signed source-bound release cohort, protected manual CI build/sign/upload workflow, exact action/image pins, artifact verification, content-addressed install, rollback, schema migration, isolated identities, hardened shadow timer, and inert active-runtime templates | Local tests, passing disposable-systemd lifecycle gate, and a verified inert local-bootstrap cohort installed on Pirate; protected CI environment has not been provisioned or run |
 | Active controller | One `controller-cycle` command that ingests Hermes and isolated direct-worker results, reconciles CI and authorization, performs polling recovery intake, enforces all operational bounds, handles takeover, publishes branches/plans/PRs/reviews/dispositions, verifies final preflight, and routes only freshly authorized effects | Local fixture and restart tests; live activation remains unauthorized |
 | Final-review preflight | A durable observation effect joins the accepted plan/build/reviewer ledger, fresh issue/clarification and authorization evidence, exact numeric GitHub actor and role-stamped approvals, current head CI, clean draft-PR ownership/mergeability, and resolved review threads before final-review dispatch | State-machine, adapter, fixture, drift, and restart-safe lease tests |
 | Review publication | Two distinct controller-held reviewer credentials publish the joined role contracts on the exact head; remediation and final preflight remain blocked until both idempotent reviews exist | Policy, state-machine, mutation, outage/retry, and exact-role fixture tests |
@@ -29,7 +31,7 @@ exist. It is not evidence of live-host installation or a completed canary.
 | Draft PR publication | A review-ready builder result records only its clean local commit; after verified controller branch publication, the same durable effect creates or updates the stable case-owned draft PR and only then binds PR/head and releases independent CI observation | Initial/remediation identity, branch/PR outage retry, state-machine, and exact-head tests |
 | Branch publication | Builder tasks receive deterministic case-owned worktree and branch assignments but no GitHub credential; the controller uses a signed askpass executable plus systemd credential-file path, pins the sole push URL, disables repository hooks/filesystem monitors/credential helpers/proxies/HTTP headers, forces TLS, validates clean branch/head state, uses exact force-with-lease, verifies the remote SHA, and only then mutates the draft PR | Credential-path isolation, scope, URL-drift, real-bare-remote, race, retry, and controller-cycle tests |
 | Workspace allocation | Policy binds a canonical checkout, worktree root, artifact root, default branch, and branch prefix; dispatch fetches the policy-bound remote/default head, allocates the deterministic case worktree, and verifies exact clean branch/head state before projection | Real-Git checkout/worktree tests and production dispatch-boundary tests |
-| Workspace storage lifecycle | Policy requires a dedicated mounted worktree filesystem, a 500 GiB free-space reserve, and 24-hour terminal retention. The controller retires at most one eligible terminal worktree per cycle, excludes running direct attempts, refuses dirty/colliding paths, never forces Git, preserves branches, rechecks capacity, and records retired/absent outcomes immutably in schema v6. New intake/direct work/draft publication/dispatch stop below reserve; result/finalization paths remain available. | Fake-storage lifecycle tests, real-Git dirty/idempotent retirement test, ledger eligibility/immutability tests, and systemd mount contracts; target-host mount/probe remains required |
+| Workspace storage lifecycle | Policy requires a dedicated mounted worktree filesystem, a 500 GiB free-space reserve, and 24-hour terminal retention. The controller retires at most one eligible terminal worktree per cycle, excludes running direct attempts, refuses dirty/colliding paths, never forces Git, preserves branches, rechecks capacity, and records retired/absent outcomes immutably in schema v6. New intake/direct work/draft publication/dispatch stop below reserve; result/finalization paths remain available. | Fake-storage lifecycle tests, real-Git dirty/idempotent retirement test, ledger eligibility/immutability tests, systemd mount contracts, and a successful persistent Pirate bind-mount unmount/remount probe; reboot recovery remains untested |
 | Hermes runtime bootstrap | `bootstrap-runtime` probes required CLI capabilities, creates/reprobes the repository board, writes only Pip-owned service-root/profile configuration, links canonical skills and shared auth, disables fallback/dangerous tools and per-profile dispatch, and verifies effective model/provider/reasoning/home values | Fake-CLI compatibility, ownership/drift, idempotency, and systemd-root tests |
 | Runtime isolation | Hermes workers see Hermes state plus read-only worktrees but not the ledger, direct artifacts, or provider home; direct workers use `pip-worker`, see immutable inbox/worktrees/artifacts/provider state, and cannot open the ledger, Hermes state, repository cache, or credentials | Unit-file contracts, queue convergence tests, and disposable-systemd identity/directory lifecycle |
 | Guarded merge | An explicitly guarded/autonomous policy selects the merge method; the controller revalidates the complete final gate, marks the draft ready, revalidates, emits a separate merge effect, merges with expected-head protection, and verifies the recorded merge commit | Restart-convergence, shadow-disablement, state-machine, GraphQL, and mutation tests |
@@ -52,10 +54,11 @@ exist. It is not evidence of live-host installation or a completed canary.
 The remaining gates require host-specific configuration or explicit authority;
 they are not claims that local adapter tests already proved production:
 
-1. Bind-mount the dedicated Pirate NVMe workspace storage at
-   `/var/lib/pip/worktrees`, then provision the canonical MDK checkout and provider/Hermes authentication
+1. Provision the canonical MDK checkout and provider/Hermes authentication
    under the installed service identities. Run `bootstrap-runtime` from the
-   exact installed release and confirm the gateway observes the same root.
+   exact installed release and confirm the gateway observes the same root. The
+   dedicated Pirate workspace bind mount is installed and has passed an
+   unmount/remount probe; separately prove it after a reboot before activation.
 2. Complete the isolated service/install and spool-consumer boundary for the
    loopback GitHub webhook receiver, then put a trusted TLS ingress in front of
    it. Provision its root-owned webhook secret. Polling remains recovery, not
@@ -103,8 +106,12 @@ The first exact-version compatibility review on 2026-09-03 targets Hermes
 `v2026.8.31` at commit
 `29112bef099274229cadff79cdff7bf7b99c4b77`. It corrected the adapter to use
 the immutable board `slug` instead of its display name and corrected the custom
-systemd gateway invocation to declare `--external-supervisor`. Installation and
-live service-identity probes on Pirate remain external evidence.
+systemd gateway invocation to declare `--external-supervisor`. That pinned code
+is installed root-owned on Pirate. Pip's service-owned Hermes runtime bootstrap
+and live service-identity/provider probes remain external evidence.
+
+The inert Pirate installation is recorded in
+[`evidence/2026-09-03-pirate-inert-install.md`](evidence/2026-09-03-pirate-inert-install.md).
 
 Upstream references:
 

@@ -2,9 +2,9 @@
 
 **Snapshot date:** 2026-09-03
 
-**Decision:** The deterministic Rust workflow and controller are locally
-complete for an inert, single-repository shadow deployment. Native reviewer-App
-authentication is now implemented. The built-in webhook ingress is still an
+**Decision:** The deterministic Rust workflow and controller are installed on
+Pirate as an inert, single-repository shadow deployment. Native reviewer-App
+authentication is implemented. The built-in webhook ingress is still an
 incomplete integration until its isolated service/install boundary and
 spool-to-ledger consumer exist. The system is not production-ready until those
 and the external gates below are satisfied, and it is not ready for Phase 10
@@ -26,8 +26,8 @@ authorized issue.
 | Bounded polling recovery | Implemented locally | Generic label discovery and live-evidence eligibility reconciliation |
 | Planner before builder | Implemented locally | Typed planner contract, durable plan publication gate, and dispatch ordering |
 | Assigned builder worktree and draft PR | Implemented locally | Controller-owned checkout/worktree/branch, credential-free builder, exact push, and stable draft-PR transaction |
-| Bounded worktree storage | Implemented locally; host mount pending | Dedicated-mount and free-space gates, 24-hour terminal retention, no-force clean retirement, running-attempt exclusion, one-per-cycle cleanup, and immutable retirement evidence |
-| Pinned Hermes compatibility | Source-verified; host install pending | Exact `v2026.8.31` commit and installer hash, slug-based board identity, task/run JSON contract, typed workspaces, and external-supervisor gateway flag |
+| Bounded worktree storage | Installed and persistently mounted on Pirate; reboot test pending | Dedicated-mount and free-space gates, 24-hour terminal retention, no-force clean retirement, running-attempt exclusion, one-per-cycle cleanup, immutable retirement evidence, and a successful unmount/remount plus generated systemd mount-unit probe |
+| Pinned Hermes compatibility | Code installed on Pirate; service-owned runtime bootstrap pending | Exact `v2026.8.31` commit and installer hash, slug-based board identity, task/run JSON contract, typed workspaces, and external-supervisor gateway flag |
 | Exact-head CI and two independent reviews | Implemented locally | CI reconciliation, distinct review identities, role stamps, exact-head joins, and publication retries |
 | Dynamic remediation and convergence | Implemented locally | State-driven redispatch rather than a fixed DAG; round, elapsed-time, repeated-finding, direct-attempt, and Hermes circuit-breaker bounds |
 | Holistic final review | Implemented locally | Atomic final preflight plus full immutable evidence bundle |
@@ -49,8 +49,8 @@ authorized issue.
 | 4 — read-only adapters | Complete locally; live service-identity probes remain Phase 8 evidence |
 | 5 — projections and execution | Complete locally for Hermes and direct Cursor paths |
 | 6 — controlled GitHub writes | Complete locally; live credential scope evidence remains external |
-| 7 — packaging and lifecycle | Complete locally; protected signing environment and exact CI run remain external release gates |
-| 8 — parity and non-dispatching live shadow | Local fixture/parity work complete; target-host Hermes/provider outage and recovery drill still required |
+| 7 — packaging and lifecycle | Inert local-bootstrap cohort installed on Pirate; protected signing environment and exact CI run remain external release gates |
+| 8 — parity and non-dispatching live shadow | Inert host install and persistent workspace mount complete; service-owned Hermes/provider bootstrap plus outage and recovery drill still required |
 | 9 — one MDK shadow case | Not authorized and not run |
 | 10 — controlled expansion | Intentionally not started before Phase 9 acceptance |
 | Legacy retirement | Vault runtime retired early on 2026-09-01 by explicit JG authorization; no Python rollback data retained, while repository source and curated parity fixtures remain |
@@ -71,13 +71,30 @@ The workstation had Cursor `2025.09.18-7ae6800`, an authenticated personal
 GitHub CLI, and Docker `29.6.2`, but no `hermes` executable. Personal GitHub
 authentication is not service credential evidence.
 
+## Verified Pirate installation evidence
+
+On 2026-09-03, source commit
+`9e2c9ee56e07f77dde8e2b25baaa6c74a7c9318f` was built as a signed
+local-bootstrap cohort and installed on Pirate under content-addressed release
+ID `e478e014bdfcbf4b7813a24dbb7d19d3a120b44c7f26d3e227e11174a55fa4ea`.
+The installed binary, installer, public key, ownership boundary, empty schema-v6
+ledger, persistent workspace bind mount, and disabled/inactive execution units
+were then checked independently. See
+[`evidence/2026-09-03-pirate-inert-install.md`](evidence/2026-09-03-pirate-inert-install.md).
+
+This proves an inert installation and a mechanical unmount/remount cycle. It
+does not prove reboot recovery, service-owned Hermes/provider operation,
+GitHub-App credentials, webhook delivery, or a canary.
+
 ## Inputs required before work can continue safely
 
 These are external state or authority, not remaining opportunities for a local
 implementation guess:
 
-1. A target Linux/systemd host with a compatible Hermes installation and the
-   service-owned Hermes/provider authentication paths.
+1. Service-owned Hermes/provider authentication on Pirate, followed by the
+   exact installed release's non-dispatching runtime bootstrap and capability
+   probes. The compatible Hermes code is installed; its Pip-owned runtime is
+   not yet bootstrapped.
 2. A trusted webhook TLS ingress or relay, its GitHub webhook secret, and the
    completed isolated spool-to-ledger service mapping. The local loopback
    receiver and durable spool exist, but are not an activated delivery path.
@@ -87,8 +104,8 @@ implementation guess:
    checkout/branch policy matches the target repository.
 5. A protected `pip-release` GitHub environment with approved signing trust
    material, followed by an independently verified exact-head workflow run.
-6. Explicit authorization to install/activate the inert services and label
-   exactly one suitable MDK issue.
+6. Explicit authorization to activate the inert services and label exactly one
+   suitable MDK issue. Installation alone grants no activation authority.
 7. JG acceptance of the complete shadow result before Phase 10 or legacy
    retirement begins.
 
