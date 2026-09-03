@@ -26,7 +26,7 @@ authorized issue.
 | Bounded polling recovery | Implemented locally | Generic label discovery and live-evidence eligibility reconciliation |
 | Planner before builder | Implemented locally | Typed planner contract, durable plan publication gate, and dispatch ordering |
 | Assigned builder worktree and draft PR | Implemented locally | Controller-owned checkout/worktree/branch, credential-free builder, exact push, and stable draft-PR transaction |
-| Bounded worktree storage | Installed and persistently mounted on Pirate; reboot test pending | Dedicated-mount and free-space gates, 24-hour terminal retention, no-force clean retirement, running-attempt exclusion, one-per-cycle cleanup, immutable retirement evidence, and a successful unmount/remount plus generated systemd mount-unit probe |
+| Bounded worktree storage | Installed, persistently mounted, and reboot-verified on Pirate | Dedicated-mount and free-space gates, 24-hour terminal retention, no-force clean retirement, running-attempt exclusion, one-per-cycle cleanup, immutable retirement evidence, and successful manual-remount and post-reboot systemd mount-unit probes |
 | Pinned Hermes compatibility | Code installed on Pirate; service-owned runtime bootstrap pending | Exact `v2026.8.31` commit and installer hash, slug-based board identity, task/run JSON contract, typed workspaces, and external-supervisor gateway flag |
 | Exact-head CI and two independent reviews | Implemented locally | CI reconciliation, distinct review identities, role stamps, exact-head joins, and publication retries |
 | Dynamic remediation and convergence | Implemented locally | State-driven redispatch rather than a fixed DAG; round, elapsed-time, repeated-finding, direct-attempt, and Hermes circuit-breaker bounds |
@@ -82,9 +82,10 @@ ledger, persistent workspace bind mount, and disabled/inactive execution units
 were then checked independently. See
 [`evidence/2026-09-03-pirate-inert-install.md`](evidence/2026-09-03-pirate-inert-install.md).
 
-This proves an inert installation and a mechanical unmount/remount cycle. It
-does not prove reboot recovery, service-owned Hermes/provider operation,
-GitHub-App credentials, webhook delivery, or a canary.
+This proves an inert installation, a mechanical unmount/remount cycle, and
+correct mount recovery after a real reboot. It does not prove service-owned
+Hermes/provider operation, GitHub-App credentials, webhook delivery, or a
+canary.
 
 ## Inputs required before work can continue safely
 

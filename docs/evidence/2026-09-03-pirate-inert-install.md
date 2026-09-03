@@ -1,9 +1,9 @@
 # Pirate inert installation evidence — 2026-09-03
 
 **Evidence boundary:** exact signed local-bootstrap Rust cohort installed on the
-Pirate Linux/systemd host, with a persistent workspace bind mount and no active
-Pip runtime. This is not protected-CI release evidence, a reboot test, a live
-Hermes/provider probe, GitHub credential evidence, webhook ingestion, or a
+Pirate Linux/systemd host, with a persistent, reboot-verified workspace bind
+mount and no active Pip runtime. This is not protected-CI release evidence, a
+live Hermes/provider probe, GitHub credential evidence, webhook ingestion, or a
 canary run.
 
 ## Installed cohort
@@ -60,10 +60,22 @@ unmount followed by `mount /var/lib/pip/worktrees` succeeded, after which
 `var-lib-pip-worktrees.mount` unit was loaded and active. Exactly one matching
 fstab entry existed.
 
-This proves persistence configuration and a mechanical remount without
-activating Pip. It does not yet prove boot ordering or recovery after a real
-host reboot. `/mnt/raid0` is RAID0 capacity storage, not redundant storage; the
-authoritative ledger remains outside it.
+This initially proved persistence configuration and a mechanical remount
+without activating Pip. A subsequent real reboot completed at
+`2026-09-03 12:53:46` with boot ID
+`0357cd54-7db6-436a-a803-ef5adb725d8b`. After that boot:
+
+- `/var/lib/pip/worktrees` was mounted read-write from
+  `/dev/md0[/pip/worktrees]` as ext4;
+- `var-lib-pip-worktrees.mount` was loaded, active, and mounted from the
+  generated systemd unit;
+- the generated unit required and ordered after `mnt-raid0.mount`;
+- systemd reported zero failed units; and
+- the fstab entry count remained exactly one.
+
+This closes the mount boot-order and reboot-recovery gate. `/mnt/raid0` is
+RAID0 capacity storage, not redundant storage; the authoritative ledger remains
+outside it.
 
 ## Inert-state proof
 
@@ -78,9 +90,16 @@ The final process probe found no Pip controller, direct worker, or Hermes
 gateway runtime. No issue, task, branch, comment, pull request, review, or merge
 was created by this installation.
 
+The same inert conditions held after the real reboot: every execution unit was
+still disabled and inactive, the runtime process count was zero, and the
+installed source and binary hashes were unchanged. The operator account could
+not traverse the mode-`0700` service data root, and passwordless sudo was not
+available; therefore this read-only post-reboot probe did not reopen the ledger
+as `pip-control`. The successful pre-reboot service-identity ledger probe above
+remains the ledger evidence.
+
 ## Gates still open
 
-- Prove the workspace mount after a real reboot.
 - Provision the canonical MDK checkout.
 - Bootstrap and probe the Pip-owned Hermes root and exact provider models under
   the service identities.
