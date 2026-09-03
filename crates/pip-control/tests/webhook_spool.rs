@@ -160,6 +160,14 @@ fn invalid_headers_signature_size_or_filesystem_never_create_a_spool_item() {
     assert!(WebhookSpool::open(unsafe_root.path()).is_err());
 }
 
+#[test]
+fn processing_moves_the_ingress_owned_inode_without_creating_a_new_hard_link() {
+    let implementation = include_str!("../src/webhook_spool.rs");
+
+    assert!(implementation.contains("fs::rename(&pending, &processed)"));
+    assert!(!implementation.contains("fs::hard_link(&pending, &processed)"));
+}
+
 fn prepare(root: &std::path::Path) {
     fs::create_dir(root.join("receipts")).unwrap();
     fs::create_dir(root.join("pending")).unwrap();

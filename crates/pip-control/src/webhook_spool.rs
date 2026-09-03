@@ -211,15 +211,9 @@ impl WebhookSpool {
             }
             return Ok(());
         }
-        match fs::hard_link(&pending, &processed) {
-            Ok(()) => sync_directory(&processed_root)?,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                compare_files(&pending, &processed)?;
-            }
-            Err(error) => return Err(WebhookSpoolError::Filesystem(error.to_string())),
-        }
-        fs::remove_file(&pending)
+        fs::rename(&pending, &processed)
             .map_err(|error| WebhookSpoolError::Filesystem(error.to_string()))?;
+        sync_directory(&processed_root)?;
         sync_directory(&pending_root)
     }
 }

@@ -443,9 +443,10 @@ After reviewed release installation, but before enabling any timer:
    bounded rate. Each invocation reads at most one canonical pending envelope,
    verifies its base64 encoding and SHA-256 digest, revalidates the HMAC, and
    re-reads the exact issue from GitHub. It commits the immutable delivery and
-   intake result before hard-linking the envelope into `processed/` and
-   removing it from `pending/`. GitHub outages and crashes leave the item
-   pending; a retry converges through ledger delivery-ID replay protection.
+   intake result before atomically renaming the `pending/` directory entry into
+   `processed/`; the immutable `receipts/` hard link remains in place. GitHub
+   outages and crashes leave the item pending; a retry converges through ledger
+   delivery-ID replay protection.
    The consumer's systemd writable sandbox names the common spool root so the
    hard link remains on one mount. Directory ownership and modes above still
    prevent the controller identity from modifying `receipts/`.
