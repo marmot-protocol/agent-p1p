@@ -23,6 +23,7 @@ mod reviews;
 mod runtime;
 mod shadow;
 mod takeover;
+mod webhook_consumer;
 mod webhook_http;
 mod webhook_spool;
 mod workspace;
@@ -87,10 +88,15 @@ pub use reviews::{
 pub use runtime::{RuntimeBootstrapError, bootstrap_hermes_runtime_with};
 pub use shadow::{IntakeSource, ShadowCandidate, ShadowError, ShadowReport, reconcile_read_only};
 pub use takeover::{TakeoverCycle, TakeoverError, reconcile_takeover_once};
+pub use webhook_consumer::{
+    WebhookSpoolConsumerError, WebhookSpoolCycle, consume_webhook_spool_once,
+};
 pub use webhook_http::{
     WebhookIngressError, WebhookIngressState, run_webhook_ingress_cli, webhook_ingress_router,
 };
-pub use webhook_spool::{SpoolApplyResult, WebhookSpool, WebhookSpoolError, WebhookSpoolInput};
+pub use webhook_spool::{
+    SpoolApplyResult, SpooledWebhook, WebhookSpool, WebhookSpoolError, WebhookSpoolInput,
+};
 pub use workspace::{GitWorkspacePreparer, WorkspaceError, WorkspacePreparer};
 pub use workspace_lifecycle::{
     GitWorkspaceRetirement, SystemWorkspaceStorageProbe, WorkspaceLifecycleCycle,

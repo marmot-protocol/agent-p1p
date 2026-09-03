@@ -17,7 +17,7 @@ a completed canary.
 |---|---|---|
 | Deterministic workflow | Exhaustive Rust states, events, effects, exact-head joins, remediation/elapsed-time/repeated-finding/provider-failure bounds, durable escalation, and shadow-only MDK disposition | Workspace tests and frozen fixtures |
 | Authoritative storage | SQLite schema v6, immutable webhook deliveries/events/evidence/runs/findings/workspace retirements, current-case projection, durable outbox, leases, immutable direct attempts, transactional effect supersession, backup, migration, and crash injection | Workspace and disposable lifecycle tests |
-| Intake reads | Signed `issues/labeled` webhook ingestion with delivery-ID/payload-digest replay protection and a live exact-issue re-read, plus bounded polling recovery using numeric repository/actor identity, exclusions, explicit holds, policy validation, and concurrency limits. A loopback-only HTTP receiver now verifies exact GitHub headers/HMAC and atomically spools raw bodies with delivery deduplication. | Adversarial fixture and HTTP/spool tests plus a read-only live GitHub observation; the isolated service/install boundary and spool-to-ledger consumer remain unconfigured |
+| Intake reads | Signed `issues/labeled` webhook ingestion with delivery-ID/payload-digest replay protection and a live exact-issue re-read, plus bounded polling recovery using numeric repository/actor identity, exclusions, explicit holds, policy validation, and concurrency limits. A loopback-only `pip-ingress` service has only the webhook secret and atomically spools raw bodies; a separate bounded `pip-control` cycle revalidates and commits one pending delivery before marking it processed. | Adversarial HTTP/spool/consumer, outage/replay, tamper, systemd-isolation, install/rollback, and disposable lifecycle tests plus a read-only live GitHub observation; Pirate deployment, a webhook secret, and trusted TLS ingress remain external |
 | Worker dispatch routing | Hermes-native roles receive controller-gated, idempotent board projections; direct roles become leased `RUN_DIRECT_WORKER` jobs and cross an immutable filesystem bridge to a separate worker identity; mixed reviews split one role to each path; both paths converge through the same result contract | Fake-runner, restart/recovery, mixed-review, systemd-boundary, and offline integration tests |
 | Worker contracts | Versioned planner, builder, two reviewer, and final-reviewer results bound to case, task, role, model, skills commit, plan, PR, and exact head | Contract fixtures and ingestion tests |
 | Worker evidence bundles | Every projected worker receives the complete ordered ledger history at the claimed state revision, including record digests and a reproducible root digest; final review includes the atomically committed GitHub preflight | Ledger, scheduling, dispatch-command, and exact-final-preflight tests |
@@ -59,11 +59,10 @@ they are not claims that local adapter tests already proved production:
    provider capability and outage/recovery probe. The canonical checkout,
    service-owned Hermes auth, exact-release `bootstrap-runtime`, and dedicated
    Pirate workspace mount have passed their inert real-host gates.
-2. Complete the isolated service/install and spool-consumer boundary for the
-   loopback GitHub webhook receiver, then put a trusted TLS ingress in front of
-   it. Provision its root-owned webhook secret. Polling remains recovery, not
-   the intended primary intake path; a successfully spooled request is not yet
-   ledger ingestion.
+2. Install and verify the now-implemented isolated `pip-ingress` service and
+   controller-owned spool consumer on Pirate, provision their shared root-owned
+   webhook secret, and put a trusted TLS ingress in front of loopback. Polling
+   remains recovery, not the intended primary intake path.
 3. Populate and verify the three numeric GitHub actor identities and separately
    scoped credentials. Configure the actual required MDK CI contexts; the
    checked-in paused policy intentionally has none.

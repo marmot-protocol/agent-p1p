@@ -149,7 +149,7 @@ pub fn install_host_release(
     let mut lifecycle = SystemdLifecycle::new(
         options.clone(),
         layout.state_root.join("ledger.db"),
-        layout.unit_root.join("pip-shadow-reconcile.timer"),
+        layout.unit_root.clone(),
     );
     install_release_inner(
         cohort,
@@ -189,6 +189,7 @@ fn install_release_inner(
     let manifest: ReleaseManifest = serde_json::from_slice(&manifest_bytes)
         .map_err(|error| InstallError::InvalidCohort(error.to_string()))?;
     let policies = cohort_policies(&source_root, &manifest, layout)?;
+    lifecycle.configure(&policies)?;
 
     let release_id = hex_digest(&Sha256::digest(&manifest_bytes));
     let release_dir = layout.install_root.join("releases").join(&release_id);
@@ -199,6 +200,9 @@ fn install_release_inner(
     let direct_service_target = layout.unit_root.join("pip-direct-worker@.service");
     let direct_timer_target = layout.unit_root.join("pip-direct-worker@.timer");
     let gateway_service_target = layout.unit_root.join("pip-hermes-gateway.service");
+    let webhook_ingress_target = layout.unit_root.join("pip-webhook-ingress.service");
+    let webhook_consumer_target = layout.unit_root.join("pip-webhook-consumer@.service");
+    let webhook_consumer_timer_target = layout.unit_root.join("pip-webhook-consumer@.timer");
     let ledger_target = layout.state_root.join("ledger.db");
     let current = layout.install_root.join("current");
     let service_bytes = read_regular(
@@ -229,6 +233,18 @@ fn install_release_inner(
         &source_root.join("share/pip/systemd/pip-hermes-gateway.service"),
         1024 * 1024,
     )?;
+    let webhook_ingress_bytes = read_regular(
+        &source_root.join("share/pip/systemd/pip-webhook-ingress.service"),
+        1024 * 1024,
+    )?;
+    let webhook_consumer_bytes = read_regular(
+        &source_root.join("share/pip/systemd/pip-webhook-consumer@.service"),
+        1024 * 1024,
+    )?;
+    let webhook_consumer_timer_bytes = read_regular(
+        &source_root.join("share/pip/systemd/pip-webhook-consumer@.timer"),
+        1024 * 1024,
+    )?;
 
     if release_dir.exists() {
         verify_release(&release_dir, &manifest_bytes, signature, public_key)
@@ -244,6 +260,12 @@ fn install_release_inner(
             && exact_file(&direct_service_target, &direct_service_bytes)
             && exact_file(&direct_timer_target, &direct_timer_bytes)
             && exact_file(&gateway_service_target, &gateway_service_bytes)
+            && exact_file(&webhook_ingress_target, &webhook_ingress_bytes)
+            && exact_file(&webhook_consumer_target, &webhook_consumer_bytes)
+            && exact_file(
+                &webhook_consumer_timer_target,
+                &webhook_consumer_timer_bytes,
+            )
             && ledger_target.is_file()
         {
             return Ok(InstallOutcome {
@@ -265,6 +287,9 @@ fn install_release_inner(
             &direct_service_target,
             &direct_timer_target,
             &gateway_service_target,
+            &webhook_ingress_target,
+            &webhook_consumer_target,
+            &webhook_consumer_timer_target,
             &ledger_target,
         ])
         .collect::<Vec<_>>();
@@ -299,6 +324,13 @@ fn install_release_inner(
         write_atomic(&direct_service_target, &direct_service_bytes, 0o444)?;
         write_atomic(&direct_timer_target, &direct_timer_bytes, 0o444)?;
         write_atomic(&gateway_service_target, &gateway_service_bytes, 0o444)?;
+        write_atomic(&webhook_ingress_target, &webhook_ingress_bytes, 0o444)?;
+        write_atomic(&webhook_consumer_target, &webhook_consumer_bytes, 0o444)?;
+        write_atomic(
+            &webhook_consumer_timer_target,
+            &webhook_consumer_timer_bytes,
+            0o444,
+        )?;
         inject(fault, InstallFault::AfterUnits)?;
         Store::open(&ledger_target).map_err(|error| InstallError::Ledger(error.to_string()))?;
         fs::set_permissions(&ledger_target, fs::Permissions::from_mode(0o600)).map_err(fs_error)?;
@@ -330,6 +362,7 @@ fn install_release_inner(
 }
 
 trait InstallLifecycle {
+    fn configure(&mut self, policies: &[CohortPolicy]) -> Result<(), InstallError>;
     fn before_mutation(&mut self) -> Result<(), InstallError>;
     fn commit(&mut self) -> Result<(), InstallError>;
     fn rollback(&mut self) -> Result<(), InstallError>;
@@ -338,6 +371,10 @@ trait InstallLifecycle {
 struct NoopLifecycle;
 
 impl InstallLifecycle for NoopLifecycle {
+    fn configure(&mut self, _policies: &[CohortPolicy]) -> Result<(), InstallError> {
+        Ok(())
+    }
+
     fn before_mutation(&mut self) -> Result<(), InstallError> {
         Ok(())
     }
@@ -354,27 +391,36 @@ impl InstallLifecycle for NoopLifecycle {
 struct SystemdLifecycle {
     options: HostInstallOptions,
     ledger: PathBuf,
-    timer_path: PathBuf,
+    unit_root: PathBuf,
+    units: Vec<SystemdUnitState>,
+}
+
+struct SystemdUnitState {
+    name: String,
+    definition_preexisting: bool,
     prior_enabled: Option<bool>,
     prior_active: Option<bool>,
 }
 
 impl SystemdLifecycle {
-    const TIMER: &'static str = "pip-shadow-reconcile.timer";
-
-    fn new(options: HostInstallOptions, ledger: PathBuf, timer_path: PathBuf) -> Self {
+    fn new(options: HostInstallOptions, ledger: PathBuf, unit_root: PathBuf) -> Self {
         Self {
             options,
             ledger,
-            timer_path,
-            prior_enabled: None,
-            prior_active: None,
+            unit_root,
+            units: Vec::new(),
         }
     }
 
-    fn query(&self, command: &str, truthy: &[&str], falsy: &[&str]) -> Result<bool, InstallError> {
-        let output = Command::new(&self.options.systemctl)
-            .args([command, Self::TIMER])
+    fn query(
+        systemctl: &Path,
+        command: &str,
+        unit: &str,
+        truthy: &[&str],
+        falsy: &[&str],
+    ) -> Result<bool, InstallError> {
+        let output = Command::new(systemctl)
+            .args([command, unit])
             .output()
             .map_err(|error| InstallError::HostLifecycle(error.to_string()))?;
         let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
@@ -385,21 +431,21 @@ impl SystemdLifecycle {
             return Ok(false);
         }
         Err(InstallError::HostLifecycle(format!(
-            "systemctl {command} returned status {} and state {value:?}",
+            "systemctl {command} {unit} returned status {} and state {value:?}",
             status_label(output.status)
         )))
     }
 
-    fn run(&self, command: &str) -> Result<(), InstallError> {
-        let output = Command::new(&self.options.systemctl)
-            .args([command, Self::TIMER])
+    fn run(systemctl: &Path, command: &str, unit: &str) -> Result<(), InstallError> {
+        let output = Command::new(systemctl)
+            .args([command, unit])
             .output()
             .map_err(|error| InstallError::HostLifecycle(error.to_string()))?;
         if output.status.success() {
             Ok(())
         } else {
             Err(InstallError::HostLifecycle(format!(
-                "systemctl {command} failed with status {}: {}",
+                "systemctl {command} {unit} failed with status {}: {}",
                 status_label(output.status),
                 String::from_utf8_lossy(&output.stderr).trim()
             )))
@@ -422,47 +468,120 @@ impl SystemdLifecycle {
         }
     }
 
-    fn restore_state(&self) -> Result<(), InstallError> {
-        match (self.prior_enabled, self.prior_active) {
-            (Some(enabled), Some(active)) => {
-                self.run(if enabled { "enable" } else { "disable" })?;
-                self.run(if active { "start" } else { "stop" })
+    fn restore_state(&self, include_new: bool) -> Result<(), InstallError> {
+        for unit in &self.units {
+            if !include_new && !unit.definition_preexisting {
+                continue;
             }
-            _ => Ok(()),
+            if let (Some(enabled), Some(active)) = (unit.prior_enabled, unit.prior_active) {
+                Self::run(
+                    &self.options.systemctl,
+                    if enabled { "enable" } else { "disable" },
+                    &unit.name,
+                )?;
+                Self::run(
+                    &self.options.systemctl,
+                    if active { "start" } else { "stop" },
+                    &unit.name,
+                )?;
+            }
         }
+        Ok(())
     }
 }
 
 impl InstallLifecycle for SystemdLifecycle {
-    fn before_mutation(&mut self) -> Result<(), InstallError> {
-        if !self.timer_path.exists() {
-            self.prior_enabled = Some(false);
-            self.prior_active = Some(false);
-            return Ok(());
+    fn configure(&mut self, policies: &[CohortPolicy]) -> Result<(), InstallError> {
+        let mut units = vec![
+            SystemdUnitState {
+                name: "pip-shadow-reconcile.timer".into(),
+                definition_preexisting: self.unit_root.join("pip-shadow-reconcile.timer").exists(),
+                prior_enabled: None,
+                prior_active: None,
+            },
+            SystemdUnitState {
+                name: "pip-hermes-gateway.service".into(),
+                definition_preexisting: self.unit_root.join("pip-hermes-gateway.service").exists(),
+                prior_enabled: None,
+                prior_active: None,
+            },
+            SystemdUnitState {
+                name: "pip-webhook-ingress.service".into(),
+                definition_preexisting: self.unit_root.join("pip-webhook-ingress.service").exists(),
+                prior_enabled: None,
+                prior_active: None,
+            },
+        ];
+        for policy in policies {
+            let name = policy
+                .target
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .filter(|value| !value.is_empty())
+                .ok_or(InstallError::InvalidLayout)?;
+            for (template, unit) in [
+                (
+                    "pip-controller@.timer",
+                    format!("pip-controller@{name}.timer"),
+                ),
+                (
+                    "pip-direct-worker@.timer",
+                    format!("pip-direct-worker@{name}.timer"),
+                ),
+                (
+                    "pip-webhook-consumer@.timer",
+                    format!("pip-webhook-consumer@{name}.timer"),
+                ),
+            ] {
+                units.push(SystemdUnitState {
+                    name: unit,
+                    definition_preexisting: self.unit_root.join(template).exists(),
+                    prior_enabled: None,
+                    prior_active: None,
+                });
+            }
         }
-        self.prior_enabled = Some(self.query(
-            "is-enabled",
-            &["enabled", "enabled-runtime"],
-            &[
-                "disabled",
-                "static",
-                "indirect",
-                "masked",
-                "generated",
-                "transient",
-                "linked",
-                "linked-runtime",
-                "alias",
-                "not-found",
-            ],
-        )?);
-        self.prior_active = Some(self.query(
-            "is-active",
-            &["active"],
-            &["inactive", "failed", "deactivating", "unknown"],
-        )?);
-        if self.prior_active == Some(true) {
-            self.run("stop")?;
+        self.units = units;
+        Ok(())
+    }
+
+    fn before_mutation(&mut self) -> Result<(), InstallError> {
+        for unit in &mut self.units {
+            if !unit.definition_preexisting {
+                unit.prior_enabled = Some(false);
+                unit.prior_active = Some(false);
+                continue;
+            }
+            unit.prior_enabled = Some(Self::query(
+                &self.options.systemctl,
+                "is-enabled",
+                &unit.name,
+                &["enabled", "enabled-runtime"],
+                &[
+                    "disabled",
+                    "static",
+                    "indirect",
+                    "masked",
+                    "generated",
+                    "transient",
+                    "linked",
+                    "linked-runtime",
+                    "alias",
+                    "not-found",
+                ],
+            )?);
+            unit.prior_active = Some(Self::query(
+                &self.options.systemctl,
+                "is-active",
+                &unit.name,
+                &["active"],
+                &["inactive", "failed", "deactivating", "unknown"],
+            )?);
+        }
+        for unit in &self.units {
+            if unit.prior_active == Some(true) {
+                Self::run(&self.options.systemctl, "stop", &unit.name)?;
+            }
         }
         Ok(())
     }
@@ -475,15 +594,15 @@ impl InstallLifecycle for SystemdLifecycle {
         )
         .map_err(|error| InstallError::HostLifecycle(error.to_string()))?;
         self.daemon_reload()?;
-        self.restore_state()
+        self.restore_state(true)
     }
 
     fn rollback(&mut self) -> Result<(), InstallError> {
-        if self.prior_enabled.is_none() || self.prior_active.is_none() {
+        if self.units.iter().all(|unit| unit.prior_enabled.is_none()) {
             return Ok(());
         }
         self.daemon_reload()?;
-        self.restore_state()
+        self.restore_state(false)
     }
 }
 

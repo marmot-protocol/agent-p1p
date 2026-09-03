@@ -36,6 +36,24 @@ fn clean_install_reinstall_and_upgrade_are_content_addressed_and_paused() {
             .join("pip-hermes-gateway.service")
             .is_file()
     );
+    assert!(
+        layout
+            .unit_root
+            .join("pip-webhook-ingress.service")
+            .is_file()
+    );
+    assert!(
+        layout
+            .unit_root
+            .join("pip-webhook-consumer@.service")
+            .is_file()
+    );
+    assert!(
+        layout
+            .unit_root
+            .join("pip-webhook-consumer@.timer")
+            .is_file()
+    );
 
     let replay = install_release(&v1, &public, &layout, None).unwrap();
     assert_eq!(replay.result, InstallResult::Existing);
@@ -75,6 +93,24 @@ fn every_injected_install_failure_restores_the_complete_preinstall_snapshot() {
         assert!(!layout.unit_root.join("pip-controller@.service").exists());
         assert!(!layout.unit_root.join("pip-controller@.timer").exists());
         assert!(!layout.unit_root.join("pip-hermes-gateway.service").exists());
+        assert!(
+            !layout
+                .unit_root
+                .join("pip-webhook-ingress.service")
+                .exists()
+        );
+        assert!(
+            !layout
+                .unit_root
+                .join("pip-webhook-consumer@.service")
+                .exists()
+        );
+        assert!(
+            !layout
+                .unit_root
+                .join("pip-webhook-consumer@.timer")
+                .exists()
+        );
         assert!(!layout.unit_root.join("pip-shadow-reconcile.timer").exists());
         assert!(!layout.state_root.join("ledger.db").exists());
     }
@@ -185,6 +221,42 @@ fn failed_host_finalization_restores_files_and_prior_timer_state() {
 }
 
 #[test]
+fn failed_fresh_host_finalization_does_not_restore_absent_units() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let layout = layout(sandbox.path());
+    prepare_layout(&layout);
+    let key = STANDARD.encode([39_u8; 32]);
+    let public = verifying_key(&key).unwrap();
+    let release = cohort(sandbox.path(), "v1", b"binary-v1\n", "a", &key);
+    let systemctl = fake_systemctl(sandbox.path(), false, false, true);
+    let owner = fs::metadata(&layout.state_root).unwrap();
+    let (manifest_sha256, binary_sha256) = cohort_digests(&release);
+
+    let error = install_host_release(
+        &release,
+        &public,
+        &layout,
+        &manifest_sha256,
+        &binary_sha256,
+        &HostInstallOptions {
+            systemctl,
+            state_uid: owner.uid(),
+            state_gid: owner.gid(),
+        },
+    )
+    .unwrap_err();
+
+    assert!(!matches!(error, pip_control::InstallError::Rollback(_)));
+    assert!(!layout.install_root.join("current").exists());
+    assert!(
+        !layout
+            .unit_root
+            .join("pip-webhook-ingress.service")
+            .exists()
+    );
+}
+
+#[test]
 fn successful_host_install_preserves_a_fresh_disabled_timer() {
     let sandbox = tempfile::tempdir().unwrap();
     let layout = layout(sandbox.path());
@@ -220,6 +292,54 @@ fn successful_host_install_preserves_a_fresh_disabled_timer() {
     );
     let ledger = fs::metadata(layout.state_root.join("ledger.db")).unwrap();
     assert_eq!((ledger.uid(), ledger.gid()), (owner.uid(), owner.gid()));
+}
+
+#[test]
+fn host_upgrade_quiesces_and_restores_every_runtime_entrypoint() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let layout = layout(sandbox.path());
+    prepare_layout(&layout);
+    let key = STANDARD.encode([43_u8; 32]);
+    let public = verifying_key(&key).unwrap();
+    let v1 = cohort(sandbox.path(), "v1", b"binary-v1\n", "a", &key);
+    let v2 = cohort(sandbox.path(), "v2", b"binary-v2\n", "b", &key);
+    install_release(&v1, &public, &layout, None).unwrap();
+    let systemctl = fake_systemctl(sandbox.path(), true, true, false);
+    let owner = fs::metadata(&layout.state_root).unwrap();
+    let (manifest_sha256, binary_sha256) = cohort_digests(&v2);
+
+    install_host_release(
+        &v2,
+        &public,
+        &layout,
+        &manifest_sha256,
+        &binary_sha256,
+        &HostInstallOptions {
+            systemctl,
+            state_uid: owner.uid(),
+            state_gid: owner.gid(),
+        },
+    )
+    .unwrap();
+
+    let calls = fs::read_to_string(sandbox.path().join("systemctl.calls")).unwrap();
+    for unit in [
+        "pip-shadow-reconcile.timer",
+        "pip-controller@mdk.timer",
+        "pip-direct-worker@mdk.timer",
+        "pip-hermes-gateway.service",
+        "pip-webhook-ingress.service",
+        "pip-webhook-consumer@mdk.timer",
+    ] {
+        for command in ["is-enabled", "is-active", "stop", "enable", "start"] {
+            assert!(
+                calls
+                    .lines()
+                    .any(|line| line == format!("{command} {unit}")),
+                "missing {command} lifecycle call for {unit}:\n{calls}"
+            );
+        }
+    }
 }
 
 fn layout(root: &Path) -> InstallLayout {
@@ -287,6 +407,21 @@ fn cohort(parent: &Path, name: &str, binary: &[u8], source: &str, key: &str) -> 
     fs::write(
         root.join("share/pip/systemd/pip-hermes-gateway.service"),
         include_bytes!("../../../packaging/systemd/pip-hermes-gateway.service"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("share/pip/systemd/pip-webhook-ingress.service"),
+        include_bytes!("../../../packaging/systemd/pip-webhook-ingress.service"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("share/pip/systemd/pip-webhook-consumer@.service"),
+        include_bytes!("../../../packaging/systemd/pip-webhook-consumer@.service"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("share/pip/systemd/pip-webhook-consumer@.timer"),
+        include_bytes!("../../../packaging/systemd/pip-webhook-consumer@.timer"),
     )
     .unwrap();
     for entry in walk_files(&root) {
@@ -363,6 +498,21 @@ fn fake_systemctl(root: &Path, enabled: bool, active: bool, fail_reload_once: bo
     let body = format!(
         r#"#!/bin/sh
 root={root:?}
+printf '%s %s\n' "$1" "${{2-}}" >>"$root/systemctl.calls"
+unit=${{2-}}
+case "$unit" in
+  pip-controller@*.timer) definition=pip-controller@.timer ;;
+  pip-direct-worker@*.timer) definition=pip-direct-worker@.timer ;;
+  pip-webhook-consumer@*.timer) definition=pip-webhook-consumer@.timer ;;
+  *) definition=$unit ;;
+esac
+if [ "$1" != daemon-reload ] && [ -n "$definition" ] && [ ! -f "$root/etc/systemd/system/$definition" ]; then
+  case "$1" in
+    is-enabled) echo not-found; exit 1 ;;
+    is-active) echo inactive; exit 3 ;;
+    *) exit 5 ;;
+  esac
+fi
 case "$1" in
   is-enabled)
     if [ "$(cat "$root/enabled")" = 1 ]; then echo enabled; else echo disabled; exit 1; fi

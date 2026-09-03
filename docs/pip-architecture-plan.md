@@ -180,6 +180,15 @@ delivery identity and payload digest, and re-reads the named issue from GitHub
 before applying eligibility. The public TLS endpoint or trusted webhook relay
 is host infrastructure and must preserve those values byte-for-byte.
 
+The host boundary uses two identities. A dedicated `pip-ingress` service has
+the webhook secret but no GitHub token, ledger, repository, Hermes, provider,
+or worker access. It binds only to loopback, validates the request, and writes a
+delivery-ID-addressed durable spool. A separate `pip-control` cycle reads one
+pending envelope at a time, revalidates its canonical encoding, payload digest,
+HMAC, and live GitHub evidence, commits the ledger transaction, and only then
+marks the spool item processed. A crash or GitHub outage before completion
+leaves the item pending; replay is resolved by the immutable delivery record.
+
 An issue becomes eligible only when:
 
 - it is open and is not a pull request;

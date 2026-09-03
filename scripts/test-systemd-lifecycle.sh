@@ -47,6 +47,13 @@ docker exec "$container" bash -lc '
   test "$(systemctl is-active pip-shadow-reconcile.timer || true)" = inactive
   test "$(systemctl is-enabled pip-controller@mdk.timer || true)" = disabled
   test "$(systemctl is-active pip-controller@mdk.timer || true)" = inactive
+  test "$(systemctl is-enabled pip-webhook-ingress.service || true)" = disabled
+  test "$(systemctl is-active pip-webhook-ingress.service || true)" = inactive
+  test "$(systemctl is-enabled pip-webhook-consumer@mdk.timer || true)" = disabled
+  test "$(systemctl is-active pip-webhook-consumer@mdk.timer || true)" = inactive
+  test "$(stat -c %U:%G:%a /var/spool/pip-webhooks/receipts)" = pip-ingress:pip-control:2750
+  test "$(stat -c %U:%G:%a /var/spool/pip-webhooks/pending)" = pip-ingress:pip-control:2770
+  test "$(stat -c %U:%G:%a /var/spool/pip-webhooks/processed)" = pip-control:pip-control:711
   /opt/pip/current/bin/pip-control status --database /var/lib/pip/ledger.db --now 1787220001 \
     | jq -e ".ok and .ledger.schema_version == 6" >/dev/null
 '

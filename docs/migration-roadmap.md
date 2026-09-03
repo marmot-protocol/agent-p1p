@@ -210,7 +210,9 @@ Exit gate:
 
 **Implementation status:** No live case has started. The generic Rust path,
 signed-webhook adapter, polling recovery, runtime templates, and operational
-bounds exist locally, but activation remains unauthorized and the host-specific
+bounds exist locally. The isolated loopback ingress and durable spool consumer
+also pass local and disposable-systemd lifecycle tests, but are not installed
+or exposed on Pirate. Activation remains unauthorized and the host-specific
 gaps listed in [`implementation-status.md`](implementation-status.md) must close
 first.
 

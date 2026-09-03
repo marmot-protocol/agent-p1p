@@ -1,0 +1,44 @@
+[Unit]
+Description=Pip token-free GitHub webhook ingress
+Documentation=https://github.com/marmot-protocol/agent-p1p
+After=network.target
+ConditionPathIsDirectory=/var/spool/pip-webhooks
+
+[Service]
+Type=simple
+User=pip-ingress
+Group=pip-ingress
+LoadCredential=github-webhook.secret:/etc/pip/github-webhook.secret
+ExecStart=/opt/pip/current/bin/pip-control webhook-serve --listen 127.0.0.1:8787 --spool /var/spool/pip-webhooks --webhook-secret %d/github-webhook.secret
+Restart=on-failure
+RestartSec=5s
+UMask=0027
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+ReadWritePaths=/var/spool/pip-webhooks/receipts /var/spool/pip-webhooks/pending
+InaccessiblePaths=/var/lib/pip
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

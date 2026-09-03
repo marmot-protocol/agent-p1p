@@ -1,0 +1,14 @@
+[Unit]
+Description=Run the Pip GitHub webhook spool consumer for %i
+Documentation=https://github.com/marmot-protocol/agent-p1p
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=5s
+RandomizedDelaySec=1s
+AccuracySec=1s
+Persistent=true
+Unit=pip-webhook-consumer@%i.service
+
+[Install]
+WantedBy=timers.target

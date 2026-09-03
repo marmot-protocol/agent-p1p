@@ -49,6 +49,7 @@ staging=$(mktemp -d /var/tmp/pip-install.XXXXXX)
 created_paths=()
 control_user_created=false
 worker_user_created=false
+ingress_user_created=false
 bootstrap_workspace_adopted=false
 installation_complete=false
 cleanup() {
@@ -70,6 +71,10 @@ cleanup() {
     fi
     if [[ $worker_user_created == true && $cleanup_safe == true ]]; then
       userdel pip-worker >/dev/null 2>&1 || true
+    fi
+    if [[ $ingress_user_created == true && $cleanup_safe == true ]]; then
+      userdel pip-ingress >/dev/null 2>&1 || true
+      groupdel pip-ingress >/dev/null 2>&1 || true
     fi
     if [[ $control_user_created == true && $cleanup_safe == true ]]; then
       userdel pip-control >/dev/null 2>&1 || true
@@ -151,6 +156,33 @@ IFS=: read -r worker_account _ worker_uid worker_gid _ worker_home worker_shell 
   exit 1
 }
 
+if ! getent passwd pip-ingress >/dev/null; then
+  useradd --system --user-group --no-create-home --home-dir /nonexistent \
+    --shell /usr/sbin/nologin pip-ingress
+  ingress_user_created=true
+fi
+ingress_entry=$(getent passwd pip-ingress)
+IFS=: read -r ingress_account _ ingress_uid ingress_gid _ ingress_home ingress_shell <<<"$ingress_entry"
+[[ $ingress_account == pip-ingress && $ingress_uid != 0 && $ingress_uid != "$control_uid" &&
+   $ingress_uid != "$worker_uid" && $ingress_home == /nonexistent ]] || {
+  echo "pip-ingress identity has an unsafe account definition" >&2
+  exit 1
+}
+[[ $ingress_shell == /usr/sbin/nologin || $ingress_shell == /sbin/nologin ]] || {
+  echo "pip-ingress must use a nologin shell" >&2
+  exit 1
+}
+[[ $(id -G pip-ingress) == "$ingress_gid" ]] || {
+  echo "pip-ingress must not belong to supplementary groups" >&2
+  exit 1
+}
+ingress_group_entry=$(getent group "$ingress_gid")
+IFS=: read -r ingress_group _ resolved_ingress_gid ingress_members <<<"$ingress_group_entry"
+[[ $ingress_group == pip-ingress && $resolved_ingress_gid == "$ingress_gid" && -z $ingress_members ]] || {
+  echo "pip-ingress primary group is unsafe" >&2
+  exit 1
+}
+
 adopt_bootstrap_workspace_layout() {
   local state_root=/var/lib/pip
   local worktree_root=/var/lib/pip/worktrees
@@ -223,6 +255,10 @@ ensure_directory /var/lib/pip/direct-queue pip-control pip-control 750
 ensure_directory /var/lib/pip/direct-queue/inbox pip-control pip-control 750
 ensure_directory /var/lib/pip/direct-queue/results pip-worker pip-control 770
 ensure_directory /var/lib/pip/direct-queue/archive pip-control pip-control 700
+ensure_directory /var/spool/pip-webhooks root root 711
+ensure_directory /var/spool/pip-webhooks/receipts pip-ingress pip-control 2750
+ensure_directory /var/spool/pip-webhooks/pending pip-ingress pip-control 2770
+ensure_directory /var/spool/pip-webhooks/processed pip-control pip-control 711
 
 "$staging/cohort/root/bin/pip-control" install-release \
   --cohort "$staging/cohort" \

@@ -83,12 +83,82 @@ pub fn run_cli(arguments: impl IntoIterator<Item = String>) -> Result<Value, Cli
         "derive-public-key" => derive_public_key(&arguments[1..]),
         "shadow-reconcile" => shadow_reconcile(&arguments[1..]),
         "webhook-intake" => webhook_intake(&arguments[1..]),
+        "webhook-spool-cycle" => webhook_spool_cycle(&arguments[1..]),
         "controller-cycle" => controller_cycle(&arguments[1..]),
         "direct-worker-cycle" => direct_worker_cycle(&arguments[1..]),
         "bootstrap-runtime" => bootstrap_runtime(&arguments[1..]),
         "install-release" => install(&arguments[1..]),
         _ => Err(CliError::InvalidArgument(command.into())),
     }
+}
+
+fn webhook_spool_cycle(arguments: &[String]) -> Result<Value, CliError> {
+    let options = options(
+        arguments,
+        &[
+            "--policy",
+            "--database",
+            "--github-token",
+            "--webhook-secret",
+            "--spool",
+        ],
+        &["--now", "--global-paused"],
+    )?;
+    let policy_bytes = read_bounded(Path::new(required(&options, "--policy")?), 1024 * 1024)?;
+    let policy = crate::load_repository_policy(&policy_bytes)
+        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let token = read_secret(Path::new(required(&options, "--github-token")?), 1024)?;
+    let token = std::str::from_utf8(&token)
+        .map_err(|_| CliError::InvalidArgument("--github-token".into()))?
+        .trim();
+    if token.is_empty() {
+        return Err(CliError::InvalidArgument("--github-token".into()));
+    }
+    let secret = read_secret(Path::new(required(&options, "--webhook-secret")?), 1024)?;
+    let secret = std::str::from_utf8(&secret)
+        .map_err(|_| CliError::InvalidArgument("--webhook-secret".into()))?
+        .trim()
+        .as_bytes();
+    if secret.is_empty() {
+        return Err(CliError::InvalidArgument("--webhook-secret".into()));
+    }
+    let now = options
+        .get("--now")
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|_| CliError::InvalidArgument("--now".into()))
+        })
+        .transpose()?
+        .map_or_else(current_time, Ok)?;
+    let global_paused = options
+        .get("--global-paused")
+        .map(|value| parse_bool(value, "--global-paused"))
+        .transpose()?
+        .unwrap_or(false);
+    let reader = GitHubReader::new(
+        UreqTransport::new(Duration::from_secs(20)),
+        "https://api.github.com",
+        token,
+        4 * 1024 * 1024,
+        10,
+    )
+    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let spool = crate::WebhookSpool::open(required(&options, "--spool")?)
+        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let mut store = Store::open(required(&options, "--database")?)
+        .map_err(|error| CliError::Ledger(error.to_string()))?;
+    let report = crate::consume_webhook_spool_once(
+        &reader,
+        &policy,
+        &mut store,
+        &spool,
+        secret,
+        now,
+        global_paused,
+    )
+    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    serde_json::to_value(report).map_err(|error| CliError::Reconciliation(error.to_string()))
 }
 
 fn webhook_intake(arguments: &[String]) -> Result<Value, CliError> {
@@ -158,6 +228,7 @@ fn webhook_intake(arguments: &[String]) -> Result<Value, CliError> {
             event_name: required(&options, "--event")?,
             signature: required(&options, "--signature")?,
             payload: &payload,
+            received_at: now,
         },
         secret,
         now,

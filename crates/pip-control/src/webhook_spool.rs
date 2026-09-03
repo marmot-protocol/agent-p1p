@@ -31,6 +31,15 @@ pub enum SpoolApplyResult {
     Replayed,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SpooledWebhook {
+    pub delivery_id: String,
+    pub event_name: String,
+    pub signature: String,
+    pub payload: Vec<u8>,
+    pub received_at: u64,
+}
+
 #[derive(Debug)]
 pub enum WebhookSpoolError {
     InvalidInput(&'static str),
@@ -150,6 +159,69 @@ impl WebhookSpool {
         ensure_queued(&receipt, &pending, &processed, &envelope)?;
         Ok(SpoolApplyResult::Stored)
     }
+
+    pub fn next_pending(&self) -> Result<Option<SpooledWebhook>, WebhookSpoolError> {
+        let pending_root = self.root.join("pending");
+        validate_directory(&pending_root)?;
+        let mut entries = fs::read_dir(&pending_root)
+            .map_err(|error| WebhookSpoolError::Filesystem(error.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| WebhookSpoolError::Filesystem(error.to_string()))?;
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        let Some(entry) = entries.first() else {
+            return Ok(None);
+        };
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| WebhookSpoolError::UnsafePath(entry.path()))?;
+        let delivery_id = name
+            .strip_suffix(".json")
+            .filter(|value| valid_delivery_id(value))
+            .ok_or_else(|| WebhookSpoolError::UnsafePath(entry.path()))?;
+        let envelope = read_envelope(&entry.path(), delivery_id)?;
+        Ok(Some(SpooledWebhook {
+            delivery_id: envelope.delivery_id,
+            event_name: envelope.event_name,
+            signature: envelope.signature,
+            payload: STANDARD
+                .decode(&envelope.payload_base64)
+                .map_err(|_| WebhookSpoolError::InvalidInput("invalid payload encoding"))?,
+            received_at: envelope.received_at,
+        }))
+    }
+
+    pub fn mark_processed(&self, delivery_id: &str) -> Result<(), WebhookSpoolError> {
+        if !valid_delivery_id(delivery_id) {
+            return Err(WebhookSpoolError::InvalidInput("invalid delivery ID"));
+        }
+        let pending_root = self.root.join("pending");
+        let processed_root = self.root.join("processed");
+        validate_directory(&pending_root)?;
+        validate_directory(&processed_root)?;
+        let name = format!("{delivery_id}.json");
+        let pending = pending_root.join(&name);
+        let processed = processed_root.join(name);
+        if processed.exists() {
+            if pending.exists() {
+                compare_files(&pending, &processed)?;
+                fs::remove_file(&pending)
+                    .map_err(|error| WebhookSpoolError::Filesystem(error.to_string()))?;
+                sync_directory(&pending_root)?;
+            }
+            return Ok(());
+        }
+        match fs::hard_link(&pending, &processed) {
+            Ok(()) => sync_directory(&processed_root)?,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                compare_files(&pending, &processed)?;
+            }
+            Err(error) => return Err(WebhookSpoolError::Filesystem(error.to_string())),
+        }
+        fs::remove_file(&pending)
+            .map_err(|error| WebhookSpoolError::Filesystem(error.to_string()))?;
+        sync_directory(&pending_root)
+    }
 }
 
 fn validate_input(input: WebhookSpoolInput<'_>, secret: &[u8]) -> Result<(), WebhookSpoolError> {
@@ -208,9 +280,46 @@ fn compare_existing(path: &Path, expected: &SpoolEnvelope) -> Result<(), Webhook
     if existing.spool_format != 1
         || existing.delivery_id != expected.delivery_id
         || existing.event_name != expected.event_name
+        || existing.signature != expected.signature
         || existing.payload_sha256 != expected.payload_sha256
         || existing.payload_base64 != expected.payload_base64
     {
+        return Err(WebhookSpoolError::DeliveryConflict);
+    }
+    Ok(())
+}
+
+fn read_envelope(
+    path: &Path,
+    expected_delivery_id: &str,
+) -> Result<SpoolEnvelope, WebhookSpoolError> {
+    let bytes = read_bounded_file(path, MAX_ENVELOPE_BYTES)?;
+    let envelope: SpoolEnvelope = serde_json::from_slice(&bytes)
+        .map_err(|error| WebhookSpoolError::Serialization(error.to_string()))?;
+    let payload = STANDARD
+        .decode(&envelope.payload_base64)
+        .map_err(|_| WebhookSpoolError::InvalidInput("invalid payload encoding"))?;
+    let digest = hex(&Sha256::digest(&payload));
+    if envelope.spool_format != 1
+        || envelope.delivery_id != expected_delivery_id
+        || envelope.event_name != "issues"
+        || envelope.signature.is_empty()
+        || !envelope.signature.is_ascii()
+        || payload.is_empty()
+        || payload.len() > MAX_PAYLOAD_BYTES
+        || STANDARD.encode(&payload) != envelope.payload_base64
+        || envelope.payload_sha256 != digest
+        || envelope.received_at == 0
+    {
+        return Err(WebhookSpoolError::InvalidInput("invalid spool envelope"));
+    }
+    Ok(envelope)
+}
+
+fn compare_files(left: &Path, right: &Path) -> Result<(), WebhookSpoolError> {
+    let left_bytes = read_bounded_file(left, MAX_ENVELOPE_BYTES)?;
+    let right_bytes = read_bounded_file(right, MAX_ENVELOPE_BYTES)?;
+    if left_bytes != right_bytes {
         return Err(WebhookSpoolError::DeliveryConflict);
     }
     Ok(())

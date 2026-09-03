@@ -168,6 +168,7 @@ fn signed_label_webhook_routes_one_issue_and_replays_by_delivery_id() {
         event_name: "issues",
         signature: &signature,
         payload: &payload,
+        received_at: 100,
     };
 
     let first = ingest_webhook(
@@ -224,6 +225,7 @@ fn webhook_fails_closed_before_recording_or_fetching_on_bad_signature_or_reposit
                 event_name: "issues",
                 signature: &signature,
                 payload: &payload,
+                received_at: 100,
             },
             b"webhook-secret",
             100,

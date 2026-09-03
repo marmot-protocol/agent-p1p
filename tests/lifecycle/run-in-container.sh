@@ -76,14 +76,31 @@ test -x /opt/pip/current/bin/pip-control
 test "$(stat -c '%U:%G:%a' /var/lib/pip/ledger.db)" = pip-control:pip-control:600
 test "$(stat -c '%U:%G:%a' /var/lib/pip)" = pip-control:pip-control:700
 test "$(stat -c '%U:%G:%a' /var/lib/pip/worktrees)" = pip-control:pip-control:770
+test "$(getent passwd pip-ingress | cut -d: -f6-7)" = /nonexistent:/usr/sbin/nologin
+test "$(id -Gn pip-ingress)" = pip-ingress
+test "$(stat -c '%U:%G:%a' /var/spool/pip-webhooks)" = root:root:711
+test "$(stat -c '%U:%G:%a' /var/spool/pip-webhooks/receipts)" = pip-ingress:pip-control:2750
+test "$(stat -c '%U:%G:%a' /var/spool/pip-webhooks/pending)" = pip-ingress:pip-control:2770
+test "$(stat -c '%U:%G:%a' /var/spool/pip-webhooks/processed)" = pip-control:pip-control:711
 grep -q '"enabled": false' /etc/pip/repositories/mdk.json
 grep -q '"dispatch_enabled": false' /etc/pip/repositories/mdk.json
 test "$(systemctl is-enabled pip-shadow-reconcile.timer || true)" = disabled
 test "$(systemctl is-active pip-shadow-reconcile.timer || true)" = inactive
 systemctl cat pip-controller@.service >/dev/null
 systemctl cat pip-controller@.timer >/dev/null
+systemctl cat pip-webhook-ingress.service >/dev/null
+systemctl cat pip-webhook-consumer@.service >/dev/null
+systemctl cat pip-webhook-consumer@.timer >/dev/null
+systemd-analyze verify \
+  /etc/systemd/system/pip-webhook-ingress.service \
+  /etc/systemd/system/pip-webhook-consumer@.service \
+  /etc/systemd/system/pip-webhook-consumer@.timer
 test "$(systemctl is-enabled pip-controller@mdk.timer || true)" = disabled
 test "$(systemctl is-active pip-controller@mdk.timer || true)" = inactive
+test "$(systemctl is-enabled pip-webhook-ingress.service || true)" = disabled
+test "$(systemctl is-active pip-webhook-ingress.service || true)" = inactive
+test "$(systemctl is-enabled pip-webhook-consumer@mdk.timer || true)" = disabled
+test "$(systemctl is-active pip-webhook-consumer@mdk.timer || true)" = inactive
 
 install_version /work/releases/v0
 test "$(readlink -f /opt/pip/current)" = "$first_target"
@@ -122,5 +139,8 @@ test "$(find /opt/pip/releases -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 2
 systemctl cat pip-shadow-reconcile.service >/dev/null
 systemctl cat pip-controller@.service >/dev/null
 systemctl cat pip-controller@.timer >/dev/null
+systemctl cat pip-webhook-ingress.service >/dev/null
+systemctl cat pip-webhook-consumer@.service >/dev/null
+systemctl cat pip-webhook-consumer@.timer >/dev/null
 
 printf '%s\n' "$first_target" "$second_target" >/work/expected-release-targets

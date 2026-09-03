@@ -1,0 +1,39 @@
+[Unit]
+Description=Pip GitHub webhook spool consumer for %i
+Documentation=https://github.com/marmot-protocol/agent-p1p
+After=network-online.target
+Wants=network-online.target
+ConditionPathIsDirectory=/var/spool/pip-webhooks
+
+[Service]
+Type=oneshot
+User=pip-control
+Group=pip-control
+LoadCredential=github.token:/etc/pip/github.token
+LoadCredential=github-webhook.secret:/etc/pip/github-webhook.secret
+ExecStart=/opt/pip/current/bin/pip-control webhook-spool-cycle --policy /etc/pip/repositories/%i.json --database /var/lib/pip/ledger.db --github-token %d/github.token --webhook-secret %d/github-webhook.secret --spool /var/spool/pip-webhooks
+UMask=0077
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/pip /var/spool/pip-webhooks/pending /var/spool/pip-webhooks/processed
+InaccessiblePaths=/var/lib/pip/hermes /var/lib/pip/repositories /var/lib/pip/worktrees /var/lib/pip/artifacts /var/lib/pip/provider-home /var/lib/pip/direct-queue
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+StandardOutput=journal
+StandardError=journal

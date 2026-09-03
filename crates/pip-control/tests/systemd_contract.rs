@@ -97,3 +97,51 @@ fn hermes_gateway_owns_dispatch_without_controller_credentials_or_ledger_access(
     assert!(!service.contains("LoadCredential="));
     assert!(!service.contains("github.token"));
 }
+
+#[test]
+fn webhook_ingress_is_loopback_only_token_free_and_ledger_blind() {
+    let service = include_str!("../../../packaging/systemd/pip-webhook-ingress.service");
+
+    assert!(service.contains("User=pip-ingress"));
+    assert!(service.contains("Group=pip-ingress"));
+    assert!(
+        service.contains("LoadCredential=github-webhook.secret:/etc/pip/github-webhook.secret")
+    );
+    assert!(service.contains("webhook-serve --listen 127.0.0.1:8787"));
+    assert!(service.contains("--spool /var/spool/pip-webhooks"));
+    assert!(service.contains("ProtectSystem=strict"));
+    assert!(service.contains("IPAddressDeny=any"));
+    assert!(service.contains("IPAddressAllow=localhost"));
+    assert!(service.contains(
+        "ReadWritePaths=/var/spool/pip-webhooks/receipts /var/spool/pip-webhooks/pending"
+    ));
+    assert!(service.contains("InaccessiblePaths=/var/lib/pip"));
+    assert!(!service.contains("github.token"));
+    assert!(!service.contains("ledger.db"));
+    assert!(!service.contains("HERMES_HOME"));
+}
+
+#[test]
+fn webhook_consumer_is_controller_owned_bounded_and_credential_scoped() {
+    let service = include_str!("../../../packaging/systemd/pip-webhook-consumer@.service");
+    let timer = include_str!("../../../packaging/systemd/pip-webhook-consumer@.timer");
+
+    assert!(service.contains("User=pip-control"));
+    assert!(service.contains("Group=pip-control"));
+    assert!(service.contains("LoadCredential=github.token:/etc/pip/github.token"));
+    assert!(
+        service.contains("LoadCredential=github-webhook.secret:/etc/pip/github-webhook.secret")
+    );
+    assert!(service.contains("webhook-spool-cycle"));
+    assert!(service.contains("--policy /etc/pip/repositories/%i.json"));
+    assert!(service.contains("--database /var/lib/pip/ledger.db"));
+    assert!(service.contains("--spool /var/spool/pip-webhooks"));
+    assert!(service.contains("ProtectSystem=strict"));
+    assert!(service.contains(
+        "InaccessiblePaths=/var/lib/pip/hermes /var/lib/pip/repositories /var/lib/pip/worktrees /var/lib/pip/artifacts /var/lib/pip/provider-home /var/lib/pip/direct-queue"
+    ));
+    assert!(!service.contains("github-reviewer-general"));
+    assert!(!service.contains("github-reviewer-secperf"));
+    assert!(!service.contains("HERMES_HOME"));
+    assert!(timer.contains("OnUnitActiveSec=5s"));
+}

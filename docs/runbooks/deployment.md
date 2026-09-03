@@ -408,9 +408,21 @@ After reviewed release installation, but before enabling any timer:
 5. Configure all three numeric GitHub actor IDs and the actual required MDK CI
    contexts. Empty required contexts are not acceptable canary policy.
 6. Provision `/etc/pip/github-webhook.secret` as a root-owned `0600` file.
-   The built-in receiver can bind only to a loopback address and will verify the
-   raw request before atomically acknowledging it into a delivery-ID-addressed
-   spool:
+   The installer creates a no-login `pip-ingress` identity and this spool
+   boundary:
+
+   ```text
+   /var/spool/pip-webhooks                         root:root              0711
+     receipts/                                    pip-ingress:pip-control 2750
+     pending/                                     pip-ingress:pip-control 2770
+     processed/                                   pip-control:pip-control 0711
+   ```
+
+   `pip-webhook-ingress.service` receives only the webhook secret through
+   `LoadCredential`. It cannot read the GitHub token, ledger, repository,
+   Hermes root, provider state, or worker queues. The receiver binds only to
+   loopback and atomically acknowledges validated raw requests into the
+   delivery-ID-addressed spool:
 
    ```bash
    pip-control webhook-serve \
@@ -425,11 +437,15 @@ After reviewed release installation, but before enabling any timer:
    deadline and four-request concurrency bound. It has no GitHub token, ledger,
    repository, Hermes, or provider access.
 
-   **Do not expose or activate this command yet.** Its dedicated systemd
-   identity/install boundary and the controller-side spool consumer are not yet
-   complete. Until they are, a trusted external relay must preserve the raw
-   request body and invoke the exact installed binary with the GitHub delivery
-   headers:
+   `pip-webhook-consumer@mdk.timer` runs a separate `pip-control` oneshot at a
+   bounded rate. Each invocation reads at most one canonical pending envelope,
+   verifies its base64 encoding and SHA-256 digest, revalidates the HMAC, and
+   re-reads the exact issue from GitHub. It commits the immutable delivery and
+   intake result before hard-linking the envelope into `processed/` and
+   removing it from `pending/`. GitHub outages and crashes leave the item
+   pending; a retry converges through ledger delivery-ID replay protection.
+
+   For a manual diagnostic, the equivalent direct boundary remains:
 
    ```bash
    pip-control webhook-intake \
@@ -444,9 +460,10 @@ After reviewed release installation, but before enabling any timer:
    ```
 
    The paths and header placeholders are ingress-specific; never substitute a
-   decoded/re-encoded payload. The command verifies HMAC before mutation,
-   records the delivery ID and payload digest, and re-reads the exact issue from
-   GitHub. The periodic controller remains the missed-delivery reconciler.
+   decoded/re-encoded payload. Do not enable either webhook unit until the
+   secret, trusted TLS forwarding path, service-identity probes, and active
+   repository policy are ready. The periodic controller remains the
+   missed-delivery reconciler.
 7. Run non-dispatching GitHub, Hermes, and direct-provider health/recovery
    probes.
 
@@ -457,8 +474,9 @@ Only after those checks and separate activation authorization:
    planner to validate; do not encode it in policy.
 3. Confirm no other open MDK issue currently satisfies Pip intake policy.
 4. Enable repository intake and dispatch with both active limits set to one.
-5. Start `pip-hermes-gateway.service`, then enable the
-   `pip-controller@mdk.timer` and `pip-direct-worker@mdk.timer` units.
+5. Start `pip-webhook-ingress.service` and `pip-hermes-gateway.service`, then
+   enable the `pip-webhook-consumer@mdk.timer`, `pip-controller@mdk.timer`, and
+   `pip-direct-worker@mdk.timer` units.
 6. Have a trusted actor apply `pip-ok` to that one issue.
 7. Observe the generic intake path create exactly one case and planner task.
 8. Keep merge mode `shadow` and autonomous merge false throughout the trial.

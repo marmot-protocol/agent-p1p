@@ -43,6 +43,7 @@ pub struct WebhookEnvelope<'a> {
     pub event_name: &'a str,
     pub signature: &'a str,
     pub payload: &'a [u8],
+    pub received_at: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -157,6 +158,9 @@ pub fn ingest_webhook<S: IntakeSource>(
     if envelope.payload.is_empty() || envelope.payload.len() > 4 * 1024 * 1024 {
         return Err(ActiveIntakeError::InvalidWebhook("invalid payload size"));
     }
+    if envelope.received_at == 0 || envelope.received_at > observed_at {
+        return Err(ActiveIntakeError::InvalidWebhook("invalid receive time"));
+    }
     if envelope.event_name != "issues"
         || !pip_github::verify_webhook(secret, envelope.payload, envelope.signature)
     {
@@ -187,7 +191,7 @@ pub fn ingest_webhook<S: IntakeSource>(
         repository_id: policy.repository.id,
         event_name: envelope.event_name.into(),
         action: payload.action.clone(),
-        received_at: observed_at,
+        received_at: envelope.received_at,
         payload_sha256: digest,
     })?;
     let evidence = source

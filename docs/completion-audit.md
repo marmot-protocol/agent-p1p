@@ -5,9 +5,10 @@
 **Decision:** The deterministic Rust workflow and controller are installed on
 Pirate as an inert, single-repository shadow deployment. Native reviewer-App
 authentication is implemented. The built-in webhook ingress is still an
-incomplete integration until its isolated service/install boundary and
-spool-to-ledger consumer exist. The system is not production-ready until those
-and the external gates below are satisfied, and it is not ready for Phase 10
+inert local integration: its isolated service/install boundary and
+spool-to-ledger consumer now exist and pass the disposable lifecycle, but have
+not been installed or exposed on Pirate. The system is not production-ready
+until the external gates below are satisfied, and it is not ready for Phase 10
 multi-repository expansion until the Phase 9 MDK canary is accepted.
 
 This audit maps the canonical architecture and migration roadmap to executable
@@ -22,7 +23,7 @@ authorized issue.
 | Generic repository/board/case identity | Implemented locally | Strict repository policy, numeric repository/actor validation, generic case identity, and no compiled canary issue |
 | Deterministic Rust workflow | Implemented locally | `pip-core` states/events/effects and property/fixture tests |
 | Authoritative durable ledger | Implemented locally | SQLite schema v6, immutable history and workspace-retirement evidence, webhook deliveries, outbox, projections, attempts, migrations, backup, and crash injection |
-| Signed webhook primary intake adapter | Ledger adapter implemented; ingress integration incomplete | HMAC verification, delivery replay/conflict checks, exact repository/issue/actor re-read, `webhook-intake` CLI, and a tested loopback receiver with atomic raw-body spool; isolated install/service and spool consumption are still required |
+| Signed webhook primary intake adapter | Implemented locally; Pirate deployment and TLS external | HMAC verification, delivery replay/conflict checks, exact repository/issue/actor re-read, isolated loopback receiver, atomic raw-body spool, controller-owned bounded consumption, commit-before-processed ordering, outage replay, tamper rejection, and systemd lifecycle tests |
 | Bounded polling recovery | Implemented locally | Generic label discovery and live-evidence eligibility reconciliation |
 | Planner before builder | Implemented locally | Typed planner contract, durable plan publication gate, and dispatch ordering |
 | Assigned builder worktree and draft PR | Implemented locally | Controller-owned checkout/worktree/branch, credential-free builder, exact push, and stable draft-PR transaction |
@@ -99,9 +100,9 @@ implementation guess:
 1. A non-dispatching live provider capability probe and outage/recovery drill,
    plus confirmation that the separately supervised gateway uses the already
    bootstrapped service-owned Hermes root.
-2. A trusted webhook TLS ingress or relay, its GitHub webhook secret, and the
-   completed isolated spool-to-ledger service mapping. The local loopback
-   receiver and durable spool exist, but are not an activated delivery path.
+2. A trusted webhook TLS ingress or relay, its GitHub webhook secret, and
+   installation/verification of the completed isolated receiver and
+   spool-to-ledger units on Pirate. The local path is not activated.
 3. Three distinct numeric GitHub actors and separately scoped controller,
    general-reviewer, and security/performance-reviewer credentials.
 4. The actual required MDK CI contexts and confirmation that the configured
