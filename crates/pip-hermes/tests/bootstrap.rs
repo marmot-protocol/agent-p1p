@@ -74,7 +74,7 @@ fn bootstrap_creates_only_managed_profiles_and_reprobes_the_board() {
     assert_eq!(outcome.profiles_created, 3);
     assert_eq!(outcome.profiles_reconciled, 0);
     let commands = runner.commands.borrow();
-    assert_eq!(commands.len(), 19);
+    assert_eq!(commands.len(), 16);
     assert_eq!(
         commands[4].args,
         [
@@ -142,7 +142,7 @@ fn bootstrap_creates_only_managed_profiles_and_reprobes_the_board() {
     assert!(!retry.board_created);
     assert_eq!(retry.profiles_created, 0);
     assert_eq!(retry.profiles_reconciled, 3);
-    assert_eq!(retry_runner.commands.borrow().len(), 16);
+    assert_eq!(retry_runner.commands.borrow().len(), 13);
 }
 
 #[test]
@@ -206,8 +206,7 @@ fn profile(name: &str, reasoning: &str) -> ProfileBootstrapSpec {
 
 fn profile_outputs(runner: &FakeRunner) {
     for reasoning in ["xhigh", "high", "xhigh"] {
-        runner.output("gpt-5.6-sol\n");
-        runner.output("openai-codex\n");
+        runner.output("default: gpt-5.6-sol\nprovider: openai-codex\n");
         runner.output(&format!("{reasoning}\n"));
         runner.output("profile\n");
     }

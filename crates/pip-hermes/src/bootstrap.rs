@@ -227,38 +227,19 @@ impl<R: CommandRunner + Clone> HermesBootstrap<R> {
     }
 
     fn verify_profile(&self, profile: &ProfileBootstrapSpec) -> Result<(), BootstrapError> {
+        let model = self.profile_config(profile, "model")?;
+        let expected_model = format!("default: {}\nprovider: {}", profile.model, profile.provider);
+        if model != expected_model {
+            return Err(BootstrapError::IncompatibleCli(format!(
+                "effective profile configuration ({}/model)",
+                profile.name
+            )));
+        }
         for (key, expected) in [
-            ("model", profile.model.as_str()),
-            ("provider", profile.provider.as_str()),
             ("agent.reasoning_effort", profile.reasoning_effort.as_str()),
             ("terminal.home_mode", "profile"),
         ] {
-            let output = self.runner.run(&CommandSpec {
-                program: self.program.clone(),
-                args: vec![
-                    "-p".into(),
-                    profile.name.clone(),
-                    "config".into(),
-                    "get".into(),
-                    key.into(),
-                ],
-                timeout: self.timeout,
-                max_output_bytes: self.max_output_bytes,
-            })?;
-            if output.timed_out {
-                return Err(HermesError::TimedOut.into());
-            }
-            if output.stdout.len() > self.max_output_bytes
-                || output.stderr.len() > self.max_output_bytes
-            {
-                return Err(HermesError::OutputTooLarge.into());
-            }
-            if output.status != 0 {
-                return Err(HermesError::CommandFailed(output.status).into());
-            }
-            let actual = std::str::from_utf8(&output.stdout)
-                .map_err(|_| HermesError::InvalidUtf8)?
-                .trim();
+            let actual = self.profile_config(profile, key)?;
             if actual != expected {
                 return Err(BootstrapError::IncompatibleCli(format!(
                     "effective profile configuration ({}/{key})",
@@ -267,6 +248,40 @@ impl<R: CommandRunner + Clone> HermesBootstrap<R> {
             }
         }
         Ok(())
+    }
+
+    fn profile_config(
+        &self,
+        profile: &ProfileBootstrapSpec,
+        key: &str,
+    ) -> Result<String, BootstrapError> {
+        let output = self.runner.run(&CommandSpec {
+            program: self.program.clone(),
+            args: vec![
+                "-p".into(),
+                profile.name.clone(),
+                "config".into(),
+                "get".into(),
+                key.into(),
+            ],
+            timeout: self.timeout,
+            max_output_bytes: self.max_output_bytes,
+        })?;
+        if output.timed_out {
+            return Err(HermesError::TimedOut.into());
+        }
+        if output.stdout.len() > self.max_output_bytes
+            || output.stderr.len() > self.max_output_bytes
+        {
+            return Err(HermesError::OutputTooLarge.into());
+        }
+        if output.status != 0 {
+            return Err(HermesError::CommandFailed(output.status).into());
+        }
+        Ok(std::str::from_utf8(&output.stdout)
+            .map_err(|_| HermesError::InvalidUtf8)?
+            .trim()
+            .to_owned())
     }
 
     fn require_help(
