@@ -29,7 +29,7 @@ class ProfileAction:
     description: str
 
 
-PROFILE_MARKER = "pip-v2-profile.json"
+PROFILE_MARKER = "pip-profile.json"
 
 CLI_TOOLSET_CATALOG = (
     "browser",
@@ -352,7 +352,7 @@ def _ensure_profile_marker(
                     == new_target
                 ):
                     continue
-                temporary = f".{name}.pip-v2-{os.getpid()}-{index}"
+                temporary = f".{name}.pip-{os.getpid()}-{index}"
                 try:
                     os.symlink(new_target, temporary, dir_fd=skills_fd)
                     os.replace(
@@ -372,7 +372,7 @@ def _ensure_profile_marker(
             )
 
         serialized = json.dumps(expected, indent=2, sort_keys=True) + "\n"
-        temporary_marker = f".{PROFILE_MARKER}.pip-v2-{os.getpid()}"
+        temporary_marker = f".{PROFILE_MARKER}.pip-{os.getpid()}"
         descriptor = None
         try:
             descriptor = os.open(
@@ -630,7 +630,7 @@ def apply_profiles(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Bootstrap Pip v2 Hermes profiles")
+    parser = argparse.ArgumentParser(description="Bootstrap Pip Hermes profiles")
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--hermes-home", type=Path, default=Path.home() / ".hermes")
     parser.add_argument("--apply", action="store_true")

@@ -5,7 +5,7 @@ PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 unset PYTHONPATH PYTHONHOME PYTHONSTARTUP
 umask 077
-GITHUB_CREDENTIAL=/etc/pip-v2/github.token
+GITHUB_CREDENTIAL=/etc/pip/github.token
 
 usage() {
   echo "usage: sudo $0 --installer-sha256 HEX --wheel /absolute/path.whl --sha256 HEX --source-commit SHA40 --caller USER --issue 1240" >&2
@@ -57,7 +57,7 @@ WHEEL="$(realpath --canonicalize-existing "$WHEEL")"
 }
 cd /
 
-INSTALL_TMP="$(mktemp -d /var/tmp/pip-v2.install.XXXXXX)"
+INSTALL_TMP="$(mktemp -d /var/tmp/pip.install.XXXXXX)"
 MUTATION_STARTED=0
 OLD_TARGET=""
 OLD_ENABLED=0
@@ -101,14 +101,14 @@ restore_file() {
 
 rollback_install() {
   set +e
-  systemctl stop pip-v2-route-consumer.timer pip-v2-route-consumer.service >/dev/null 2>&1
-  systemctl stop pip-v2-decision.timer pip-v2-decision.service >/dev/null 2>&1
-  systemctl stop pip-v2-control.service >/dev/null 2>&1
+  systemctl stop pip-route-consumer.timer pip-route-consumer.service >/dev/null 2>&1
+  systemctl stop pip-decision.timer pip-decision.service >/dev/null 2>&1
+  systemctl stop pip-control.service >/dev/null 2>&1
   if [[ -n "$OLD_TARGET" ]]; then
-    ln -sfn "$OLD_TARGET" /opt/pip-v2/current.rollback
-    mv -Tf /opt/pip-v2/current.rollback /opt/pip-v2/current
+    ln -sfn "$OLD_TARGET" /opt/pip/current.rollback
+    mv -Tf /opt/pip/current.rollback /opt/pip/current
   else
-    rm -f /opt/pip-v2/current
+    rm -f /opt/pip/current
   fi
   for link in "${CREATED_CURSOR_LINKS[@]}"; do
     runuser -u "$CALLER" -- /usr/bin/python3 -P - "$link" "$CALLER_HOME" <<'PY'
@@ -119,10 +119,10 @@ from pathlib import Path
 path = Path(sys.argv[1])
 home = Path(sys.argv[2])
 expected = {
-    home / ".hermes/profiles/cursor-fixer/skills/builder-grok": "/opt/pip-v2/current/pip_agent/resources/skills/builder-grok",
-    home / ".hermes/profiles/cursor-fixer/skills/workflow-contract": "/opt/pip-v2/current/pip_agent/resources/skills/shared/workflow-contract",
-    home / ".hermes/profiles/cursor-reviewer/skills/reviewer-secperf": "/opt/pip-v2/current/pip_agent/resources/skills/reviewer-secperf",
-    home / ".hermes/profiles/cursor-reviewer/skills/workflow-contract": "/opt/pip-v2/current/pip_agent/resources/skills/shared/workflow-contract",
+    home / ".hermes/profiles/cursor-fixer/skills/builder-grok": "/opt/pip/current/pip_agent/resources/skills/builder-grok",
+    home / ".hermes/profiles/cursor-fixer/skills/workflow-contract": "/opt/pip/current/pip_agent/resources/skills/shared/workflow-contract",
+    home / ".hermes/profiles/cursor-reviewer/skills/reviewer-secperf": "/opt/pip/current/pip_agent/resources/skills/reviewer-secperf",
+    home / ".hermes/profiles/cursor-reviewer/skills/workflow-contract": "/opt/pip/current/pip_agent/resources/skills/shared/workflow-contract",
 }.get(path)
 if expected is not None and path.is_symlink() and os.readlink(path) == expected:
     path.unlink()
@@ -182,48 +182,48 @@ PY
       PATH="$CALLER_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" \
       hermes kanban boards rm pip-mdk --delete >/dev/null 2>&1
   fi
-  restore_file "$HAD_WRAPPER" "$INSTALL_TMP/backup/wrapper" /usr/local/bin/pip-v2-control
-  restore_file "$HAD_ROUTER_WRAPPER" "$INSTALL_TMP/backup/router-wrapper" /usr/local/bin/pip-v2-route-consumer
-  restore_file "$HAD_CONFIG" "$INSTALL_TMP/backup/config" /etc/pip-v2/control.json
-  restore_file "$HAD_UNIT" "$INSTALL_TMP/backup/unit" /etc/systemd/system/pip-v2-control.service
-  restore_file "$HAD_DECISION_UNIT" "$INSTALL_TMP/backup/decision-unit" /etc/systemd/system/pip-v2-decision.service
-  restore_file "$HAD_DECISION_TIMER" "$INSTALL_TMP/backup/decision-timer" /etc/systemd/system/pip-v2-decision.timer
-  restore_file "$HAD_ROUTER_UNIT" "$INSTALL_TMP/backup/router-unit" /etc/systemd/system/pip-v2-route-consumer.service
-  restore_file "$HAD_ROUTER_TIMER" "$INSTALL_TMP/backup/router-timer" /etc/systemd/system/pip-v2-route-consumer.timer
-  restore_file "$HAD_WHEEL_SHA" "$INSTALL_TMP/backup/wheel-sha" /opt/pip-v2/WHEEL.SHA256
-  restore_file "$HAD_SOURCE_COMMIT" "$INSTALL_TMP/backup/source-commit" /opt/pip-v2/SOURCE.COMMIT
+  restore_file "$HAD_WRAPPER" "$INSTALL_TMP/backup/wrapper" /usr/local/bin/pip-control
+  restore_file "$HAD_ROUTER_WRAPPER" "$INSTALL_TMP/backup/router-wrapper" /usr/local/bin/pip-route-consumer
+  restore_file "$HAD_CONFIG" "$INSTALL_TMP/backup/config" /etc/pip/control.json
+  restore_file "$HAD_UNIT" "$INSTALL_TMP/backup/unit" /etc/systemd/system/pip-control.service
+  restore_file "$HAD_DECISION_UNIT" "$INSTALL_TMP/backup/decision-unit" /etc/systemd/system/pip-decision.service
+  restore_file "$HAD_DECISION_TIMER" "$INSTALL_TMP/backup/decision-timer" /etc/systemd/system/pip-decision.timer
+  restore_file "$HAD_ROUTER_UNIT" "$INSTALL_TMP/backup/router-unit" /etc/systemd/system/pip-route-consumer.service
+  restore_file "$HAD_ROUTER_TIMER" "$INSTALL_TMP/backup/router-timer" /etc/systemd/system/pip-route-consumer.timer
+  restore_file "$HAD_WHEEL_SHA" "$INSTALL_TMP/backup/wheel-sha" /opt/pip/WHEEL.SHA256
+  restore_file "$HAD_SOURCE_COMMIT" "$INSTALL_TMP/backup/source-commit" /opt/pip/SOURCE.COMMIT
   systemctl daemon-reload >/dev/null 2>&1
   if [[ "$OLD_ENABLED" == "1" ]]; then
-    systemctl enable pip-v2-control.service >/dev/null 2>&1
+    systemctl enable pip-control.service >/dev/null 2>&1
   else
-    systemctl disable pip-v2-control.service >/dev/null 2>&1
+    systemctl disable pip-control.service >/dev/null 2>&1
   fi
   if [[ "$OLD_TIMER_ENABLED" == "1" ]]; then
-    systemctl enable pip-v2-decision.timer >/dev/null 2>&1
+    systemctl enable pip-decision.timer >/dev/null 2>&1
   else
-    systemctl disable pip-v2-decision.timer >/dev/null 2>&1
+    systemctl disable pip-decision.timer >/dev/null 2>&1
   fi
   if [[ "$OLD_ROUTER_TIMER_ENABLED" == "1" ]]; then
-    systemctl enable pip-v2-route-consumer.timer >/dev/null 2>&1
+    systemctl enable pip-route-consumer.timer >/dev/null 2>&1
   else
-    systemctl disable pip-v2-route-consumer.timer >/dev/null 2>&1
+    systemctl disable pip-route-consumer.timer >/dev/null 2>&1
   fi
   if [[ "$OLD_ACTIVE" == "1" ]]; then
-    systemctl start pip-v2-control.service >/dev/null 2>&1
+    systemctl start pip-control.service >/dev/null 2>&1
   fi
   if [[ "$DECISION_ROUTE_REPLACED" == "1" ]]; then
     if [[ "$HAD_DECISION_ROUTE" == "1" ]]; then
-      install -d -o pip-v2-control -g pip-v2-control -m 0755 /run/pip-v2
-      cp -a -- "$INSTALL_TMP/backup/decision-route" /run/pip-v2/decision-route.json
+      install -d -o pip-control -g pip-control -m 0755 /run/pip
+      cp -a -- "$INSTALL_TMP/backup/decision-route" /run/pip/decision-route.json
     else
-      rm -f -- /run/pip-v2/decision-route.json
+      rm -f -- /run/pip/decision-route.json
     fi
   fi
   if [[ "$OLD_TIMER_ACTIVE" == "1" ]]; then
-    systemctl start pip-v2-decision.timer >/dev/null 2>&1
+    systemctl start pip-decision.timer >/dev/null 2>&1
   fi
   if [[ "$OLD_ROUTER_TIMER_ACTIVE" == "1" ]]; then
-    systemctl start pip-v2-route-consumer.timer >/dev/null 2>&1
+    systemctl start pip-route-consumer.timer >/dev/null 2>&1
   fi
   set -e
 }
@@ -233,15 +233,15 @@ remove_failed_creations() {
   if [[ "$CREATED_RELEASE" == "1" && -n "$RELEASE_DIR" ]]; then
     rm -rf -- "$RELEASE_DIR"
   fi
-  if [[ "$CREATED_RELEASES_DIR" == "1" ]]; then rmdir -- /opt/pip-v2/releases; fi
-  if [[ "$CREATED_OPT_DIR" == "1" ]]; then rmdir -- /opt/pip-v2; fi
-  if [[ "$CREATED_ETC_DIR" == "1" ]]; then rmdir -- /etc/pip-v2; fi
+  if [[ "$CREATED_RELEASES_DIR" == "1" ]]; then rmdir -- /opt/pip/releases; fi
+  if [[ "$CREATED_OPT_DIR" == "1" ]]; then rmdir -- /opt/pip; fi
+  if [[ "$CREATED_ETC_DIR" == "1" ]]; then rmdir -- /etc/pip; fi
   if [[ "$CREATED_USER" == "1" ]]; then
-    rm -rf -- /var/lib/pip-v2
-    userdel pip-v2-control >/dev/null 2>&1
+    rm -rf -- /var/lib/pip
+    userdel pip-control >/dev/null 2>&1
   fi
   if [[ "$CREATED_GROUP" == "1" ]]; then
-    groupdel pip-v2-control >/dev/null 2>&1
+    groupdel pip-control >/dev/null 2>&1
   fi
   set -e
 }
@@ -302,27 +302,27 @@ if (
 ):
     raise SystemExit("caller home must be a canonical absolute path without whitespace")
 PY
-if ! getent group pip-v2-control >/dev/null; then
-  groupadd --system pip-v2-control
+if ! getent group pip-control >/dev/null; then
+  groupadd --system pip-control
   CREATED_GROUP=1
 fi
-if ! getent passwd pip-v2-control >/dev/null; then
-  useradd --system --gid pip-v2-control --home-dir /nonexistent \
-    --shell /usr/sbin/nologin --no-create-home pip-v2-control
+if ! getent passwd pip-control >/dev/null; then
+  useradd --system --gid pip-control --home-dir /nonexistent \
+    --shell /usr/sbin/nologin --no-create-home pip-control
   CREATED_USER=1
 fi
-CONTROL_UID="$(id -u pip-v2-control)"
-CONTROL_GID="$(id -g pip-v2-control)"
-EXPECTED_CONTROL_GID="$(getent group pip-v2-control | awk -F: '{print $3}')"
-CONTROL_GROUPS="$(id -G pip-v2-control)"
-CONTROL_HOME="$(getent passwd pip-v2-control | awk -F: '{print $6}')"
-CONTROL_SHELL="$(getent passwd pip-v2-control | awk -F: '{print $7}')"
+CONTROL_UID="$(id -u pip-control)"
+CONTROL_GID="$(id -g pip-control)"
+EXPECTED_CONTROL_GID="$(getent group pip-control | awk -F: '{print $3}')"
+CONTROL_GROUPS="$(id -G pip-control)"
+CONTROL_HOME="$(getent passwd pip-control | awk -F: '{print $6}')"
+CONTROL_SHELL="$(getent passwd pip-control | awk -F: '{print $7}')"
 [[ "$CONTROL_UID" != "0" && "$CONTROL_UID" != "$CALLER_UID" && \
   "$CONTROL_GID" == "$EXPECTED_CONTROL_GID" && \
   "$CONTROL_GROUPS" == "$CONTROL_GID" && \
   "$CONTROL_HOME" == "/nonexistent" && \
   "$CONTROL_SHELL" == "/usr/sbin/nologin" ]] || {
-  echo "pip-v2-control identity is not exclusively configured" >&2
+  echo "pip-control identity is not exclusively configured" >&2
   exit 1
 }
 
@@ -355,42 +355,42 @@ export PYTHONDONTWRITEBYTECODE=1 PYTHONSAFEPATH=1
 PYTHONPATH="$INSTALL_TMP/app" /usr/bin/python3 -P -m pip_agent.control_plane --help >/dev/null
 PYTHONPATH="$INSTALL_TMP/app" /usr/bin/python3 -P -m pip_agent.control_plane \
   render-unit --caller-group "$CALLER_GROUP" \
-  --output "$INSTALL_TMP/pip-v2-control.service"
+  --output "$INSTALL_TMP/pip-control.service"
 PYTHONPATH="$INSTALL_TMP/app" /usr/bin/python3 -P -m pip_agent.control_plane \
   render-decision-units --caller-group "$CALLER_GROUP" \
-  --service-output "$INSTALL_TMP/pip-v2-decision.service" \
-  --timer-output "$INSTALL_TMP/pip-v2-decision.timer"
+  --service-output "$INSTALL_TMP/pip-decision.service" \
+  --timer-output "$INSTALL_TMP/pip-decision.timer"
 PYTHONPATH="$INSTALL_TMP/app" /usr/bin/python3 -P -m pip_agent.route_consumer \
   render-units --caller "$CALLER" --caller-group "$CALLER_GROUP" \
   --caller-home "$(getent passwd "$CALLER" | awk -F: '{print $6}')" \
-  --service-output "$INSTALL_TMP/pip-v2-route-consumer.service" \
-  --timer-output "$INSTALL_TMP/pip-v2-route-consumer.timer"
+  --service-output "$INSTALL_TMP/pip-route-consumer.service" \
+  --timer-output "$INSTALL_TMP/pip-route-consumer.timer"
 
 mkdir -p "$INSTALL_TMP/backup"
-if [[ -e /opt/pip-v2/current || -L /opt/pip-v2/current ]]; then
-  [[ -L /opt/pip-v2/current ]] || { echo "existing current path is not a symlink" >&2; exit 1; }
-  OLD_TARGET="$(readlink /opt/pip-v2/current)"
+if [[ -e /opt/pip/current || -L /opt/pip/current ]]; then
+  [[ -L /opt/pip/current ]] || { echo "existing current path is not a symlink" >&2; exit 1; }
+  OLD_TARGET="$(readlink /opt/pip/current)"
   [[ "$OLD_TARGET" =~ ^releases/[0-9a-f]{64}$ ]] || {
     echo "existing current symlink has an unsafe target" >&2
     exit 1
   }
 fi
-systemctl is-enabled --quiet pip-v2-control.service 2>/dev/null && OLD_ENABLED=1
-systemctl is-active --quiet pip-v2-control.service 2>/dev/null && OLD_ACTIVE=1
-systemctl is-enabled --quiet pip-v2-decision.timer 2>/dev/null && OLD_TIMER_ENABLED=1
-systemctl is-active --quiet pip-v2-decision.timer 2>/dev/null && OLD_TIMER_ACTIVE=1
-systemctl is-enabled --quiet pip-v2-route-consumer.timer 2>/dev/null && OLD_ROUTER_TIMER_ENABLED=1
-systemctl is-active --quiet pip-v2-route-consumer.timer 2>/dev/null && OLD_ROUTER_TIMER_ACTIVE=1
-if [[ -e /usr/local/bin/pip-v2-control ]]; then cp -a /usr/local/bin/pip-v2-control "$INSTALL_TMP/backup/wrapper"; HAD_WRAPPER=1; fi
-if [[ -e /usr/local/bin/pip-v2-route-consumer ]]; then cp -a /usr/local/bin/pip-v2-route-consumer "$INSTALL_TMP/backup/router-wrapper"; HAD_ROUTER_WRAPPER=1; fi
-if [[ -e /etc/pip-v2/control.json ]]; then cp -a /etc/pip-v2/control.json "$INSTALL_TMP/backup/config"; HAD_CONFIG=1; fi
-if [[ -e /etc/systemd/system/pip-v2-control.service ]]; then cp -a /etc/systemd/system/pip-v2-control.service "$INSTALL_TMP/backup/unit"; HAD_UNIT=1; fi
-if [[ -e /etc/systemd/system/pip-v2-decision.service ]]; then cp -a /etc/systemd/system/pip-v2-decision.service "$INSTALL_TMP/backup/decision-unit"; HAD_DECISION_UNIT=1; fi
-if [[ -e /etc/systemd/system/pip-v2-decision.timer ]]; then cp -a /etc/systemd/system/pip-v2-decision.timer "$INSTALL_TMP/backup/decision-timer"; HAD_DECISION_TIMER=1; fi
-if [[ -e /etc/systemd/system/pip-v2-route-consumer.service ]]; then cp -a /etc/systemd/system/pip-v2-route-consumer.service "$INSTALL_TMP/backup/router-unit"; HAD_ROUTER_UNIT=1; fi
-if [[ -e /etc/systemd/system/pip-v2-route-consumer.timer ]]; then cp -a /etc/systemd/system/pip-v2-route-consumer.timer "$INSTALL_TMP/backup/router-timer"; HAD_ROUTER_TIMER=1; fi
-if [[ -e /opt/pip-v2/WHEEL.SHA256 ]]; then cp -a /opt/pip-v2/WHEEL.SHA256 "$INSTALL_TMP/backup/wheel-sha"; HAD_WHEEL_SHA=1; fi
-if [[ -e /opt/pip-v2/SOURCE.COMMIT ]]; then cp -a /opt/pip-v2/SOURCE.COMMIT "$INSTALL_TMP/backup/source-commit"; HAD_SOURCE_COMMIT=1; fi
+systemctl is-enabled --quiet pip-control.service 2>/dev/null && OLD_ENABLED=1
+systemctl is-active --quiet pip-control.service 2>/dev/null && OLD_ACTIVE=1
+systemctl is-enabled --quiet pip-decision.timer 2>/dev/null && OLD_TIMER_ENABLED=1
+systemctl is-active --quiet pip-decision.timer 2>/dev/null && OLD_TIMER_ACTIVE=1
+systemctl is-enabled --quiet pip-route-consumer.timer 2>/dev/null && OLD_ROUTER_TIMER_ENABLED=1
+systemctl is-active --quiet pip-route-consumer.timer 2>/dev/null && OLD_ROUTER_TIMER_ACTIVE=1
+if [[ -e /usr/local/bin/pip-control ]]; then cp -a /usr/local/bin/pip-control "$INSTALL_TMP/backup/wrapper"; HAD_WRAPPER=1; fi
+if [[ -e /usr/local/bin/pip-route-consumer ]]; then cp -a /usr/local/bin/pip-route-consumer "$INSTALL_TMP/backup/router-wrapper"; HAD_ROUTER_WRAPPER=1; fi
+if [[ -e /etc/pip/control.json ]]; then cp -a /etc/pip/control.json "$INSTALL_TMP/backup/config"; HAD_CONFIG=1; fi
+if [[ -e /etc/systemd/system/pip-control.service ]]; then cp -a /etc/systemd/system/pip-control.service "$INSTALL_TMP/backup/unit"; HAD_UNIT=1; fi
+if [[ -e /etc/systemd/system/pip-decision.service ]]; then cp -a /etc/systemd/system/pip-decision.service "$INSTALL_TMP/backup/decision-unit"; HAD_DECISION_UNIT=1; fi
+if [[ -e /etc/systemd/system/pip-decision.timer ]]; then cp -a /etc/systemd/system/pip-decision.timer "$INSTALL_TMP/backup/decision-timer"; HAD_DECISION_TIMER=1; fi
+if [[ -e /etc/systemd/system/pip-route-consumer.service ]]; then cp -a /etc/systemd/system/pip-route-consumer.service "$INSTALL_TMP/backup/router-unit"; HAD_ROUTER_UNIT=1; fi
+if [[ -e /etc/systemd/system/pip-route-consumer.timer ]]; then cp -a /etc/systemd/system/pip-route-consumer.timer "$INSTALL_TMP/backup/router-timer"; HAD_ROUTER_TIMER=1; fi
+if [[ -e /opt/pip/WHEEL.SHA256 ]]; then cp -a /opt/pip/WHEEL.SHA256 "$INSTALL_TMP/backup/wheel-sha"; HAD_WHEEL_SHA=1; fi
+if [[ -e /opt/pip/SOURCE.COMMIT ]]; then cp -a /opt/pip/SOURCE.COMMIT "$INSTALL_TMP/backup/source-commit"; HAD_SOURCE_COMMIT=1; fi
 
 if [[ ! -f "$GITHUB_CREDENTIAL" || -L "$GITHUB_CREDENTIAL" ]]; then
   echo "GitHub credential must be a root-owned mode-0600 regular file" >&2
@@ -406,8 +406,8 @@ if [[ "$credential_uid" != "0" || "$credential_gid" != "0" ||
   exit 1
 fi
 
-if [[ -e /run/pip-v2/decision-route.json || -L /run/pip-v2/decision-route.json ]]; then
-  [[ -f /run/pip-v2/decision-route.json && ! -L /run/pip-v2/decision-route.json ]] || {
+if [[ -e /run/pip/decision-route.json || -L /run/pip/decision-route.json ]]; then
+  [[ -f /run/pip/decision-route.json && ! -L /run/pip/decision-route.json ]] || {
     echo "existing decision route is unsafe" >&2
     exit 1
   }
@@ -425,16 +425,16 @@ stop_if_loaded() {
     return 1
   fi
 }
-stop_if_loaded pip-v2-route-consumer.timer
-stop_if_loaded pip-v2-route-consumer.service
-stop_if_loaded pip-v2-decision.timer
-stop_if_loaded pip-v2-decision.service
-if [[ -e /run/pip-v2/decision-route.json || -L /run/pip-v2/decision-route.json ]]; then
-  [[ -f /run/pip-v2/decision-route.json && ! -L /run/pip-v2/decision-route.json ]] || {
+stop_if_loaded pip-route-consumer.timer
+stop_if_loaded pip-route-consumer.service
+stop_if_loaded pip-decision.timer
+stop_if_loaded pip-decision.service
+if [[ -e /run/pip/decision-route.json || -L /run/pip/decision-route.json ]]; then
+  [[ -f /run/pip/decision-route.json && ! -L /run/pip/decision-route.json ]] || {
     echo "existing decision route is unsafe" >&2
     exit 1
   }
-  cp -a -- /run/pip-v2/decision-route.json "$INSTALL_TMP/backup/decision-route"
+  cp -a -- /run/pip/decision-route.json "$INSTALL_TMP/backup/decision-route"
   HAD_DECISION_ROUTE=1
 fi
 
@@ -451,10 +451,10 @@ prepare_system_dir() {
   fi
 }
 
-prepare_system_dir /opt/pip-v2 CREATED_OPT_DIR
-prepare_system_dir /opt/pip-v2/releases CREATED_RELEASES_DIR
-prepare_system_dir /etc/pip-v2 CREATED_ETC_DIR
-RELEASE_DIR="/opt/pip-v2/releases/$WHEEL_SHA"
+prepare_system_dir /opt/pip CREATED_OPT_DIR
+prepare_system_dir /opt/pip/releases CREATED_RELEASES_DIR
+prepare_system_dir /etc/pip CREATED_ETC_DIR
+RELEASE_DIR="/opt/pip/releases/$WHEEL_SHA"
 find "$INSTALL_TMP/app" -type d -exec chmod 0755 {} +
 find "$INSTALL_TMP/app" -type f -exec chmod 0644 {} +
 if [[ -e "$RELEASE_DIR" || -L "$RELEASE_DIR" ]]; then
@@ -485,20 +485,20 @@ else
   CREATED_RELEASE=1
 fi
 
-ln -sfn "releases/$WHEEL_SHA" /opt/pip-v2/current.new
-mv -Tf /opt/pip-v2/current.new /opt/pip-v2/current
-printf '%s\n' "$WHEEL_SHA" > /opt/pip-v2/WHEEL.SHA256
-install -o root -g root -m 0444 /dev/null /opt/pip-v2/SOURCE.COMMIT
-printf '%s\n' "$SOURCE_COMMIT" > /opt/pip-v2/SOURCE.COMMIT
+ln -sfn "releases/$WHEEL_SHA" /opt/pip/current.new
+mv -Tf /opt/pip/current.new /opt/pip/current
+printf '%s\n' "$WHEEL_SHA" > /opt/pip/WHEEL.SHA256
+install -o root -g root -m 0444 /dev/null /opt/pip/SOURCE.COMMIT
+printf '%s\n' "$SOURCE_COMMIT" > /opt/pip/SOURCE.COMMIT
 
 LINK_RESULT="$(runuser -u "$CALLER" -- /usr/bin/env \
   HOME="$CALLER_HOME" \
   PATH="$CALLER_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" \
-  PYTHONPATH=/opt/pip-v2/current \
+  PYTHONPATH=/opt/pip/current \
   PYTHONDONTWRITEBYTECODE=1 \
   PYTHONSAFEPATH=1 \
   /usr/bin/python3 -P -m pip_agent.bootstrap \
-  --repo-root /opt/pip-v2/current/pip_agent/resources \
+  --repo-root /opt/pip/current/pip_agent/resources \
   --hermes-home "$CALLER_HOME/.hermes" \
   --link-cursor-roles)"
 /usr/bin/python3 -P - "$LINK_RESULT" "$CALLER_HOME" > "$INSTALL_TMP/created-links" <<'PY'
@@ -548,18 +548,18 @@ for role in ("planner", "reviewer-general", "final-reviewer"):
     entries = {}
     for relative in (
         "config.yaml",
-        "pip-v2-profile.json",
+        "pip-profile.json",
         f"skills/{role}",
         "skills/workflow-contract",
         "auth.json",
         "auth.lock",
     ):
         path = profile / relative
-        if path.is_symlink() and relative in {"config.yaml", "pip-v2-profile.json"}:
+        if path.is_symlink() and relative in {"config.yaml", "pip-profile.json"}:
             raise SystemExit(f"refusing to snapshot symlinked profile file: {path}")
         if path.is_symlink():
             entries[relative] = {"type": "symlink", "target": os.readlink(path)}
-        elif path.is_file() and relative in {"config.yaml", "pip-v2-profile.json"}:
+        elif path.is_file() and relative in {"config.yaml", "pip-profile.json"}:
             entries[relative] = {
                 "type": "file",
                 "data": base64.b64encode(path.read_bytes()).decode(),
@@ -582,45 +582,45 @@ PROFILE_SNAPSHOT_READY=1
 runuser -u "$CALLER" -- /usr/bin/env \
   HOME="$CALLER_HOME" \
   PATH="$CALLER_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" \
-  PYTHONPATH=/opt/pip-v2/current \
+  PYTHONPATH=/opt/pip/current \
   PYTHONDONTWRITEBYTECODE=1 \
   PYTHONSAFEPATH=1 \
   /usr/bin/python3 -P -m pip_agent.bootstrap \
-  --repo-root /opt/pip-v2/current/pip_agent/resources \
+  --repo-root /opt/pip/current/pip_agent/resources \
   --hermes-home "$CALLER_HOME/.hermes" \
   --apply >/dev/null
 BOARD_RESULT="$(runuser -u "$CALLER" -- /usr/bin/env \
   HOME="$CALLER_HOME" \
   PATH="$CALLER_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" \
-  PYTHONPATH=/opt/pip-v2/current \
+  PYTHONPATH=/opt/pip/current \
   PYTHONDONTWRITEBYTECODE=1 \
   PYTHONSAFEPATH=1 \
   /usr/bin/python3 -P -m pip_agent.bootstrap \
-  --repo-root /opt/pip-v2/current/pip_agent/resources \
+  --repo-root /opt/pip/current/pip_agent/resources \
   --hermes-home "$CALLER_HOME/.hermes" \
   --ensure-board pip-mdk)"
 if /usr/bin/python3 -c 'import json,sys; raise SystemExit(not json.loads(sys.argv[1])["created"])' "$BOARD_RESULT"; then
   CREATED_BOARD=1
 fi
-chmod 0644 /opt/pip-v2/WHEEL.SHA256
+chmod 0644 /opt/pip/WHEEL.SHA256
 
-cat > "$INSTALL_TMP/pip-v2-control" <<'SH'
+cat > "$INSTALL_TMP/pip-control" <<'SH'
 #!/bin/sh
-export PYTHONPATH=/opt/pip-v2/current
+export PYTHONPATH=/opt/pip/current
 export PYTHONDONTWRITEBYTECODE=1
 export PYTHONSAFEPATH=1
 exec /usr/bin/python3 -P -m pip_agent.control_plane "$@"
 SH
-install -o root -g root -m 0755 "$INSTALL_TMP/pip-v2-control" /usr/local/bin/pip-v2-control
+install -o root -g root -m 0755 "$INSTALL_TMP/pip-control" /usr/local/bin/pip-control
 
-cat > "$INSTALL_TMP/pip-v2-route-consumer" <<'SH'
+cat > "$INSTALL_TMP/pip-route-consumer" <<'SH'
 #!/bin/sh
-export PYTHONPATH=/opt/pip-v2/current
+export PYTHONPATH=/opt/pip/current
 export PYTHONDONTWRITEBYTECODE=1
 export PYTHONSAFEPATH=1
 exec /usr/bin/python3 -P -m pip_agent.route_consumer "$@"
 SH
-install -o root -g root -m 0755 "$INSTALL_TMP/pip-v2-route-consumer" /usr/local/bin/pip-v2-route-consumer
+install -o root -g root -m 0755 "$INSTALL_TMP/pip-route-consumer" /usr/local/bin/pip-route-consumer
 
 /usr/bin/python3 -P - "$INSTALL_TMP/control.json" "$ISSUE" "$CALLER_UID" "$CALLER_GID" <<'PY'
 import json
@@ -634,63 +634,63 @@ payload = {
     "intake_label": "pip-ok",
     "merge_mode": "shadow",
     "autonomous_merge": False,
-    "state_database": "/var/lib/pip-v2/cases.db",
-    "socket_path": "/run/pip-v2/control.sock",
+    "state_database": "/var/lib/pip/cases.db",
+    "socket_path": "/run/pip/control.sock",
     "socket_group": int(caller_gid),
     "allowed_uids": [int(caller_uid)],
 }
 Path(path).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 PY
-install -o root -g pip-v2-control -m 0640 "$INSTALL_TMP/control.json" /etc/pip-v2/control.json
-chmod 0640 /etc/pip-v2/control.json
+install -o root -g pip-control -m 0640 "$INSTALL_TMP/control.json" /etc/pip/control.json
+chmod 0640 /etc/pip/control.json
 
-install -o root -g root -m 0644 "$INSTALL_TMP/pip-v2-control.service" \
-  /etc/systemd/system/pip-v2-control.service
-install -o root -g root -m 0644 "$INSTALL_TMP/pip-v2-decision.service" \
-  /etc/systemd/system/pip-v2-decision.service
-install -o root -g root -m 0644 "$INSTALL_TMP/pip-v2-decision.timer" \
-  /etc/systemd/system/pip-v2-decision.timer
-install -o root -g root -m 0644 "$INSTALL_TMP/pip-v2-route-consumer.service" \
-  /etc/systemd/system/pip-v2-route-consumer.service
-install -o root -g root -m 0644 "$INSTALL_TMP/pip-v2-route-consumer.timer" \
-  /etc/systemd/system/pip-v2-route-consumer.timer
+install -o root -g root -m 0644 "$INSTALL_TMP/pip-control.service" \
+  /etc/systemd/system/pip-control.service
+install -o root -g root -m 0644 "$INSTALL_TMP/pip-decision.service" \
+  /etc/systemd/system/pip-decision.service
+install -o root -g root -m 0644 "$INSTALL_TMP/pip-decision.timer" \
+  /etc/systemd/system/pip-decision.timer
+install -o root -g root -m 0644 "$INSTALL_TMP/pip-route-consumer.service" \
+  /etc/systemd/system/pip-route-consumer.service
+install -o root -g root -m 0644 "$INSTALL_TMP/pip-route-consumer.timer" \
+  /etc/systemd/system/pip-route-consumer.timer
 
 systemctl daemon-reload
-systemctl enable pip-v2-control.service
-systemctl restart pip-v2-control.service
-systemctl is-active --quiet pip-v2-control.service
-runuser -u "$CALLER" -- /usr/local/bin/pip-v2-control request \
-  --socket /run/pip-v2/control.sock --operation ensure_canary >/dev/null
+systemctl enable pip-control.service
+systemctl restart pip-control.service
+systemctl is-active --quiet pip-control.service
+runuser -u "$CALLER" -- /usr/local/bin/pip-control request \
+  --socket /run/pip/control.sock --operation ensure_canary >/dev/null
 printf '%s\n' \
   '{"action":"stop","case_id":"mdk#1240","error":"decision_reconciliation_pending","ok":false}' \
   > "$INSTALL_TMP/decision-route.json"
-install -o pip-v2-control -g "$CALLER_GID" -m 0640 \
-  "$INSTALL_TMP/decision-route.json" /run/pip-v2/decision-route.json
+install -o pip-control -g "$CALLER_GID" -m 0640 \
+  "$INSTALL_TMP/decision-route.json" /run/pip/decision-route.json
 DECISION_ROUTE_REPLACED=1
-systemctl enable pip-v2-decision.timer
-systemctl enable pip-v2-route-consumer.timer
+systemctl enable pip-decision.timer
+systemctl enable pip-route-consumer.timer
 
 fail_closed() {
   echo "control-plane boundary validation failed" >&2
   return 1
 }
-[[ "$(stat -c '%U:%G:%a' /var/lib/pip-v2)" == \
-  "pip-v2-control:pip-v2-control:700" ]] || fail_closed
-[[ "$(stat -c '%U:%G:%a' /var/lib/pip-v2/cases.db)" == \
-  "pip-v2-control:pip-v2-control:600" ]] || fail_closed
-[[ "$(stat -c '%U:%g:%a' /run/pip-v2/control.sock)" == \
-  "pip-v2-control:${CALLER_GID}:660" ]] || fail_closed
-[[ "$(stat -c '%U:%g:%a' /run/pip-v2/decision-route.json)" == \
-  "pip-v2-control:${CALLER_GID}:640" ]] || fail_closed
-if runuser -u "$CALLER" -- test -e /var/lib/pip-v2/cases.db; then
+[[ "$(stat -c '%U:%G:%a' /var/lib/pip)" == \
+  "pip-control:pip-control:700" ]] || fail_closed
+[[ "$(stat -c '%U:%G:%a' /var/lib/pip/cases.db)" == \
+  "pip-control:pip-control:600" ]] || fail_closed
+[[ "$(stat -c '%U:%g:%a' /run/pip/control.sock)" == \
+  "pip-control:${CALLER_GID}:660" ]] || fail_closed
+[[ "$(stat -c '%U:%g:%a' /run/pip/decision-route.json)" == \
+  "pip-control:${CALLER_GID}:640" ]] || fail_closed
+if runuser -u "$CALLER" -- test -e /var/lib/pip/cases.db; then
   fail_closed
 fi
-runuser -u "$CALLER" -- /usr/local/bin/pip-v2-control request \
-  --socket /run/pip-v2/control.sock --operation status >/dev/null || fail_closed
+runuser -u "$CALLER" -- /usr/local/bin/pip-control request \
+  --socket /run/pip/control.sock --operation status >/dev/null || fail_closed
 
-systemctl start pip-v2-decision.timer
-systemctl is-active --quiet pip-v2-decision.timer
-systemctl start pip-v2-route-consumer.timer
-systemctl is-active --quiet pip-v2-route-consumer.timer
+systemctl start pip-decision.timer
+systemctl is-active --quiet pip-decision.timer
+systemctl start pip-route-consumer.timer
+systemctl is-active --quiet pip-route-consumer.timer
 MUTATION_STARTED=0
-printf 'installed and validated pip-v2-control for marmot-protocol/mdk#%s; caller=%s\n' "$ISSUE" "$CALLER"
+printf 'installed and validated pip-control for marmot-protocol/mdk#%s; caller=%s\n' "$ISSUE" "$CALLER"

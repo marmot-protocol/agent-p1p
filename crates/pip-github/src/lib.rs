@@ -2,7 +2,10 @@
 
 #![forbid(unsafe_code)]
 
+mod app_auth;
 mod write;
+
+pub use app_auth::{GitHubAppCredentials, InstallationToken, mint_installation_token};
 
 pub use write::{
     CommentSpec, GitHubWriter, MergeModePolicy, MergeSpec, MutationRequest, MutationResult,

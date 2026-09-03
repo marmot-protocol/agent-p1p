@@ -136,7 +136,7 @@ fn direct_task(worktree: &std::path::Path) -> DirectTaskSpec {
             "role": "builder",
             "remediation_round": 1,
             "plan_version": 1,
-            "assigned_branch": "pip/v2/repo-1055628515/issue-1240/workflow-2",
+            "assigned_branch": "pip/repo-1055628515/issue-1240/workflow-2",
             "assigned_worktree": worktree,
             "execution": "direct",
             "provider": "cursor",

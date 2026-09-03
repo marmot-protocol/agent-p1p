@@ -40,7 +40,9 @@ fn reader(runner: FakeRunner) -> HermesReader<FakeRunner> {
 fn capability_board_and_task_reads_use_only_read_commands() {
     let runner = FakeRunner::default();
     runner.output("hermes 0.9.0\n");
-    runner.output(r#"[{"name":"pip-mdk"},{"name":"pip-other"}]"#);
+    runner.output(
+        r#"[{"slug":"pip-mdk","name":"Pip - marmot-protocol/mdk"},{"slug":"pip-other","name":"Other board"}]"#,
+    );
     runner.output(
         r#"[{"id":"task-1","title":"Plan","status":"ready","assignee":"planner","created_by":"pip-controller","body":"{\"projection_key\":\"plan-1\"}"}]"#,
     );
@@ -178,7 +180,7 @@ fn hermes_outage_then_recovery_reprobes_without_a_write_command() {
         timed_out: true,
     }));
     runner.output("hermes 0.9.0\n");
-    runner.output(r#"[{"name":"pip-mdk"}]"#);
+    runner.output(r#"[{"slug":"pip-mdk","name":"Pip - marmot-protocol/mdk"}]"#);
     let reader = reader(runner.clone());
 
     assert_eq!(reader.capabilities(), Err(HermesError::TimedOut));

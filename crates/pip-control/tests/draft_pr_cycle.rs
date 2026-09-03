@@ -93,7 +93,7 @@ fn controller_creates_deterministic_draft_pr_before_ci_observation() {
     let specs = writer.specs.borrow();
     assert_eq!(
         specs[0].head_branch,
-        "pip/v2/repo-984321/issue-1240/workflow-1"
+        "pip/repo-984321/issue-1240/workflow-1"
     );
     assert_eq!(specs[0].head_sha, "b".repeat(40));
     assert_eq!(specs[0].effect_id, "repo:984321#1240@1:draft-pr");
@@ -101,15 +101,15 @@ fn controller_creates_deterministic_draft_pr_before_ci_observation() {
     assert_eq!(publications.len(), 1);
     assert_eq!(
         publications[0].worktree_root,
-        std::path::PathBuf::from("/var/lib/pip-v2/worktrees/mdk")
+        std::path::PathBuf::from("/var/lib/pip/worktrees/mdk")
     );
     assert_eq!(
         publications[0].worktree,
-        std::path::PathBuf::from("/var/lib/pip-v2/worktrees/mdk/repo-984321-issue-1240-workflow-1")
+        std::path::PathBuf::from("/var/lib/pip/worktrees/mdk/repo-984321-issue-1240-workflow-1")
     );
     assert_eq!(
         publications[0].branch,
-        "pip/v2/repo-984321/issue-1240/workflow-1"
+        "pip/repo-984321/issue-1240/workflow-1"
     );
     assert_eq!(
         publications[0].expected_remote_url,

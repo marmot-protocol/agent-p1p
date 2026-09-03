@@ -1,12 +1,12 @@
 [Unit]
-Description=Periodically run Pip v2 non-dispatching reconciliation
+Description=Periodically run Pip non-dispatching reconciliation
 
 [Timer]
 OnBootSec=2min
 OnUnitActiveSec=5min
 RandomizedDelaySec=15s
 Persistent=true
-Unit=pip-v2-shadow-reconcile.service
+Unit=pip-shadow-reconcile.service
 
 [Install]
 WantedBy=timers.target

@@ -10,8 +10,11 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pip_executor::{BoundedProcessRunner, sanitized_environment};
-use pip_github::{GitHubReader, GitHubWriter, UreqTransport};
+use pip_github::{
+    GitHubAppCredentials, GitHubReader, GitHubWriter, UreqTransport, mint_installation_token,
+};
 use pip_store::Store;
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
@@ -165,14 +168,14 @@ fn webhook_intake(arguments: &[String]) -> Result<Value, CliError> {
 }
 
 pub fn run_git_askpass(arguments: impl IntoIterator<Item = String>) -> Result<String, CliError> {
-    if std::env::var("PIP_V2_GIT_ASKPASS").as_deref() != Ok("1") {
+    if std::env::var("PIP_GIT_ASKPASS").as_deref() != Ok("1") {
         return Err(CliError::InvalidArgument("askpass mode".into()));
     }
     let arguments = arguments.into_iter().collect::<Vec<_>>();
     let [prompt] = arguments.as_slice() else {
         return Err(CliError::InvalidArgument("askpass prompt".into()));
     };
-    let credential_path = std::env::var_os("PIP_V2_GIT_TOKEN_FILE")
+    let credential_path = std::env::var_os("PIP_GIT_TOKEN_FILE")
         .ok_or_else(|| CliError::InvalidArgument("askpass credential".into()))?;
     let credential = read_secret(Path::new(&credential_path), 1024)?;
     let credential = std::str::from_utf8(&credential)
@@ -228,8 +231,10 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
             "--policy",
             "--database",
             "--github-token",
-            "--github-reviewer-general-token",
-            "--github-reviewer-secperf-token",
+            "--github-reviewer-general-app",
+            "--github-reviewer-general-key",
+            "--github-reviewer-secperf-app",
+            "--github-reviewer-secperf-key",
             "--git-askpass",
             "--hermes",
             "--owner",
@@ -261,30 +266,29 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
     if token.is_empty() {
         return Err(CliError::InvalidArgument("--github-token".into()));
     }
-    let general_token = read_secret(
-        Path::new(required(&options, "--github-reviewer-general-token")?),
-        1024,
+    let general_app = read_app_identity(
+        Path::new(required(&options, "--github-reviewer-general-app")?),
+        policy.repository.id,
+        "--github-reviewer-general-app",
     )?;
-    let general_token = std::str::from_utf8(&general_token)
-        .map_err(|_| CliError::InvalidArgument("--github-reviewer-general-token".into()))?
-        .trim();
-    if general_token.is_empty() {
-        return Err(CliError::InvalidArgument(
-            "--github-reviewer-general-token".into(),
-        ));
-    }
-    let secperf_token = read_secret(
-        Path::new(required(&options, "--github-reviewer-secperf-token")?),
-        1024,
+    let secperf_app = read_app_identity(
+        Path::new(required(&options, "--github-reviewer-secperf-app")?),
+        policy.repository.id,
+        "--github-reviewer-secperf-app",
     )?;
-    let secperf_token = std::str::from_utf8(&secperf_token)
-        .map_err(|_| CliError::InvalidArgument("--github-reviewer-secperf-token".into()))?
-        .trim();
-    if secperf_token.is_empty() {
-        return Err(CliError::InvalidArgument(
-            "--github-reviewer-secperf-token".into(),
-        ));
+    if general_app.app_id == secperf_app.app_id
+        || general_app.installation_id == secperf_app.installation_id
+    {
+        return Err(CliError::InvalidArgument("--github-reviewer-apps".into()));
     }
+    let mut general_key = read_secret(
+        Path::new(required(&options, "--github-reviewer-general-key")?),
+        32 * 1024,
+    )?;
+    let mut secperf_key = read_secret(
+        Path::new(required(&options, "--github-reviewer-secperf-key")?),
+        32 * 1024,
+    )?;
     let skills_commit = read_bounded(Path::new(required(&options, "--skills-commit-file")?), 128)?;
     let skills_commit = std::str::from_utf8(&skills_commit)
         .map_err(|_| CliError::InvalidArgument("--skills-commit-file".into()))?
@@ -317,6 +321,26 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         .transpose()?
         .unwrap_or(60);
     let transport = UreqTransport::new(Duration::from_secs(20));
+    let general_token = mint_installation_token(
+        &transport,
+        "https://api.github.com",
+        &general_app.credentials(&general_key),
+        now,
+    );
+    general_key.fill(0);
+    let general_token = general_token
+        .map_err(|error| CliError::Reconciliation(error.to_string()))?
+        .token;
+    let secperf_token = mint_installation_token(
+        &transport,
+        "https://api.github.com",
+        &secperf_app.credentials(&secperf_key),
+        now,
+    );
+    secperf_key.fill(0);
+    let secperf_token = secperf_token
+        .map_err(|error| CliError::Reconciliation(error.to_string()))?
+        .token;
     let reader = GitHubReader::new(
         transport.clone(),
         "https://api.github.com",
@@ -336,7 +360,7 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
     let general_review_writer = GitHubWriter::new(
         transport.clone(),
         "https://api.github.com",
-        general_token,
+        &general_token,
         4 * 1024 * 1024,
         10,
     )
@@ -344,17 +368,26 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
     let secperf_review_writer = GitHubWriter::new(
         transport,
         "https://api.github.com",
-        secperf_token,
+        &secperf_token,
         4 * 1024 * 1024,
         10,
     )
     .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     let mut store = Store::open(required(&options, "--database")?)
         .map_err(|error| CliError::Ledger(error.to_string()))?;
+    let workspace_lifecycle = crate::reconcile_workspace_lifecycle_once(&mut store, &policy, now)
+        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let workspace_ready = workspace_lifecycle.ready;
     let intake = if policy.intake.enabled {
         serde_json::to_value(
-            crate::reconcile_intake(&reader, &policy, &mut store, now, global_paused)
-                .map_err(|error| CliError::Reconciliation(error.to_string()))?,
+            crate::reconcile_intake(
+                &reader,
+                &policy,
+                &mut store,
+                now,
+                global_paused || !workspace_ready,
+            )
+            .map_err(|error| CliError::Reconciliation(error.to_string()))?,
         )
         .map_err(|error| CliError::Reconciliation(error.to_string()))?
     } else {
@@ -364,6 +397,7 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     let authorization = crate::reconcile_active_authorization(&reader, &policy, &mut store, now)
         .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let work_authorized = authorization.is_authorized() && workspace_ready;
     let bounds = crate::enforce_operational_bounds(&mut store, &policy, now)
         .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     let (result, ci) = if authorization.is_authorized() {
@@ -392,7 +426,7 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         now,
         crate::recommended_direct_lease_seconds(&policy)
             .map_err(|error| CliError::Reconciliation(error.to_string()))?,
-        authorization.is_authorized(),
+        work_authorized,
     )
     .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     let draft_pull_request = crate::publish_draft_pull_request_once(
@@ -404,7 +438,7 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         now,
         required(&options, "--owner")?,
         lease_seconds,
-        authorization.is_authorized(),
+        work_authorized,
     )
     .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     let plan_publication = crate::publish_plan_once(
@@ -468,7 +502,7 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
             owner: required(&options, "--owner")?,
             now,
             lease_seconds,
-            authorization_valid: authorization.is_authorized(),
+            authorization_valid: work_authorized,
         },
     )
     .map_err(|error| CliError::Reconciliation(error.to_string()))?;
@@ -485,6 +519,7 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         "takeover": takeover,
         "authorization": authorization,
         "operational_bounds": bounds,
+        "workspace_lifecycle": workspace_lifecycle,
         "draft_pull_request": draft_pull_request,
         "plan_publication": plan_publication,
         "review_publication": review_publication,
@@ -493,6 +528,42 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         "disposition": disposition,
         "dispatch": dispatch,
     }))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GitHubAppIdentity {
+    app_id: u64,
+    installation_id: u64,
+    repository_id: u64,
+}
+
+impl GitHubAppIdentity {
+    fn credentials<'a>(&self, private_key_pem: &'a [u8]) -> GitHubAppCredentials<'a> {
+        GitHubAppCredentials {
+            app_id: self.app_id,
+            installation_id: self.installation_id,
+            repository_id: self.repository_id,
+            private_key_pem,
+        }
+    }
+}
+
+fn read_app_identity(
+    path: &Path,
+    expected_repository_id: u64,
+    argument: &str,
+) -> Result<GitHubAppIdentity, CliError> {
+    let bytes = read_bounded(path, 4096)?;
+    let identity: GitHubAppIdentity =
+        serde_json::from_slice(&bytes).map_err(|_| CliError::InvalidArgument(argument.into()))?;
+    if identity.app_id == 0
+        || identity.installation_id == 0
+        || identity.repository_id != expected_repository_id
+    {
+        return Err(CliError::InvalidArgument(argument.into()));
+    }
+    Ok(identity)
 }
 
 fn direct_worker_cycle(arguments: &[String]) -> Result<Value, CliError> {
@@ -527,6 +598,8 @@ fn direct_worker_cycle(arguments: &[String]) -> Result<Value, CliError> {
         })
         .transpose()?
         .map_or_else(current_time, Ok)?;
+    crate::workspace_lifecycle::ensure_direct_workspace_capacity(&policy)
+        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     let runtime = crate::CursorDirectRuntime::new(
         BoundedProcessRunner,
         required(&options, "--cursor")?,

@@ -1,12 +1,12 @@
 [Unit]
-Description=Schedule Pip v2 credential-free direct worker cycles for %i
+Description=Schedule Pip credential-free direct worker cycles for %i
 
 [Timer]
 OnBootSec=2min
 OnUnitActiveSec=15s
 RandomizedDelaySec=3s
 Persistent=true
-Unit=pip-v2-direct-worker@%i.service
+Unit=pip-direct-worker@%i.service
 
 [Install]
 WantedBy=timers.target

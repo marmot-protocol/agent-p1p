@@ -1,9 +1,9 @@
 #[test]
 fn installed_shadow_unit_is_hardened_credential_bound_and_never_dispatches() {
-    let service = include_str!("../../../packaging/systemd/pip-v2-shadow-reconcile.service");
-    let timer = include_str!("../../../packaging/systemd/pip-v2-shadow-reconcile.timer");
-    assert!(service.contains("User=pip-v2-control"));
-    assert!(service.contains("LoadCredential=github.token:/etc/pip-v2/github.token"));
+    let service = include_str!("../../../packaging/systemd/pip-shadow-reconcile.service");
+    let timer = include_str!("../../../packaging/systemd/pip-shadow-reconcile.timer");
+    assert!(service.contains("User=pip-control"));
+    assert!(service.contains("LoadCredential=github.token:/etc/pip/github.token"));
     assert!(service.contains("shadow-reconcile"));
     assert!(service.contains("ProtectSystem=strict"));
     assert!(service.contains("NoNewPrivileges=yes"));
@@ -20,62 +20,79 @@ fn installed_shadow_unit_is_hardened_credential_bound_and_never_dispatches() {
 
 #[test]
 fn staged_active_controller_template_uses_a_dedicated_shared_hermes_root() {
-    let service = include_str!("../../../packaging/systemd/pip-v2-controller@.service");
-    let timer = include_str!("../../../packaging/systemd/pip-v2-controller@.timer");
+    let service = include_str!("../../../packaging/systemd/pip-controller@.service");
+    let timer = include_str!("../../../packaging/systemd/pip-controller@.timer");
 
-    assert!(service.contains("User=pip-v2-control"));
-    assert!(service.contains("Environment=HERMES_HOME=/var/lib/pip-v2/hermes"));
-    assert!(service.contains("Environment=HERMES_KANBAN_HOME=/var/lib/pip-v2/hermes"));
+    assert!(service.contains("User=pip-control"));
+    assert!(service.contains("RequiresMountsFor=/var/lib/pip/worktrees"));
+    assert!(service.contains("ConditionPathIsMountPoint=/var/lib/pip/worktrees"));
+    assert!(service.contains("Environment=HERMES_HOME=/var/lib/pip/hermes"));
+    assert!(service.contains("Environment=HERMES_KANBAN_HOME=/var/lib/pip/hermes"));
     assert!(service.contains("controller-cycle"));
-    assert!(service.contains("--policy /etc/pip-v2/repositories/%i.json"));
-    assert!(service.contains("--skills-commit-file /opt/pip-v2/current/SOURCE.COMMIT"));
-    assert!(service.contains("--direct-queue /var/lib/pip-v2/direct-queue"));
-    assert!(service.contains("LoadCredential=github.token:/etc/pip-v2/github.token"));
-    assert!(service.contains("--git-askpass /opt/pip-v2/current/bin/pip-control"));
+    assert!(service.contains("--policy /etc/pip/repositories/%i.json"));
+    assert!(service.contains("--skills-commit-file /opt/pip/current/SOURCE.COMMIT"));
+    assert!(service.contains("--direct-queue /var/lib/pip/direct-queue"));
+    assert!(service.contains("LoadCredential=github.token:/etc/pip/github.token"));
+    assert!(service.contains("--git-askpass /opt/pip/current/bin/pip-control"));
     assert!(service.contains(
-        "LoadCredential=github-reviewer-general.token:/etc/pip-v2/github-reviewer-general.token"
+        "LoadCredential=github-reviewer-general.app:/etc/pip/github-reviewer-general.app.json"
     ));
     assert!(service.contains(
-        "LoadCredential=github-reviewer-secperf.token:/etc/pip-v2/github-reviewer-secperf.token"
+        "LoadCredential=github-reviewer-general.pem:/etc/pip/github-reviewer-general.pem"
     ));
-    assert!(service.contains("--github-reviewer-general-token %d/github-reviewer-general.token"));
-    assert!(service.contains("--github-reviewer-secperf-token %d/github-reviewer-secperf.token"));
+    assert!(service.contains(
+        "LoadCredential=github-reviewer-secperf.app:/etc/pip/github-reviewer-secperf.app.json"
+    ));
+    assert!(service.contains(
+        "LoadCredential=github-reviewer-secperf.pem:/etc/pip/github-reviewer-secperf.pem"
+    ));
+    assert!(service.contains("--github-reviewer-general-app %d/github-reviewer-general.app"));
+    assert!(service.contains("--github-reviewer-general-key %d/github-reviewer-general.pem"));
+    assert!(service.contains("--github-reviewer-secperf-app %d/github-reviewer-secperf.app"));
+    assert!(service.contains("--github-reviewer-secperf-key %d/github-reviewer-secperf.pem"));
+    assert!(!service.contains("github-reviewer-general.token"));
+    assert!(!service.contains("github-reviewer-secperf.token"));
     assert!(!service.contains("/home/jeff"));
     assert!(timer.contains("OnUnitActiveSec=15s"));
 }
 
 #[test]
 fn direct_worker_template_has_provider_state_but_no_controller_credentials() {
-    let service = include_str!("../../../packaging/systemd/pip-v2-direct-worker@.service");
-    let timer = include_str!("../../../packaging/systemd/pip-v2-direct-worker@.timer");
+    let service = include_str!("../../../packaging/systemd/pip-direct-worker@.service");
+    let timer = include_str!("../../../packaging/systemd/pip-direct-worker@.timer");
 
-    assert!(service.contains("User=pip-v2-worker"));
-    assert!(service.contains("Environment=HOME=/var/lib/pip-v2/provider-home"));
+    assert!(service.contains("User=pip-worker"));
+    assert!(service.contains("RequiresMountsFor=/var/lib/pip/worktrees"));
+    assert!(service.contains("ConditionPathIsMountPoint=/var/lib/pip/worktrees"));
+    assert!(service.contains("Environment=HOME=/var/lib/pip/provider-home"));
     assert!(service.contains("direct-worker-cycle"));
-    assert!(service.contains("--direct-queue /var/lib/pip-v2/direct-queue"));
+    assert!(service.contains("--direct-queue /var/lib/pip/direct-queue"));
     assert!(!service.contains("--database"));
     assert!(service.contains("--cursor cursor-agent"));
-    assert!(service.contains("--skills-root /opt/pip-v2/current/share/pip-v2/skills"));
+    assert!(service.contains("--skills-root /opt/pip/current/share/pip/skills"));
     assert!(!service.contains("LoadCredential="));
     assert!(!service.contains("github.token"));
-    assert!(service.contains("InaccessiblePaths=/var/lib/pip-v2/ledger.db"));
+    assert!(service.contains("InaccessiblePaths=/var/lib/pip/ledger.db"));
     assert!(!service.contains("--hermes"));
-    assert!(service.contains("/var/lib/pip-v2/hermes"));
+    assert!(service.contains("/var/lib/pip/hermes"));
     assert!(timer.contains("OnUnitActiveSec=15s"));
 }
 
 #[test]
 fn hermes_gateway_owns_dispatch_without_controller_credentials_or_ledger_access() {
-    let service = include_str!("../../../packaging/systemd/pip-v2-hermes-gateway.service");
+    let service = include_str!("../../../packaging/systemd/pip-hermes-gateway.service");
 
-    assert!(service.contains("User=pip-v2-control"));
-    assert!(service.contains("Environment=HERMES_HOME=/var/lib/pip-v2/hermes"));
-    assert!(service.contains("Environment=HERMES_KANBAN_HOME=/var/lib/pip-v2/hermes"));
-    assert!(service.contains("ExecStart=/usr/local/bin/hermes gateway run --no-supervise"));
-    assert!(service.contains("InaccessiblePaths=/var/lib/pip-v2/ledger.db"));
-    assert!(service.contains("ReadWritePaths=/var/lib/pip-v2/hermes"));
+    assert!(service.contains("User=pip-control"));
+    assert!(service.contains("RequiresMountsFor=/var/lib/pip/worktrees"));
+    assert!(service.contains("ConditionPathIsMountPoint=/var/lib/pip/worktrees"));
+    assert!(service.contains("Environment=HERMES_HOME=/var/lib/pip/hermes"));
+    assert!(service.contains("Environment=HERMES_KANBAN_HOME=/var/lib/pip/hermes"));
+    assert!(service.contains("ExecStart=/usr/local/bin/hermes gateway run --external-supervisor"));
+    assert!(!service.contains("--no-supervise"));
+    assert!(service.contains("InaccessiblePaths=/var/lib/pip/ledger.db"));
+    assert!(service.contains("ReadWritePaths=/var/lib/pip/hermes"));
     assert!(service.contains(
-        "ReadOnlyPaths=/opt/pip-v2/current /var/lib/pip-v2/repositories /var/lib/pip-v2/worktrees"
+        "ReadOnlyPaths=/opt/pip/current /var/lib/pip/repositories /var/lib/pip/worktrees"
     ));
     assert!(!service.contains("LoadCredential="));
     assert!(!service.contains("github.token"));

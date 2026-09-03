@@ -130,6 +130,7 @@ pub enum AllocationError {
     CommandFailed(i32),
     MalformedOutput(String),
     VerificationFailed,
+    DirtyWorktree,
     Filesystem(String),
     Process(String),
 }
@@ -149,6 +150,9 @@ impl fmt::Display for AllocationError {
             Self::VerificationFailed => {
                 formatter.write_str("created worktree could not be verified")
             }
+            Self::DirtyWorktree => {
+                formatter.write_str("managed worktree contains uncommitted changes")
+            }
             Self::Filesystem(error) => write!(formatter, "worktree filesystem error: {error}"),
             Self::Process(error) => write!(formatter, "Git process failed: {error}"),
         }
@@ -166,6 +170,13 @@ pub struct WorktreeSpec {
     base: GitSha,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorktreeRetirementSpec {
+    repository: PathBuf,
+    path: PathBuf,
+    branch: String,
+}
+
 impl WorktreeSpec {
     pub fn new(
         repository: impl AsRef<Path>,
@@ -174,35 +185,8 @@ impl WorktreeSpec {
         case_id: CaseId,
         base: GitSha,
     ) -> Result<Self, AllocationError> {
-        if !valid_branch_prefix(branch_prefix) {
-            return Err(AllocationError::InvalidSpec);
-        }
         let repository = canonical_directory(repository.as_ref())?;
-        let root_input = root.as_ref();
-        if fs::symlink_metadata(root_input)
-            .map_err(|error| AllocationError::Filesystem(error.to_string()))?
-            .file_type()
-            .is_symlink()
-        {
-            return Err(AllocationError::InvalidSpec);
-        }
-        let root = canonical_directory(root_input)?;
-        let identity = format!(
-            "repo-{}-issue-{}-workflow-{}",
-            case_id.repository().get(),
-            case_id.issue().get(),
-            case_id.workflow().get()
-        );
-        let branch = format!(
-            "{branch_prefix}repo-{}/issue-{}/workflow-{}",
-            case_id.repository().get(),
-            case_id.issue().get(),
-            case_id.workflow().get()
-        );
-        let path = root.join(identity);
-        if !path.starts_with(&root) {
-            return Err(AllocationError::InvalidSpec);
-        }
+        let (root, path, branch) = managed_identity(root.as_ref(), branch_prefix, case_id)?;
         Ok(Self {
             repository,
             root,
@@ -236,6 +220,82 @@ impl WorktreeSpec {
     pub const fn base(&self) -> GitSha {
         self.base
     }
+
+    #[must_use]
+    pub fn retirement_spec(&self) -> WorktreeRetirementSpec {
+        WorktreeRetirementSpec {
+            repository: self.repository.clone(),
+            path: self.path.clone(),
+            branch: self.branch.clone(),
+        }
+    }
+}
+
+impl WorktreeRetirementSpec {
+    pub fn new(
+        repository: impl AsRef<Path>,
+        root: impl AsRef<Path>,
+        branch_prefix: &str,
+        case_id: CaseId,
+    ) -> Result<Self, AllocationError> {
+        let repository = canonical_directory(repository.as_ref())?;
+        let (_, path, branch) = managed_identity(root.as_ref(), branch_prefix, case_id)?;
+        Ok(Self {
+            repository,
+            path,
+            branch,
+        })
+    }
+
+    #[must_use]
+    pub fn repository(&self) -> &Path {
+        &self.repository
+    }
+
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    #[must_use]
+    pub fn branch(&self) -> &str {
+        &self.branch
+    }
+}
+
+fn managed_identity(
+    root: &Path,
+    branch_prefix: &str,
+    case_id: CaseId,
+) -> Result<(PathBuf, PathBuf, String), AllocationError> {
+    if !valid_branch_prefix(branch_prefix) {
+        return Err(AllocationError::InvalidSpec);
+    }
+    if fs::symlink_metadata(root)
+        .map_err(|error| AllocationError::Filesystem(error.to_string()))?
+        .file_type()
+        .is_symlink()
+    {
+        return Err(AllocationError::InvalidSpec);
+    }
+    let root = canonical_directory(root)?;
+    let identity = format!(
+        "repo-{}-issue-{}-workflow-{}",
+        case_id.repository().get(),
+        case_id.issue().get(),
+        case_id.workflow().get()
+    );
+    let branch = format!(
+        "{branch_prefix}repo-{}/issue-{}/workflow-{}",
+        case_id.repository().get(),
+        case_id.issue().get(),
+        case_id.workflow().get()
+    );
+    let path = root.join(identity);
+    if !path.starts_with(&root) {
+        return Err(AllocationError::InvalidSpec);
+    }
+    Ok((root, path, branch))
 }
 
 fn canonical_directory(path: &Path) -> Result<PathBuf, AllocationError> {
@@ -270,11 +330,147 @@ pub enum AllocationResult {
     Existing,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RetirementResult {
+    Retired,
+    Absent,
+}
+
 pub struct WorktreeAllocator<R> {
     runner: R,
     program: String,
     timeout: Duration,
     max_output_bytes: usize,
+}
+
+pub struct WorktreeRetirer<R> {
+    runner: R,
+    program: String,
+    timeout: Duration,
+    max_output_bytes: usize,
+}
+
+impl<R: GitRunner> WorktreeRetirer<R> {
+    pub fn new(
+        runner: R,
+        program: impl Into<String>,
+        timeout: Duration,
+        max_output_bytes: usize,
+    ) -> Result<Self, AllocationError> {
+        let program = program.into();
+        if program.trim().is_empty() || timeout.is_zero() || max_output_bytes == 0 {
+            return Err(AllocationError::InvalidConfiguration);
+        }
+        Ok(Self {
+            runner,
+            program,
+            timeout,
+            max_output_bytes,
+        })
+    }
+
+    pub fn retire(
+        &self,
+        spec: &WorktreeRetirementSpec,
+    ) -> Result<RetirementResult, AllocationError> {
+        let repository = self.execute_at(
+            spec.repository(),
+            vec!["rev-parse".into(), "--show-toplevel".into()],
+        )?;
+        let reported = std::str::from_utf8(&repository.stdout)
+            .map_err(|error| AllocationError::MalformedOutput(error.to_string()))?
+            .trim();
+        let reported = Path::new(reported)
+            .canonicalize()
+            .map_err(|error| AllocationError::Filesystem(error.to_string()))?;
+        if reported != spec.repository() {
+            return Err(AllocationError::VerificationFailed);
+        }
+
+        let records = self.worktrees(spec)?;
+        match classify_retirement_existing(spec, &records)? {
+            None => {
+                if fs::symlink_metadata(spec.path()).is_ok() {
+                    return Err(AllocationError::Collision);
+                }
+                return Ok(RetirementResult::Absent);
+            }
+            Some(AllocationResult::Existing) => {}
+            Some(AllocationResult::Created) => unreachable!("classification never creates"),
+        }
+        if fs::symlink_metadata(spec.path())
+            .map_err(|error| AllocationError::Filesystem(error.to_string()))?
+            .file_type()
+            .is_symlink()
+        {
+            return Err(AllocationError::Collision);
+        }
+        let status = self.execute_at(
+            spec.path(),
+            vec![
+                "status".into(),
+                "--porcelain=v1".into(),
+                "--untracked-files=all".into(),
+            ],
+        )?;
+        if !status.stdout.is_empty() {
+            return Err(AllocationError::DirtyWorktree);
+        }
+        self.execute_at(
+            spec.repository(),
+            vec![
+                "worktree".into(),
+                "remove".into(),
+                "--".into(),
+                spec.path().to_string_lossy().into_owned(),
+            ],
+        )?;
+        if classify_retirement_existing(spec, &self.worktrees(spec)?)?.is_some()
+            || spec.path().exists()
+        {
+            return Err(AllocationError::VerificationFailed);
+        }
+        Ok(RetirementResult::Retired)
+    }
+
+    fn worktrees(
+        &self,
+        spec: &WorktreeRetirementSpec,
+    ) -> Result<Vec<WorktreeRecord>, AllocationError> {
+        let output = self.execute_at(
+            spec.repository(),
+            vec![
+                "worktree".into(),
+                "list".into(),
+                "--porcelain".into(),
+                "-z".into(),
+            ],
+        )?;
+        parse_worktrees(&output.stdout)
+    }
+
+    fn execute_at(&self, cwd: &Path, args: Vec<String>) -> Result<GitOutput, AllocationError> {
+        let output = self.runner.run(&GitCommand {
+            program: self.program.clone(),
+            cwd: cwd.to_owned(),
+            args,
+            timeout: self.timeout,
+            max_output_bytes: self.max_output_bytes,
+            environment: BTreeMap::new(),
+        })?;
+        if output.timed_out {
+            return Err(AllocationError::TimedOut);
+        }
+        if output.stdout.len() > self.max_output_bytes
+            || output.stderr.len() > self.max_output_bytes
+        {
+            return Err(AllocationError::OutputTooLarge);
+        }
+        if output.status != 0 {
+            return Err(AllocationError::CommandFailed(output.status));
+        }
+        Ok(output)
+    }
 }
 
 impl<R: GitRunner> WorktreeAllocator<R> {
@@ -465,10 +661,18 @@ fn classify_existing(
     spec: &WorktreeSpec,
     records: &[WorktreeRecord],
 ) -> Result<Option<AllocationResult>, AllocationError> {
-    let by_path = records.iter().find(|record| record.path == spec.path());
+    classify_path_and_branch(spec.path(), spec.branch(), records)
+}
+
+fn classify_path_and_branch(
+    path: &Path,
+    branch: &str,
+    records: &[WorktreeRecord],
+) -> Result<Option<AllocationResult>, AllocationError> {
+    let by_path = records.iter().find(|record| record.path == path);
     let by_branch = records
         .iter()
-        .find(|record| record.branch.as_deref() == Some(spec.branch()));
+        .find(|record| record.branch.as_deref() == Some(branch));
     match (by_path, by_branch) {
         (None, None) => Ok(None),
         (Some(path), Some(branch)) if std::ptr::eq(path, branch) => {
@@ -476,4 +680,11 @@ fn classify_existing(
         }
         _ => Err(AllocationError::Collision),
     }
+}
+
+fn classify_retirement_existing(
+    spec: &WorktreeRetirementSpec,
+    records: &[WorktreeRecord],
+) -> Result<Option<AllocationResult>, AllocationError> {
+    classify_path_and_branch(spec.path(), spec.branch(), records)
 }

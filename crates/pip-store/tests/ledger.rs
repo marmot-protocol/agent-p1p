@@ -3,7 +3,7 @@ use std::path::Path;
 use pip_store::{
     ApplyResult, DirectAttemptStatus, EffectInput, EventInput, EvidenceInput, FaultPoint,
     FindingInput, NewCase, PolicyInput, RunInput, Store, StoreError, TaskProjectionInput,
-    TransitionInput, WebhookDeliveryInput,
+    TransitionInput, WebhookDeliveryInput, WorkspaceRetirementInput, WorkspaceRetirementOutcome,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -81,9 +81,109 @@ fn transition() -> TransitionInput {
 #[test]
 fn migration_creates_hardened_authoritative_schema() {
     let (_directory, store) = open();
-    assert_eq!(store.schema_version().unwrap(), 5);
+    assert_eq!(store.schema_version().unwrap(), 6);
     assert!(store.foreign_keys_enabled().unwrap());
     assert_eq!(store.journal_mode().unwrap(), "wal");
+}
+
+#[test]
+fn terminal_workspace_retirement_is_eligible_once_and_immutably_audited() {
+    let (_directory, mut store) = open();
+    let mut case = new_case();
+    case.initial_state = "COMPLETED".into();
+    case.effects.clear();
+    case.observed_at = 100;
+    store.create_case(&case).unwrap();
+
+    let candidates = store
+        .terminal_workspace_candidates(984_321, 100, 10)
+        .unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].case_key, case.case_key);
+    assert_eq!(candidates[0].updated_at, 100);
+
+    let retirement = WorkspaceRetirementInput {
+        case_key: case.case_key.clone(),
+        state_revision: 1,
+        worktree_path: "/var/lib/pip/worktrees/mdk/repo-984321-issue-1240-workflow-1".into(),
+        outcome: WorkspaceRetirementOutcome::Retired,
+        retired_at: 200,
+    };
+    assert_eq!(
+        store.record_workspace_retirement(&retirement).unwrap(),
+        ApplyResult::Applied
+    );
+    assert_eq!(
+        store.record_workspace_retirement(&retirement).unwrap(),
+        ApplyResult::Replayed
+    );
+    assert!(
+        store
+            .terminal_workspace_candidates(984_321, 300, 10)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(store.status(300).unwrap().workspace_retirements, 1);
+
+    let connection = Connection::open(store.path()).unwrap();
+    assert!(
+        connection
+            .execute(
+                "UPDATE workspace_retirements SET outcome = 'ABSENT' WHERE case_key = ?1",
+                [&case.case_key],
+            )
+            .is_err()
+    );
+    assert!(
+        connection
+            .execute(
+                "DELETE FROM workspace_retirements WHERE case_key = ?1",
+                [&case.case_key],
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn workspace_retirement_excludes_nonterminal_recent_and_running_cases() {
+    let (_directory, mut store) = open();
+    let mut nonterminal = new_case();
+    nonterminal.case_key = "repo:984321#1@1".into();
+    nonterminal.issue_number = 1;
+    nonterminal.event.event_id = "event-nonterminal".into();
+    nonterminal.effects.clear();
+    nonterminal.observed_at = 10;
+    store.create_case(&nonterminal).unwrap();
+
+    let mut recent = new_case();
+    recent.case_key = "repo:984321#2@1".into();
+    recent.issue_number = 2;
+    recent.initial_state = "ABANDONED".into();
+    recent.event.event_id = "event-recent".into();
+    recent.effects.clear();
+    recent.observed_at = 200;
+    store.create_case(&recent).unwrap();
+
+    let mut running = new_case();
+    running.case_key = "repo:984321#3@1".into();
+    running.issue_number = 3;
+    running.initial_state = "TAKEN_OVER".into();
+    running.event.event_id = "event-running".into();
+    running.effects[0].effect_id = "effect-running".into();
+    running.observed_at = 10;
+    store.create_case(&running).unwrap();
+    let claimed = store.claim_effect("worker", 20, 30).unwrap().unwrap();
+    assert_eq!(claimed.case_key, running.case_key);
+    store
+        .begin_direct_attempt(&claimed, "task-running", 21)
+        .unwrap();
+
+    assert!(
+        store
+            .terminal_workspace_candidates(984_321, 100, 10)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -272,7 +372,7 @@ fn operator_status_separates_pending_leased_and_delivered_work() {
         .unwrap();
 
     let status = store.status(110).unwrap();
-    assert_eq!(status.schema_version, 5);
+    assert_eq!(status.schema_version, 6);
     assert_eq!(status.cases.len(), 1);
     assert_eq!(status.cases[0].case_key, "repo:984321#1240@1");
     assert_eq!(status.events, 1);
@@ -674,6 +774,7 @@ fn schema_one_upgrades_forward_without_losing_existing_projections() {
         .execute_batch(
             "PRAGMA foreign_keys = OFF;
              DROP TABLE webhook_deliveries;
+             DROP TABLE workspace_retirements;
              DROP TABLE direct_attempts;
              DROP INDEX outbox_dispatchable;
              ALTER TABLE outbox DROP COLUMN superseded_by_event_id;
@@ -698,7 +799,7 @@ fn schema_one_upgrades_forward_without_losing_existing_projections() {
     drop(connection);
 
     let upgraded = Store::open(&path).unwrap();
-    assert_eq!(upgraded.schema_version().unwrap(), 5);
+    assert_eq!(upgraded.schema_version().unwrap(), 6);
     assert_eq!(
         upgraded
             .task_projection("legacy-projection")

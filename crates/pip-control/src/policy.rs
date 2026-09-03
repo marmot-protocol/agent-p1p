@@ -90,6 +90,14 @@ pub struct RoleConfiguration {
     pub skills: Vec<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceStorageConfiguration {
+    pub require_distinct_filesystem: bool,
+    pub minimum_free_bytes: u64,
+    pub terminal_retention_seconds: u64,
+}
+
 impl RoleConfiguration {
     #[must_use]
     pub const fn is_hermes(&self) -> bool {
@@ -108,6 +116,7 @@ pub struct RepositoryPolicy {
     pub checkout: String,
     pub workspace: String,
     pub artifacts: String,
+    pub workspace_storage: WorkspaceStorageConfiguration,
     pub branch_prefix: String,
     pub github: GitHubConfiguration,
     pub intake: IntakeConfiguration,
@@ -276,6 +285,8 @@ fn validate_policy(policy: &RepositoryPolicy) -> Result<(), PolicyError> {
         && disjoint_paths(&policy.checkout, &policy.workspace)
         && disjoint_paths(&policy.checkout, &policy.artifacts)
         && disjoint_paths(&policy.workspace, &policy.artifacts)
+        && policy.workspace_storage.minimum_free_bytes > 0
+        && policy.workspace_storage.terminal_retention_seconds > 0
         && valid_branch_prefix(&policy.branch_prefix)
         && configured_github_actor_ids.iter().all(|id| *id > 0)
         && github_identities_valid

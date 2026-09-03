@@ -23,11 +23,11 @@ DAG_REVISION = 4
 
 
 def _task_idempotency_key(route_id: str, key: str) -> str:
-    return f"pip-v2:{route_id}:dag-v{DAG_REVISION}:{key}"
+    return f"pip:{route_id}:dag-v{DAG_REVISION}:{key}"
 
 
 def _gate_idempotency_key(route_id: str, key: str) -> str:
-    return f"pip-v2:{route_id}:gate:dag-v{DAG_REVISION}:{key}"
+    return f"pip:{route_id}:gate:dag-v{DAG_REVISION}:{key}"
 
 
 @dataclass(frozen=True)
@@ -118,7 +118,7 @@ def _task_body(
             }
         )
     return (
-        f"# Pip v2 {phase}\n\n"
+        f"# Pip {phase}\n\n"
         f"Authorization binding:\n```json\n{json.dumps(evidence, indent=2, sort_keys=True)}\n```\n\n"
         "Work only on marmot-protocol/mdk#1240 and a Pip-owned `pip/*` branch. "
         "Do not touch MLS/CGKA implementation, keys, credentials, trust anchors, "
@@ -144,7 +144,7 @@ def builder_dag(
     return [
         TaskSpec(
             key="build",
-            title="Pip v2 build mdk#1240",
+            title="Pip build mdk#1240",
             body=_task_body(
                 route,
                 "builder",
@@ -168,7 +168,7 @@ def builder_dag(
         ),
         TaskSpec(
             key="review-general-1",
-            title="Pip v2 correctness review mdk#1240 round 1",
+            title="Pip correctness review mdk#1240 round 1",
             body=_task_body(
                 route,
                 "general review",
@@ -186,7 +186,7 @@ def builder_dag(
         ),
         TaskSpec(
             key="review-secperf-1",
-            title="Pip v2 security/performance review mdk#1240 round 1",
+            title="Pip security/performance review mdk#1240 round 1",
             body=_task_body(
                 route,
                 "security review",
@@ -203,7 +203,7 @@ def builder_dag(
         ),
         TaskSpec(
             key="remediate",
-            title="Pip v2 address reviews mdk#1240",
+            title="Pip address reviews mdk#1240",
             body=_task_body(
                 route,
                 "review remediation",
@@ -221,7 +221,7 @@ def builder_dag(
         ),
         TaskSpec(
             key="review-general-2",
-            title="Pip v2 correctness re-review mdk#1240",
+            title="Pip correctness re-review mdk#1240",
             body=_task_body(
                 route,
                 "general re-review",
@@ -239,7 +239,7 @@ def builder_dag(
         ),
         TaskSpec(
             key="review-secperf-2",
-            title="Pip v2 security/performance re-review mdk#1240",
+            title="Pip security/performance re-review mdk#1240",
             body=_task_body(
                 route,
                 "security re-review",
@@ -256,7 +256,7 @@ def builder_dag(
         ),
         TaskSpec(
             key="final-review",
-            title="Pip v2 final review mdk#1240",
+            title="Pip final review mdk#1240",
             body=_task_body(
                 route,
                 "final review",
@@ -331,7 +331,7 @@ def _activation_gate_command(
         "--board",
         board,
         "create",
-        f"Pip v2 activation gate: {key}",
+        f"Pip activation gate: {key}",
         "--body",
         json.dumps(
             {
@@ -345,7 +345,7 @@ def _activation_gate_command(
         "--idempotency-key",
         _gate_idempotency_key(route_id, key),
         "--created-by",
-        "pip-v2-router",
+        "pip-router",
         "--parent",
         sentinel_id,
         "--max-retries",
@@ -413,7 +413,7 @@ def route_once(
             "--board",
             board,
             "create",
-            "Pip v2 replan mdk#1240",
+            "Pip replan mdk#1240",
             "--body",
             body,
             "--assignee",
@@ -423,9 +423,9 @@ def route_once(
             "--parent",
             gate_id,
             "--idempotency-key",
-            f"pip-v2:{route_id}:replan",
+            f"pip:{route_id}:replan",
             "--created-by",
-            "pip-v2-router",
+            "pip-router",
             "--skill",
             "workflow-contract",
             "--skill",
@@ -500,7 +500,7 @@ def route_once(
             "--idempotency-key",
             _task_idempotency_key(route_id, spec.key),
             "--created-by",
-            "pip-v2-router",
+            "pip-router",
             "--max-runtime",
             spec.max_runtime,
             "--max-retries",

@@ -56,10 +56,10 @@ fn bootstrap_creates_only_managed_profiles_and_reprobes_the_board() {
     runner.output("hermes 0.9.0\n");
     runner.output("[]");
     runner.output("--workspace --idempotency-key --created-by --max-runtime --max-retries --skill --model --provider --initial-status\n");
-    runner.output("gateway run --no-supervise\n");
+    runner.output("gateway run --external-supervisor\n");
     runner.output("Board 'pip-mdk' created.\n");
     runner.output("hermes 0.9.0\n");
-    runner.output(r#"[{"name":"pip-mdk"}]"#);
+    runner.output(r#"[{"slug":"pip-mdk","name":"Pip - marmot-protocol/mdk"}]"#);
     profile_outputs(&runner);
     let bootstrap = HermesBootstrap::new(
         runner.clone(),
@@ -83,9 +83,9 @@ fn bootstrap_creates_only_managed_profiles_and_reprobes_the_board() {
             "create",
             "pip-mdk",
             "--name",
-            "Pip v2 - marmot-protocol/mdk",
+            "Pip - marmot-protocol/mdk",
             "--description",
-            "Pip v2 controlled shadow workflow for marmot-protocol/mdk",
+            "Pip controlled shadow workflow for marmot-protocol/mdk",
         ]
     );
     drop(commands);
@@ -126,9 +126,9 @@ fn bootstrap_creates_only_managed_profiles_and_reprobes_the_board() {
 
     let retry_runner = FakeRunner::default();
     retry_runner.output("hermes 0.9.0\n");
-    retry_runner.output(r#"[{"name":"pip-mdk"}]"#);
+    retry_runner.output(r#"[{"slug":"pip-mdk","name":"Pip - marmot-protocol/mdk"}]"#);
     retry_runner.output("--workspace --idempotency-key --created-by --max-runtime --max-retries --skill --model --provider --initial-status\n");
-    retry_runner.output("gateway run --no-supervise\n");
+    retry_runner.output("gateway run --external-supervisor\n");
     profile_outputs(&retry_runner);
     let retry = HermesBootstrap::new(
         retry_runner.clone(),
@@ -169,13 +169,13 @@ fn bootstrap_refuses_unmanaged_profile_or_redirected_authentication() {
     .unwrap();
     let runner = FakeRunner::default();
     runner.output("hermes 0.9.0\n");
-    runner.output(r#"[{"name":"pip-mdk"}]"#);
+    runner.output(r#"[{"slug":"pip-mdk","name":"Pip - marmot-protocol/mdk"}]"#);
     runner.output("--workspace --idempotency-key --created-by --max-runtime --max-retries --skill --model --provider --initial-status\n");
-    runner.output("gateway run --no-supervise\n");
+    runner.output("gateway run --external-supervisor\n");
     let bootstrap = HermesBootstrap::new(runner, "hermes", Duration::from_secs(5), 4096).unwrap();
 
     assert!(bootstrap.apply(&spec(&root, &skills)).is_err());
-    assert!(!root.join("profiles/planner/.pip-v2-profile.json").exists());
+    assert!(!root.join("profiles/planner/.pip-profile.json").exists());
 }
 
 fn spec(root: &std::path::Path, skills: &std::path::Path) -> RuntimeBootstrapSpec {
@@ -184,8 +184,8 @@ fn spec(root: &std::path::Path, skills: &std::path::Path) -> RuntimeBootstrapSpe
         skills_root: skills.into(),
         auth_source: root.join("auth.json"),
         board: "pip-mdk".into(),
-        board_name: "Pip v2 - marmot-protocol/mdk".into(),
-        board_description: "Pip v2 controlled shadow workflow for marmot-protocol/mdk".into(),
+        board_name: "Pip - marmot-protocol/mdk".into(),
+        board_description: "Pip controlled shadow workflow for marmot-protocol/mdk".into(),
         profiles: vec![
             profile("planner", "xhigh"),
             profile("reviewer-general", "high"),

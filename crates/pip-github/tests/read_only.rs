@@ -218,7 +218,7 @@ fn pagination_limit_blocks_unbounded_history() {
 fn pull_request_evidence_retains_all_attempts_and_exact_head_reviews() {
     let transport = FakeTransport::default();
     transport.push(response(
-        r#"{"id":9001,"number":77,"state":"open","draft":true,"merged":false,"mergeable":true,"mergeable_state":"clean","user":{"id":1001},"head":{"ref":"pip/v2/repo-984321/issue-1240/workflow-1","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repo":{"id":984321,"full_name":"marmot-protocol/mdk"}},"base":{"ref":"main","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#,
+        r#"{"id":9001,"number":77,"state":"open","draft":true,"merged":false,"mergeable":true,"mergeable_state":"clean","user":{"id":1001},"head":{"ref":"pip/repo-984321/issue-1240/workflow-1","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repo":{"id":984321,"full_name":"marmot-protocol/mdk"}},"base":{"ref":"main","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#,
     ));
     let mut first_checks = response(
         r#"{"total_count":2,"check_runs":[{"id":1,"name":"ci","head_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","status":"completed","conclusion":"failure","started_at":"2026-08-20T00:00:00Z","completed_at":"2026-08-20T00:01:00Z","app":{"id":10}}]}"#,
@@ -267,7 +267,7 @@ fn pull_request_evidence_retains_all_attempts_and_exact_head_reviews() {
 fn pull_request_evidence_rejects_wrong_repository_head_and_duplicate_attempts() {
     let transport = FakeTransport::default();
     transport.push(response(
-        r#"{"id":9001,"number":77,"state":"open","draft":true,"merged":false,"mergeable":true,"mergeable_state":"clean","user":{"id":1001},"head":{"ref":"pip/v2/case","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repo":{"id":111,"full_name":"foreign/repo"}},"base":{"ref":"main","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#,
+        r#"{"id":9001,"number":77,"state":"open","draft":true,"merged":false,"mergeable":true,"mergeable_state":"clean","user":{"id":1001},"head":{"ref":"pip/case","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repo":{"id":111,"full_name":"foreign/repo"}},"base":{"ref":"main","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#,
     ));
     assert!(matches!(
         reader(transport).read_pull_request("owner", "repo", 222, 77),
@@ -276,7 +276,7 @@ fn pull_request_evidence_rejects_wrong_repository_head_and_duplicate_attempts() 
 
     let transport = FakeTransport::default();
     transport.push(response(
-        r#"{"id":9001,"number":77,"state":"open","draft":true,"merged":false,"mergeable":null,"mergeable_state":"unknown","user":{"id":1001},"head":{"ref":"pip/v2/case","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repo":{"id":222,"full_name":"owner/repo"}},"base":{"ref":"main","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#,
+        r#"{"id":9001,"number":77,"state":"open","draft":true,"merged":false,"mergeable":null,"mergeable_state":"unknown","user":{"id":1001},"head":{"ref":"pip/case","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repo":{"id":222,"full_name":"owner/repo"}},"base":{"ref":"main","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#,
     ));
     transport.push(response(
         r#"{"total_count":2,"check_runs":[{"id":1,"name":"ci","head_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","status":"completed","conclusion":"success","started_at":null,"completed_at":null,"app":{"id":10}},{"id":1,"name":"ci","head_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","status":"completed","conclusion":"success","started_at":null,"completed_at":null,"app":{"id":10}}]}"#,

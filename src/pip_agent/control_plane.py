@@ -24,26 +24,26 @@ from .decision_reconciler import (
 MAX_REQUEST_BYTES = 16_384
 MAX_CONCURRENT_CLIENTS = 16
 SERVICE_UNIT_TEMPLATE = """[Unit]
-Description=Pip v2 isolated deterministic case writer
+Description=Pip isolated deterministic case writer
 After=local-fs.target
 
 [Service]
 Type=notify
 NotifyAccess=main
-User=pip-v2-control
-Group=pip-v2-control
+User=pip-control
+Group=pip-control
 SupplementaryGroups=@CALLER_GROUP@
-Environment=PYTHONPATH=/opt/pip-v2/current
+Environment=PYTHONPATH=/opt/pip/current
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONSAFEPATH=1
-ExecStart=/usr/local/bin/pip-v2-control serve --config /etc/pip-v2/control.json
+ExecStart=/usr/local/bin/pip-control serve --config /etc/pip/control.json
 Restart=on-failure
 RestartSec=5s
 TimeoutStartSec=15s
 UMask=0077
-StateDirectory=pip-v2
+StateDirectory=pip
 StateDirectoryMode=0700
-RuntimeDirectory=pip-v2
+RuntimeDirectory=pip
 RuntimeDirectoryMode=0755
 NoNewPrivileges=true
 PrivateTmp=true
@@ -69,23 +69,23 @@ SystemCallArchitectures=native
 WantedBy=multi-user.target
 """
 DECISION_SERVICE_UNIT_TEMPLATE = """[Unit]
-Description=Pip v2 exact-canary GitHub human-decision reconciler
-After=network-online.target pip-v2-control.service
+Description=Pip exact-canary GitHub human-decision reconciler
+After=network-online.target pip-control.service
 Wants=network-online.target
-Requires=pip-v2-control.service
+Requires=pip-control.service
 
 [Service]
 Type=oneshot
-User=pip-v2-control
-Group=pip-v2-control
+User=pip-control
+Group=pip-control
 SupplementaryGroups=@CALLER_GROUP@
-LoadCredential=github.token:/etc/pip-v2/github.token
-Environment=PYTHONPATH=/opt/pip-v2/current
+LoadCredential=github.token:/etc/pip/github.token
+Environment=PYTHONPATH=/opt/pip/current
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONSAFEPATH=1
-ExecStart=/usr/local/bin/pip-v2-control reconcile-once --config /etc/pip-v2/control.json --route-output /run/pip-v2/decision-route.json
+ExecStart=/usr/local/bin/pip-control reconcile-once --config /etc/pip/control.json --route-output /run/pip/decision-route.json
 UMask=0027
-StateDirectory=pip-v2
+StateDirectory=pip
 StateDirectoryMode=0700
 NoNewPrivileges=true
 PrivateTmp=true
@@ -111,7 +111,7 @@ SystemCallArchitectures=native
 WantedBy=multi-user.target
 """
 DECISION_TIMER_UNIT = """[Unit]
-Description=Poll the exact Pip v2 canary for authoritative GitHub decisions
+Description=Poll the exact Pip canary for authoritative GitHub decisions
 
 [Timer]
 OnActiveSec=2m
@@ -120,7 +120,7 @@ OnActiveSec=2m
 OnUnitActiveSec=5m
 RandomizedDelaySec=15s
 Persistent=true
-Unit=pip-v2-decision.service
+Unit=pip-decision.service
 
 [Install]
 WantedBy=timers.target
@@ -141,7 +141,7 @@ POLICY_KEYS = frozenset(
 
 
 class ControlPlaneError(RuntimeError):
-    """The isolated Pip v2 control plane rejected a request."""
+    """The isolated Pip control plane rejected a request."""
 
 
 def render_service_unit(caller_group: str) -> str:
@@ -401,7 +401,7 @@ def notify_systemd_ready() -> None:
         address = "\0" + address[1:]
     with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notifier:
         notifier.connect(address)
-        notifier.sendall(b"READY=1\nSTATUS=Pip v2 control socket ready")
+        notifier.sendall(b"READY=1\nSTATUS=Pip control socket ready")
 
 
 def _write_route_output(path: Path, payload: dict[str, Any], *, group_id: int) -> None:
@@ -465,7 +465,7 @@ def reconcile_once(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Pip v2 isolated case writer")
+    parser = argparse.ArgumentParser(description="Pip isolated case writer")
     commands = parser.add_subparsers(dest="command", required=True)
     serve = commands.add_parser("serve", help="Run the isolated writer service")
     serve.add_argument("--config", type=Path, required=True)

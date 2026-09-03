@@ -268,7 +268,7 @@ fn fixture_github() -> FixtureGitHub {
                 author_id: 202_880,
                 head_repository_id: 984_321,
                 head_repository: "marmot-protocol/mdk".into(),
-                head_branch: "pip/v2/repo-984321/issue-1240/workflow-1".into(),
+                head_branch: "pip/repo-984321/issue-1240/workflow-1".into(),
                 head_sha: "b".repeat(40),
                 base_branch: "master".into(),
                 base_sha: "a".repeat(40),

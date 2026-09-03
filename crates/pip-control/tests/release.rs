@@ -65,7 +65,7 @@ fn signature_tampering_artifact_drift_and_symlinks_fail_closed() {
     let skill = fixture
         .root
         .path()
-        .join("share/pip-v2/skills/planner/SKILL.md");
+        .join("share/pip/skills/planner/SKILL.md");
     fs::set_permissions(&skill, fs::Permissions::from_mode(0o644)).unwrap();
     fs::write(&skill, "drift\n").unwrap();
     fs::set_permissions(&skill, fs::Permissions::from_mode(0o444)).unwrap();
@@ -83,7 +83,7 @@ fn signature_tampering_artifact_drift_and_symlinks_fail_closed() {
     let skill = fixture
         .root
         .path()
-        .join("share/pip-v2/skills/planner/SKILL.md");
+        .join("share/pip/skills/planner/SKILL.md");
     fs::remove_file(&skill).unwrap();
     symlink("../../../../bin/pip-control", &skill).unwrap();
     assert!(matches!(
@@ -134,10 +134,10 @@ fn duplicate_paths_unknown_fields_and_aggregate_resource_drift_are_rejected() {
 fn deterministic_manifest_creation_and_offline_signing_form_a_verifiable_cohort() {
     let root = tempfile::tempdir().unwrap();
     fs::create_dir_all(root.path().join("bin")).unwrap();
-    fs::create_dir_all(root.path().join("share/pip-v2/contracts")).unwrap();
+    fs::create_dir_all(root.path().join("share/pip/contracts")).unwrap();
     fs::write(root.path().join("bin/pip-control"), b"binary\n").unwrap();
     fs::write(
-        root.path().join("share/pip-v2/contracts/planner.json"),
+        root.path().join("share/pip/contracts/planner.json"),
         b"{}\n",
     )
     .unwrap();
@@ -147,7 +147,7 @@ fn deterministic_manifest_creation_and_offline_signing_form_a_verifiable_cohort(
     )
     .unwrap();
     fs::set_permissions(
-        root.path().join("share/pip-v2/contracts/planner.json"),
+        root.path().join("share/pip/contracts/planner.json"),
         fs::Permissions::from_mode(0o444),
     )
     .unwrap();
@@ -171,7 +171,7 @@ fn deterministic_manifest_creation_and_offline_signing_form_a_verifiable_cohort(
             .iter()
             .map(|artifact| artifact.path.as_str())
             .collect::<Vec<_>>(),
-        ["bin/pip-control", "share/pip-v2/contracts/planner.json"]
+        ["bin/pip-control", "share/pip/contracts/planner.json"]
     );
 
     let bytes = serde_json::to_vec(&first).unwrap();
@@ -180,7 +180,7 @@ fn deterministic_manifest_creation_and_offline_signing_form_a_verifiable_cohort(
     let public_key = verifying_key(&signing_key).unwrap();
     verify_release(root.path(), &bytes, &signature, &public_key).unwrap();
 
-    let unsafe_file = root.path().join("share/pip-v2/contracts/unsafe.json");
+    let unsafe_file = root.path().join("share/pip/contracts/unsafe.json");
     fs::write(&unsafe_file, b"{}\n").unwrap();
     fs::set_permissions(&unsafe_file, fs::Permissions::from_mode(0o644)).unwrap();
     assert!(matches!(
@@ -193,11 +193,11 @@ fn deterministic_manifest_creation_and_offline_signing_form_a_verifiable_cohort(
 fn systemd_instance_template_names_are_safe_release_artifacts() {
     let root = tempfile::tempdir().unwrap();
     fs::create_dir_all(root.path().join("bin")).unwrap();
-    fs::create_dir_all(root.path().join("share/pip-v2/systemd")).unwrap();
+    fs::create_dir_all(root.path().join("share/pip/systemd")).unwrap();
     let binary = root.path().join("bin/pip-control");
     let unit = root
         .path()
-        .join("share/pip-v2/systemd/pip-v2-controller@.service");
+        .join("share/pip/systemd/pip-controller@.service");
     fs::write(&binary, b"binary\n").unwrap();
     fs::write(&unit, b"[Service]\n").unwrap();
     fs::set_permissions(&binary, fs::Permissions::from_mode(0o555)).unwrap();
@@ -208,7 +208,7 @@ fn systemd_instance_template_names_are_safe_release_artifacts() {
         manifest
             .artifacts
             .iter()
-            .any(|artifact| artifact.path.ends_with("pip-v2-controller@.service"))
+            .any(|artifact| artifact.path.ends_with("pip-controller@.service"))
     );
 }
 
@@ -222,9 +222,9 @@ struct Fixture {
 fn release_fixture() -> Fixture {
     let root = tempfile::tempdir().unwrap();
     fs::create_dir_all(root.path().join("bin")).unwrap();
-    fs::create_dir_all(root.path().join("share/pip-v2/skills/planner")).unwrap();
+    fs::create_dir_all(root.path().join("share/pip/skills/planner")).unwrap();
     let binary = root.path().join("bin/pip-control");
-    let skill = root.path().join("share/pip-v2/skills/planner/SKILL.md");
+    let skill = root.path().join("share/pip/skills/planner/SKILL.md");
     fs::write(&binary, b"fixture rust binary\n").unwrap();
     fs::write(&skill, b"# Planner fixture\n").unwrap();
     fs::set_permissions(&binary, fs::Permissions::from_mode(0o555)).unwrap();
@@ -237,7 +237,7 @@ fn release_fixture() -> Fixture {
             mode: 0o555,
         },
         ArtifactManifest {
-            path: "share/pip-v2/skills/planner/SKILL.md".into(),
+            path: "share/pip/skills/planner/SKILL.md".into(),
             sha256: digest(b"# Planner fixture\n"),
             mode: 0o444,
         },

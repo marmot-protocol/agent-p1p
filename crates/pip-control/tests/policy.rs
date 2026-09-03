@@ -7,9 +7,12 @@ fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
     assert_eq!(policy.repository.id, 1_055_628_515);
     assert_eq!(policy.repository.full_name(), "marmot-protocol/mdk");
     assert_eq!(policy.repository.default_branch, "master");
-    assert_eq!(policy.checkout, "/var/lib/pip-v2/repositories/mdk");
-    assert_eq!(policy.workspace, "/var/lib/pip-v2/worktrees/mdk");
-    assert_eq!(policy.artifacts, "/var/lib/pip-v2/artifacts/mdk");
+    assert_eq!(policy.checkout, "/var/lib/pip/repositories/mdk");
+    assert_eq!(policy.workspace, "/var/lib/pip/worktrees/mdk");
+    assert_eq!(policy.artifacts, "/var/lib/pip/artifacts/mdk");
+    assert!(policy.workspace_storage.require_distinct_filesystem);
+    assert_eq!(policy.workspace_storage.minimum_free_bytes, 536_870_912_000);
+    assert_eq!(policy.workspace_storage.terminal_retention_seconds, 86_400);
     assert!(!policy.intake.enabled);
     assert!(policy.intake.paused);
     assert!(!policy.dispatch_enabled);
@@ -128,4 +131,13 @@ fn policy_rejects_unknown_fields_model_fallback_and_shadow_merge_authority() {
         load_repository_policy(&serde_json::to_vec(&value).unwrap()),
         Err(PolicyError::Invalid)
     ));
+
+    for field in ["minimum_free_bytes", "terminal_retention_seconds"] {
+        let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+        value["workspace_storage"][field] = serde_json::json!(0);
+        assert!(matches!(
+            load_repository_policy(&serde_json::to_vec(&value).unwrap()),
+            Err(PolicyError::Invalid)
+        ));
+    }
 }

@@ -12,12 +12,12 @@ dependencies = [
 ]
 
 [project.scripts]
-pip-v2-bootstrap = "pip_agent.bootstrap:main"
-pip-v2-control = "pip_agent.control_plane:main"
-pip-v2-cursor = "pip_agent.cursor_adapter:main"
-pip-v2-fixture = "pip_agent.offline_fixture:main"
-pip-v2-intake = "pip_agent.intake:main"
-pip-v2-route-consumer = "pip_agent.route_consumer:main"
+pip-bootstrap = "pip_agent.bootstrap:main"
+pip-control = "pip_agent.control_plane:main"
+pip-cursor = "pip_agent.cursor_adapter:main"
+pip-fixture = "pip_agent.offline_fixture:main"
+pip-intake = "pip_agent.intake:main"
+pip-route-consumer = "pip_agent.route_consumer:main"
 
 [dependency-groups]
 dev = [

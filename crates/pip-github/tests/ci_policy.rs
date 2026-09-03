@@ -109,7 +109,7 @@ fn evidence(
             author_id: 10,
             head_repository_id: 984_321,
             head_repository: "owner/repo".into(),
-            head_branch: "pip/v2/issue-42".into(),
+            head_branch: "pip/issue-42".into(),
             head_sha: "b".repeat(40),
             base_branch: "master".into(),
             base_sha: "a".repeat(40),

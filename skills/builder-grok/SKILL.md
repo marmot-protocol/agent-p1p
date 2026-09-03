@@ -1,6 +1,6 @@
 ---
 name: builder-grok
-description: Use when implementing an approved Pip v2 plan with Grok.
+description: Use when implementing an approved Pip plan with Grok.
 version: 0.7.0
 author: agent-p1p
 license: MIT

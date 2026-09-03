@@ -42,7 +42,7 @@ cargo_lock_sha256=$(shasum -a 256 Cargo.lock | awk '{print $1}')
 output_parent=$(dirname -- "$output")
 mkdir -p -- "$output_parent"
 output_parent=$(cd -- "$output_parent" && pwd -P)
-temporary=$(mktemp -d "$output_parent/.pip-v2-release.XXXXXX")
+temporary=$(mktemp -d "$output_parent/.pip-release.XXXXXX")
 cleanup() {
   if [[ -n ${temporary:-} && -d $temporary ]]; then
     chmod -R u+w -- "$temporary" 2>/dev/null || true
@@ -53,13 +53,13 @@ trap cleanup EXIT
 
 cargo build --release --locked -p pip-control
 release_root="$temporary/root"
-install -d -m 0755 "$release_root/bin" "$release_root/share/pip-v2" "$release_root/share/pip-v2/docs"
+install -d -m 0755 "$release_root/bin" "$release_root/share/pip" "$release_root/share/pip/docs"
 install -m 0555 target/release/pip-control "$release_root/bin/pip-control"
-cp -R skills "$release_root/share/pip-v2/skills"
-cp -R config/target "$release_root/share/pip-v2/config"
-cp -R migration/target-v1 "$release_root/share/pip-v2/contracts"
-cp -R packaging/systemd "$release_root/share/pip-v2/systemd"
-cp docs/worker-result-contracts.md "$release_root/share/pip-v2/docs/worker-result-contracts.md"
+cp -R skills "$release_root/share/pip/skills"
+cp -R config/target "$release_root/share/pip/config"
+cp -R migration/target-v1 "$release_root/share/pip/contracts"
+cp -R packaging/systemd "$release_root/share/pip/systemd"
+cp docs/worker-result-contracts.md "$release_root/share/pip/docs/worker-result-contracts.md"
 find "$release_root/share" -type d -exec chmod 0555 {} +
 find "$release_root/share" -type f -exec chmod 0444 {} +
 chmod 0555 "$release_root/bin"

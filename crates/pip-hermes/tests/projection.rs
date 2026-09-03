@@ -198,7 +198,7 @@ fn direct_cursor_and_untyped_workspaces_never_reach_hermes() {
     ));
 
     let mut untyped = spec();
-    untyped.workspace = "/var/lib/pip-v2/worktrees/mdk".into();
+    untyped.workspace = "/var/lib/pip/worktrees/mdk".into();
     assert!(matches!(
         projector.project(&untyped, &[]),
         Err(ProjectionError::InvalidSpec)

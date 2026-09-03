@@ -12,7 +12,7 @@ from .control_plane import ControlPlaneError, control_request
 
 
 class IntakeError(RuntimeError):
-    """An issue is not authorized for Pip v2 intake."""
+    """An issue is not authorized for Pip intake."""
 
 
 @dataclass(frozen=True)
@@ -39,7 +39,7 @@ def authorize_issue(
     if not isinstance(repository, str) or not repository:
         raise IntakeError("repository configuration is invalid")
     if label != "pip-ok":
-        raise IntakeError("Pip v2 intake label must be pip-ok")
+        raise IntakeError("Pip intake label must be pip-ok")
     if type(number) is not int or number < 1:
         raise IntakeError("issue number is invalid")
     if number in excluded:
@@ -95,9 +95,9 @@ def planner_task_command(
     candidate: IntakeCandidate, config: Mapping[str, Any]
 ) -> list[str]:
     if config.get("new_intake_enabled") is not True:
-        raise IntakeError("new Pip v2 intake is disabled")
+        raise IntakeError("new Pip intake is disabled")
     if config.get("dispatch_enabled") is not True:
-        raise IntakeError("Pip v2 dispatch is disabled")
+        raise IntakeError("Pip dispatch is disabled")
     canary_issue = config.get("canary_issue_number")
     if type(canary_issue) is not int or canary_issue != candidate.issue_number:
         raise IntakeError("dispatch requires an exact one-issue canary binding")
@@ -141,9 +141,9 @@ def planner_task_command(
         "--workspace",
         "scratch",
         "--idempotency-key",
-        f"pip-v2:{candidate.repository}:{candidate.issue_number}:plan-v1",
+        f"pip:{candidate.repository}:{candidate.issue_number}:plan-v1",
         "--created-by",
-        "pip-v2-intake",
+        "pip-intake",
         "--skill",
         "workflow-contract",
         "--skill",
@@ -265,7 +265,7 @@ def _gh_json(endpoint: str, *, paginate: bool = False) -> Any:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Authorize one Pip v2 GitHub issue")
+    parser = argparse.ArgumentParser(description="Authorize one Pip GitHub issue")
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--issue", type=int, required=True)
     parser.add_argument("--database", type=Path, help=argparse.SUPPRESS)

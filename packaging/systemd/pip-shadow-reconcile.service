@@ -1,15 +1,15 @@
 [Unit]
-Description=Pip v2 non-dispatching GitHub reconciliation
+Description=Pip non-dispatching GitHub reconciliation
 Documentation=https://github.com/marmot-protocol/agent-p1p
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-User=pip-v2-control
-Group=pip-v2-control
-LoadCredential=github.token:/etc/pip-v2/github.token
-ExecStart=/opt/pip-v2/current/bin/pip-control shadow-reconcile --policy /etc/pip-v2/repositories/mdk.json --github-token %d/github.token
+User=pip-control
+Group=pip-control
+LoadCredential=github.token:/etc/pip/github.token
+ExecStart=/opt/pip/current/bin/pip-control shadow-reconcile --policy /etc/pip/repositories/mdk.json --github-token %d/github.token
 UMask=0077
 NoNewPrivileges=yes
 PrivateDevices=yes

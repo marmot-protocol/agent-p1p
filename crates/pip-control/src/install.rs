@@ -149,7 +149,7 @@ pub fn install_host_release(
     let mut lifecycle = SystemdLifecycle::new(
         options.clone(),
         layout.state_root.join("ledger.db"),
-        layout.unit_root.join("pip-v2-shadow-reconcile.timer"),
+        layout.unit_root.join("pip-shadow-reconcile.timer"),
     );
     install_release_inner(
         cohort,
@@ -192,41 +192,41 @@ fn install_release_inner(
 
     let release_id = hex_digest(&Sha256::digest(&manifest_bytes));
     let release_dir = layout.install_root.join("releases").join(&release_id);
-    let service_target = layout.unit_root.join("pip-v2-shadow-reconcile.service");
-    let timer_target = layout.unit_root.join("pip-v2-shadow-reconcile.timer");
-    let controller_service_target = layout.unit_root.join("pip-v2-controller@.service");
-    let controller_timer_target = layout.unit_root.join("pip-v2-controller@.timer");
-    let direct_service_target = layout.unit_root.join("pip-v2-direct-worker@.service");
-    let direct_timer_target = layout.unit_root.join("pip-v2-direct-worker@.timer");
-    let gateway_service_target = layout.unit_root.join("pip-v2-hermes-gateway.service");
+    let service_target = layout.unit_root.join("pip-shadow-reconcile.service");
+    let timer_target = layout.unit_root.join("pip-shadow-reconcile.timer");
+    let controller_service_target = layout.unit_root.join("pip-controller@.service");
+    let controller_timer_target = layout.unit_root.join("pip-controller@.timer");
+    let direct_service_target = layout.unit_root.join("pip-direct-worker@.service");
+    let direct_timer_target = layout.unit_root.join("pip-direct-worker@.timer");
+    let gateway_service_target = layout.unit_root.join("pip-hermes-gateway.service");
     let ledger_target = layout.state_root.join("ledger.db");
     let current = layout.install_root.join("current");
     let service_bytes = read_regular(
-        &source_root.join("share/pip-v2/systemd/pip-v2-shadow-reconcile.service"),
+        &source_root.join("share/pip/systemd/pip-shadow-reconcile.service"),
         1024 * 1024,
     )?;
     let timer_bytes = read_regular(
-        &source_root.join("share/pip-v2/systemd/pip-v2-shadow-reconcile.timer"),
+        &source_root.join("share/pip/systemd/pip-shadow-reconcile.timer"),
         1024 * 1024,
     )?;
     let controller_service_bytes = read_regular(
-        &source_root.join("share/pip-v2/systemd/pip-v2-controller@.service"),
+        &source_root.join("share/pip/systemd/pip-controller@.service"),
         1024 * 1024,
     )?;
     let controller_timer_bytes = read_regular(
-        &source_root.join("share/pip-v2/systemd/pip-v2-controller@.timer"),
+        &source_root.join("share/pip/systemd/pip-controller@.timer"),
         1024 * 1024,
     )?;
     let direct_service_bytes = read_regular(
-        &source_root.join("share/pip-v2/systemd/pip-v2-direct-worker@.service"),
+        &source_root.join("share/pip/systemd/pip-direct-worker@.service"),
         1024 * 1024,
     )?;
     let direct_timer_bytes = read_regular(
-        &source_root.join("share/pip-v2/systemd/pip-v2-direct-worker@.timer"),
+        &source_root.join("share/pip/systemd/pip-direct-worker@.timer"),
         1024 * 1024,
     )?;
     let gateway_service_bytes = read_regular(
-        &source_root.join("share/pip-v2/systemd/pip-v2-hermes-gateway.service"),
+        &source_root.join("share/pip/systemd/pip-hermes-gateway.service"),
         1024 * 1024,
     )?;
 
@@ -360,7 +360,7 @@ struct SystemdLifecycle {
 }
 
 impl SystemdLifecycle {
-    const TIMER: &'static str = "pip-v2-shadow-reconcile.timer";
+    const TIMER: &'static str = "pip-shadow-reconcile.timer";
 
     fn new(options: HostInstallOptions, ledger: PathBuf, timer_path: PathBuf) -> Self {
         Self {
@@ -503,7 +503,7 @@ fn cohort_policies(
     manifest: &ReleaseManifest,
     layout: &InstallLayout,
 ) -> Result<Vec<CohortPolicy>, InstallError> {
-    const PREFIX: &str = "share/pip-v2/config/repositories/";
+    const PREFIX: &str = "share/pip/config/repositories/";
     let mut policies = Vec::new();
     for artifact in &manifest.artifacts {
         let Some(name) = artifact.path.strip_prefix(PREFIX) else {

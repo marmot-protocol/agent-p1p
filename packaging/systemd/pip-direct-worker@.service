@@ -1,0 +1,47 @@
+[Unit]
+Description=Pip credential-free direct worker cycle for %i
+Documentation=https://github.com/marmot-protocol/agent-p1p
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/var/lib/pip/worktrees
+ConditionPathIsDirectory=/var/lib/pip/provider-home
+ConditionPathIsMountPoint=/var/lib/pip/worktrees
+
+[Service]
+Type=oneshot
+User=pip-worker
+Group=pip-control
+Environment=HOME=/var/lib/pip/provider-home
+Environment=XDG_CONFIG_HOME=/var/lib/pip/provider-home/config
+Environment=XDG_DATA_HOME=/var/lib/pip/provider-home/data
+Environment=XDG_STATE_HOME=/var/lib/pip/provider-home/state
+Environment=XDG_CACHE_HOME=/var/lib/pip/provider-home/cache
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/var/lib/pip/provider-home
+ExecStart=/opt/pip/current/bin/pip-control direct-worker-cycle --policy /etc/pip/repositories/%i.json --direct-queue /var/lib/pip/direct-queue --cursor cursor-agent --git git --skills-root /opt/pip/current/share/pip/skills
+UMask=0077
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+ReadOnlyPaths=/opt/pip/current /etc/pip/repositories /var/lib/pip/direct-queue/inbox
+ReadWritePaths=/var/lib/pip/worktrees /var/lib/pip/artifacts /var/lib/pip/provider-home /var/lib/pip/direct-queue/results
+InaccessiblePaths=/var/lib/pip/ledger.db /var/lib/pip/hermes /var/lib/pip/repositories /var/lib/pip/direct-queue/archive
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+StandardOutput=journal
+StandardError=journal

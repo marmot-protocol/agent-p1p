@@ -424,15 +424,15 @@ def _notify_validated_final(board: str, result: dict[str, Any], runner: Runner) 
             "--board",
             board,
             "create",
-            f"Pip v2: {outcome} for MDK PR #{pr_number}",
+            f"Pip: {outcome} for MDK PR #{pr_number}",
             "--body",
             disposition_body,
             "--idempotency-key",
-            f"pip-v2-final-disposition:{result['route_id']}:{outcome}:{pr_number}:{head}",
+            f"pip-final-disposition:{result['route_id']}:{outcome}:{pr_number}:{head}",
             "--initial-status",
             "blocked",
             "--created-by",
-            "pip-v2-router",
+            "pip-router",
             "--max-retries",
             "1",
             "--json",
@@ -509,7 +509,7 @@ def _notify_held_result(board: str, result: dict[str, Any], runner: Runner) -> s
     }
     body = (
         json.dumps(binding, sort_keys=True)
-        + "\nPip v2 stopped at a durable non-success outcome. Human attention is required; "
+        + "\nPip stopped at a durable non-success outcome. Human attention is required; "
         "no downstream worker was released."
     )
     created = runner(
@@ -519,15 +519,15 @@ def _notify_held_result(board: str, result: dict[str, Any], runner: Runner) -> s
             "--board",
             board,
             "create",
-            f"Pip v2 held: {outcome} for {result['case_id']}",
+            f"Pip held: {outcome} for {result['case_id']}",
             "--body",
             body,
             "--idempotency-key",
-            f"pip-v2-held:{result['route_id']}:{task_id}:{outcome}",
+            f"pip-held:{result['route_id']}:{task_id}:{outcome}",
             "--initial-status",
             "blocked",
             "--created-by",
-            "pip-v2-router",
+            "pip-router",
             "--max-retries",
             "1",
             "--json",

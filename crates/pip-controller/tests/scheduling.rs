@@ -36,8 +36,8 @@ fn role(
 fn policy() -> WorkflowPolicy {
     WorkflowPolicy::new(
         "pip-mdk",
-        "/var/lib/pip-v2/worktrees/mdk",
-        "pip/v2/",
+        "/var/lib/pip/worktrees/mdk",
+        "pip/",
         vec![
             role(
                 WorkerRole::Planner,
@@ -127,7 +127,7 @@ fn planner_and_builder_dispatches_are_blocked_behind_controller_gates() {
     assert_eq!(worker.assignee, "planner");
     assert_eq!(
         worker.workspace,
-        "worktree:/var/lib/pip-v2/worktrees/mdk/repo-984321-issue-1240-workflow-1"
+        "worktree:/var/lib/pip/worktrees/mdk/repo-984321-issue-1240-workflow-1"
     );
     assert_eq!(worker.model, "gpt-5.6-sol");
     assert_eq!(worker.body["state_revision"], 8);
@@ -156,16 +156,16 @@ fn planner_and_builder_dispatches_are_blocked_behind_controller_gates() {
     assert_eq!(direct.model, "composer-2.5");
     assert_eq!(
         direct.workspace,
-        "/var/lib/pip-v2/worktrees/mdk/repo-984321-issue-1240-workflow-1"
+        "/var/lib/pip/worktrees/mdk/repo-984321-issue-1240-workflow-1"
     );
     assert_eq!(builder[0].worker_body["remediation_round"], 2);
     assert_eq!(
         builder[0].worker_body["assigned_branch"],
-        "pip/v2/repo-984321/issue-1240/workflow-1"
+        "pip/repo-984321/issue-1240/workflow-1"
     );
     assert_eq!(
         builder[0].worker_body["assigned_worktree"],
-        "/var/lib/pip-v2/worktrees/mdk/repo-984321-issue-1240-workflow-1"
+        "/var/lib/pip/worktrees/mdk/repo-984321-issue-1240-workflow-1"
     );
     assert_eq!(
         builder[0].worker_body["requested_model"],
@@ -251,7 +251,7 @@ fn role_policy_rejects_duplicates_missing_skills_and_model_fallbacks() {
         WorkflowPolicy::new(
             "pip-mdk",
             "relative/workspaces/mdk",
-            "pip/v2/",
+            "pip/",
             policy().roles().to_vec()
         ),
         Err(DispatchError::InvalidPolicy)
@@ -260,21 +260,21 @@ fn role_policy_rejects_duplicates_missing_skills_and_model_fallbacks() {
     let mut roles = policy().roles().to_vec();
     roles.push(roles[0].clone());
     assert!(matches!(
-        WorkflowPolicy::new("pip-mdk", "/var/lib/pip-v2/worktrees/mdk", "pip/v2/", roles),
+        WorkflowPolicy::new("pip-mdk", "/var/lib/pip/worktrees/mdk", "pip/", roles),
         Err(DispatchError::InvalidPolicy)
     ));
 
     let mut roles = policy().roles().to_vec();
     roles[1].skills = vec!["builder-grok".into()];
     assert!(matches!(
-        WorkflowPolicy::new("pip-mdk", "/var/lib/pip-v2/worktrees/mdk", "pip/v2/", roles),
+        WorkflowPolicy::new("pip-mdk", "/var/lib/pip/worktrees/mdk", "pip/", roles),
         Err(DispatchError::InvalidPolicy)
     ));
 
     let mut roles = policy().roles().to_vec();
     roles[1].model = "auto".into();
     assert!(matches!(
-        WorkflowPolicy::new("pip-mdk", "/var/lib/pip-v2/worktrees/mdk", "pip/v2/", roles),
+        WorkflowPolicy::new("pip-mdk", "/var/lib/pip/worktrees/mdk", "pip/", roles),
         Err(DispatchError::InvalidPolicy)
     ));
 }

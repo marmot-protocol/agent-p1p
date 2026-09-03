@@ -27,7 +27,7 @@ def create_sticky_sentinel(board: str, route_id: str) -> str:
     if database.resolve().parent != board_dir.resolve():
         raise SentinelError("Kanban board database escaped its board directory")
 
-    idempotency_key = f"pip-v2:{route_id}:gate-sentinel"
+    idempotency_key = f"pip:{route_id}:gate-sentinel"
     task_id = "t_" + hashlib.sha256(idempotency_key.encode()).hexdigest()[:16]
     now = int(time.time())
     created_payload = json.dumps(
@@ -41,7 +41,7 @@ def create_sticky_sentinel(board: str, route_id: str) -> str:
         separators=(",", ":"),
     )
     blocked_payload = json.dumps(
-        {"reason": "permanent Pip v2 activation-gate sentinel", "kind": "needs_input"},
+        {"reason": "permanent Pip activation-gate sentinel", "kind": "needs_input"},
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -97,12 +97,12 @@ def create_sticky_sentinel(board: str, route_id: str) -> str:
                 """,
                 (
                     task_id,
-                    "Pip v2 activation-gate sentinel",
+                    "Pip activation-gate sentinel",
                     f"Permanent sticky sentinel for route {route_id}.",
                     None,
                     "blocked",
                     0,
-                    "pip-v2-router",
+                    "pip-router",
                     now,
                     "scratch",
                     idempotency_key,

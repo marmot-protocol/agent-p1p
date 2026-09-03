@@ -4,6 +4,14 @@
 
 **Purpose:** Describe what exists, not what the Rust target promises
 
+**Operational status:** Retired from `vault` on 2026-09-01 by explicit JG
+authorization. The services, timers, installed wheels, credentials, database,
+runtime route, `pip-mdk` board, and Pip-owned profile skill links were deleted
+without a deployment-data snapshot. The clean `pip-control` system identity
+was retained for the Rust installer. Python source and curated migration
+fixtures remain in this repository solely as migration evidence; there is no
+supported rollback to the Python runtime.
+
 The Python code is a substantial single-issue safety prototype. It contains
 useful contracts, state-machine ideas, evidence validation, and deployment
 hardening. It is not a generic repository workflow engine and must not be

@@ -1,6 +1,6 @@
 ---
 name: final-reviewer
-description: Use for holistic final adjudication of a Pip v2 case.
+description: Use for holistic final adjudication of a Pip case.
 version: 0.3.0
 author: agent-p1p
 license: MIT

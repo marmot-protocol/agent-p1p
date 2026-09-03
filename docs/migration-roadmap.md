@@ -256,12 +256,17 @@ the MDK shadow canary does not itself authorize merge or another repository.
 
 ## Legacy retirement
 
-After Rust cutover and the approved soak:
+The original plan placed retirement after Rust cutover and soak. JG explicitly
+authorized early retirement on 2026-09-01 and waived retention of the deployed
+Python data. The `vault` services, timers, wheels, credentials, database, route,
+`pip-mdk` board, and Pip-owned profile skill links were deleted. The
+`pip-control` system identity was retained because it already satisfies the
+Rust installer contract. There is no Python runtime rollback path.
 
-- stop and disable legacy services;
-- snapshot the Python database, units, policy, installed wheel/source
-  descriptors, profiles, and board state;
+The remaining source-retirement obligations are:
+
 - retain the exact Python source and reference fixtures;
-- remove credentials from legacy service access;
-- document the supported rollback window; and
-- delete no historical artifacts or infrastructure without explicit approval.
+- keep Python excluded from the target build and release;
+- use only curated fixtures as parity evidence; and
+- remove the Python source only after the Rust canary no longer needs it as a
+  migration reference and JG explicitly authorizes that repository change.

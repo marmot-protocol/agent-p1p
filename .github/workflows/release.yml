@@ -43,7 +43,7 @@ jobs:
         run: |
           built_at=$(git show -s --format=%cI "$GITHUB_SHA")
           scripts/build-rust-release.sh \
-            --output "$RUNNER_TEMP/pip-v2-release" \
+            --output "$RUNNER_TEMP/pip-release" \
             --version "$RELEASE_VERSION" \
             --built-at "$built_at" \
             --builder-identity "github-actions:${GITHUB_REPOSITORY}@${GITHUB_SHA}" \
@@ -51,14 +51,14 @@ jobs:
             --public-key "$RUNNER_TEMP/release-public.key"
           source_date_epoch=$(git show -s --format=%ct "$GITHUB_SHA")
           tar --sort=name --mtime="@$source_date_epoch" --owner=0 --group=0 --numeric-owner \
-            -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/pip-v2-release.tar.gz" pip-v2-release
-          sha256sum "$RUNNER_TEMP/pip-v2-release.tar.gz" > "$RUNNER_TEMP/SHA256SUMS"
+            -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/pip-release.tar.gz" pip-release
+          sha256sum "$RUNNER_TEMP/pip-release.tar.gz" > "$RUNNER_TEMP/SHA256SUMS"
       - name: Upload immutable cohort envelope
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: pip-v2-${{ github.sha }}
+          name: pip-${{ github.sha }}
           path: |
-            ${{ runner.temp }}/pip-v2-release.tar.gz
+            ${{ runner.temp }}/pip-release.tar.gz
             ${{ runner.temp }}/SHA256SUMS
           if-no-files-found: error
           retention-days: 30

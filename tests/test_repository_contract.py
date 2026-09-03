@@ -151,7 +151,7 @@ def test_required_repository_scaffold_exists() -> None:
     required = [
         ".github/workflows/ci.yml",
         "README.md",
-        "docs/pip-v2-architecture-plan.md",
+        "docs/pip-architecture-plan.md",
         "config/repositories/mdk.json",
         "schemas/case.schema.json",
         "schemas/common-result.schema.json",
@@ -169,6 +169,35 @@ def test_required_repository_scaffold_exists() -> None:
 
     missing = [path for path in required if not (ROOT / path).is_file()]
     assert missing == []
+
+
+def test_product_namespace_has_no_obsolete_version_suffix() -> None:
+    legacy_tokens = (
+        ("pip" + "-v2").encode(),
+        ("Pip" + " v2").encode(),
+        ("PIP" + "_V2").encode(),
+        ("pip" + "_v2").encode(),
+        ("pip" + "/v2/").encode(),
+    )
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    ).stdout.split(b"\0")
+    offenders: list[str] = []
+    for encoded in tracked:
+        if not encoded:
+            continue
+        relative = os.fsdecode(encoded)
+        path = ROOT / relative
+        if not path.is_file():
+            continue
+        payload = path.read_bytes()
+        if any(token in payload for token in legacy_tokens):
+            offenders.append(relative)
+
+    assert offenders == []
 
 
 def test_mdk_is_configured_as_shadow_merge_pilot() -> None:
@@ -628,7 +657,7 @@ def test_built_wheel_contains_contract_schemas(tmp_path: Path) -> None:
     assert "pip_agent/resources/canaries/mdk-1240-plan-v1.json" not in names
     assert "pip_agent/resources/manifests/roles/builder-grok.json" in names
     assert "pip_agent/resources/skills/builder-grok/SKILL.md" in names
-    unit = tmp_path / "pip-v2-control.service"
+    unit = tmp_path / "pip-control.service"
     subprocess.run(
         [
             sys.executable,
@@ -652,19 +681,19 @@ def test_built_wheel_contains_contract_schemas(tmp_path: Path) -> None:
 def test_control_plane_install_artifacts_are_hardened_and_packaged() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
     assert (
-        project["project"]["scripts"]["pip-v2-control"]
+        project["project"]["scripts"]["pip-control"]
         == "pip_agent.control_plane:main"
     )
 
     unit = render_service_unit("jeff")
     for directive in (
-        "User=pip-v2-control",
-        "Group=pip-v2-control",
+        "User=pip-control",
+        "Group=pip-control",
         "Type=notify",
         "NotifyAccess=main",
         "SupplementaryGroups=jeff",
-        "StateDirectory=pip-v2",
-        "RuntimeDirectory=pip-v2",
+        "StateDirectory=pip",
+        "RuntimeDirectory=pip",
         "ProtectSystem=strict",
         "ProtectHome=true",
         "NoNewPrivileges=true",
@@ -674,21 +703,21 @@ def test_control_plane_install_artifacts_are_hardened_and_packaged() -> None:
         "UMask=0077",
     ):
         assert directive in unit
-    assert "pip-v2-control serve --config /etc/pip-v2/control.json" in unit
+    assert "pip-control serve --config /etc/pip/control.json" in unit
 
     decision_unit = render_decision_service_unit("jeff")
     for directive in (
-        "User=pip-v2-control",
-        "Group=pip-v2-control",
+        "User=pip-control",
+        "Group=pip-control",
         "SupplementaryGroups=jeff",
         "Type=oneshot",
-        "StateDirectory=pip-v2",
+        "StateDirectory=pip",
         "ProtectHome=true",
         "NoNewPrivileges=true",
         "RestrictAddressFamilies=AF_INET AF_INET6",
-        "LoadCredential=github.token:/etc/pip-v2/github.token",
-        "pip-v2-control reconcile-once --config /etc/pip-v2/control.json",
-        "--route-output /run/pip-v2/decision-route.json",
+        "LoadCredential=github.token:/etc/pip/github.token",
+        "pip-control reconcile-once --config /etc/pip/control.json",
+        "--route-output /run/pip/decision-route.json",
     ):
         assert directive in decision_unit
     timer_unit = render_decision_timer_unit()
@@ -697,19 +726,19 @@ def test_control_plane_install_artifacts_are_hardened_and_packaged() -> None:
     assert "OnUnitActiveSec=5m" in timer_unit
     assert "OnUnitActiveSec=2m" not in timer_unit
     assert "Persistent=true" in timer_unit
-    assert "Unit=pip-v2-decision.service" in timer_unit
+    assert "Unit=pip-decision.service" in timer_unit
 
     route_unit = render_route_consumer_service("jeff", "jeff", Path("/home/jeff"))
     for directive in (
         "User=jeff",
         "Group=jeff",
-        "LoadCredential=github.token:/etc/pip-v2/github.token",
+        "LoadCredential=github.token:/etc/pip/github.token",
         "Type=oneshot",
         "NoNewPrivileges=true",
         "ProtectSystem=strict",
         "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
-        "pip-v2-route-consumer consume",
-        "--route /run/pip-v2/decision-route.json",
+        "pip-route-consumer consume",
+        "--route /run/pip/decision-route.json",
         "--board pip-mdk",
         "ReadWritePaths=/home/jeff/.hermes",
     ):
@@ -718,25 +747,25 @@ def test_control_plane_install_artifacts_are_hardened_and_packaged() -> None:
     assert "OnActiveSec=15s" in route_timer
     assert "OnBootSec=" not in route_timer
     assert "OnUnitActiveSec=15s" in route_timer
-    assert "Unit=pip-v2-route-consumer.service" in route_timer
+    assert "Unit=pip-route-consumer.service" in route_timer
 
     installer = ROOT / "scripts/install-control-plane.sh"
     subprocess.run(["bash", "-n", str(installer)], check=True)
     script = installer.read_text()
-    assert "pip-v2-control" in script
+    assert "pip-control" in script
     assert "useradd --system" in script
     assert "export PYTHONDONTWRITEBYTECODE=1 PYTHONSAFEPATH=1" in script
     assert "groupadd --system" in script
     assert "usermod" not in script
-    assert "pip-v2-control identity is not exclusively configured" in script
-    assert "userdel pip-v2-control" in script
-    assert "groupdel pip-v2-control" in script
+    assert "pip-control identity is not exclusively configured" in script
+    assert "userdel pip-control" in script
+    assert "groupdel pip-control" in script
     assert 'rm -rf -- "$RELEASE_DIR"' in script
-    assert "systemctl enable pip-v2-control.service" in script
-    assert "systemctl enable pip-v2-decision.timer" in script
-    assert "systemctl start pip-v2-decision.service" not in script
+    assert "systemctl enable pip-control.service" in script
+    assert "systemctl enable pip-decision.timer" in script
+    assert "systemctl start pip-decision.service" not in script
     assert "decision_reconciliation_pending" in script
-    assert "GITHUB_CREDENTIAL=/etc/pip-v2/github.token" in script
+    assert "GITHUB_CREDENTIAL=/etc/pip/github.token" in script
     assert "GitHub credential must be a root-owned mode-0600 regular file" in script
     assert "HAD_DECISION_ROUTE" in script
     assert "DECISION_ROUTE_REPLACED" in script
@@ -744,18 +773,18 @@ def test_control_plane_install_artifacts_are_hardened_and_packaged() -> None:
     assert script.index("existing decision route is unsafe") < script.index(
         "MUTATION_STARTED=1"
     )
-    assert script.index("systemctl stop pip-v2-route-consumer.timer") < script.index(
-        "mv -Tf /opt/pip-v2/current.new /opt/pip-v2/current"
+    assert script.index("systemctl stop pip-route-consumer.timer") < script.index(
+        "mv -Tf /opt/pip/current.new /opt/pip/current"
     )
     assert script.index("control-plane boundary validation failed") < script.rindex(
-        "systemctl start pip-v2-decision.timer"
+        "systemctl start pip-decision.timer"
     )
-    assert "systemctl enable pip-v2-route-consumer.timer" in script
-    assert "/etc/systemd/system/pip-v2-decision.service" in script
-    assert "/etc/systemd/system/pip-v2-decision.timer" in script
-    assert "/etc/systemd/system/pip-v2-route-consumer.service" in script
-    assert "/etc/systemd/system/pip-v2-route-consumer.timer" in script
-    assert "systemctl restart pip-v2-control.service" in script
+    assert "systemctl enable pip-route-consumer.timer" in script
+    assert "/etc/systemd/system/pip-decision.service" in script
+    assert "/etc/systemd/system/pip-decision.timer" in script
+    assert "/etc/systemd/system/pip-route-consumer.service" in script
+    assert "/etc/systemd/system/pip-route-consumer.timer" in script
+    assert "systemctl restart pip-control.service" in script
     assert "--installer-sha256" in script
     assert "installer SHA-256 mismatch" in script
     assert "installer must be a root-owned" in script
@@ -765,10 +794,10 @@ def test_control_plane_install_artifacts_are_hardened_and_packaged() -> None:
     assert "--sha256" in script
     assert "wheel SHA-256 mismatch" in script
     assert '[[ "$ISSUE" == "1240" ]]' in script
-    assert 'runuser -u "$CALLER" -- test -e /var/lib/pip-v2/cases.db' in script
+    assert 'runuser -u "$CALLER" -- test -e /var/lib/pip/cases.db' in script
     assert "control-plane boundary validation failed" in script
     assert "$CALLER_HOME/code" not in script
-    assert "/var/lib/pip-v2-router" not in script
+    assert "/var/lib/pip-router" not in script
     assert 'runuser -u "$CALLER" -- /usr/bin/env' in script
     assert "-m pip_agent.bootstrap" in script
     assert "CREATED_CURSOR_LINKS" in script

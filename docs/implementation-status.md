@@ -1,10 +1,10 @@
 # Rust implementation status
 
-**Snapshot date:** 2026-08-20
+**Snapshot date:** 2026-09-03
 **Activation state:** no live Rust intake or dispatch is authorized
 
 This file is the implementation inventory. The target behavior remains defined
-by [`pip-v2-architecture-plan.md`](pip-v2-architecture-plan.md); the migration
+by [`pip-architecture-plan.md`](pip-architecture-plan.md); the migration
 exit gates remain defined by [`migration-roadmap.md`](migration-roadmap.md).
 An entry is `implemented` only when an executable path and its local tests
 exist. It is not evidence of live-host installation or a completed canary.
@@ -14,13 +14,13 @@ exist. It is not evidence of live-host installation or a completed canary.
 | Boundary | Current implementation | Evidence boundary |
 |---|---|---|
 | Deterministic workflow | Exhaustive Rust states, events, effects, exact-head joins, remediation/elapsed-time/repeated-finding/provider-failure bounds, durable escalation, and shadow-only MDK disposition | Workspace tests and frozen fixtures |
-| Authoritative storage | SQLite schema v5, immutable webhook deliveries/events/evidence/runs/findings, current-case projection, durable outbox, leases, immutable direct attempts, transactional effect supersession, backup, migration, and crash injection | Workspace and disposable lifecycle tests |
-| Intake reads | Signed `issues/labeled` webhook ingestion with delivery-ID/payload-digest replay protection and a live exact-issue re-read, plus bounded polling recovery using numeric repository/actor identity, exclusions, explicit holds, policy validation, and concurrency limits | Adversarial fixture tests plus a read-only live GitHub observation; target ingress remains unconfigured |
+| Authoritative storage | SQLite schema v6, immutable webhook deliveries/events/evidence/runs/findings/workspace retirements, current-case projection, durable outbox, leases, immutable direct attempts, transactional effect supersession, backup, migration, and crash injection | Workspace and disposable lifecycle tests |
+| Intake reads | Signed `issues/labeled` webhook ingestion with delivery-ID/payload-digest replay protection and a live exact-issue re-read, plus bounded polling recovery using numeric repository/actor identity, exclusions, explicit holds, policy validation, and concurrency limits. A loopback-only HTTP receiver now verifies exact GitHub headers/HMAC and atomically spools raw bodies with delivery deduplication. | Adversarial fixture and HTTP/spool tests plus a read-only live GitHub observation; the isolated service/install boundary and spool-to-ledger consumer remain unconfigured |
 | Worker dispatch routing | Hermes-native roles receive controller-gated, idempotent board projections; direct roles become leased `RUN_DIRECT_WORKER` jobs and cross an immutable filesystem bridge to a separate worker identity; mixed reviews split one role to each path; both paths converge through the same result contract | Fake-runner, restart/recovery, mixed-review, systemd-boundary, and offline integration tests |
 | Worker contracts | Versioned planner, builder, two reviewer, and final-reviewer results bound to case, task, role, model, skills commit, plan, PR, and exact head | Contract fixtures and ingestion tests |
 | Worker evidence bundles | Every projected worker receives the complete ordered ledger history at the claimed state revision, including record digests and a reproducible root digest; final review includes the atomically committed GitHub preflight | Ledger, scheduling, dispatch-command, and exact-final-preflight tests |
 | CI reconciliation | Independent current and historical check/status evaluation on the ledger-bound PR head | Fixture and controller-cycle tests |
-| GitHub reads/writes | Bounded REST reads plus bounded GraphQL review-thread pagination; idempotent issue comments, controller-owned draft PRs, exact-head reviews, ready-for-review mutation, and guarded merge | Adapter and controller-cycle tests; MDK policy cannot enable the guarded path |
+| GitHub reads/writes | Bounded REST reads plus bounded GraphQL review-thread pagination; idempotent issue comments, controller-owned draft PRs, exact-head reviews, ready-for-review mutation, and guarded merge. Reviewer Apps use RS256 JWTs to mint repository-scoped, short-lived installation tokens each active controller cycle. | Adapter, App-auth, and controller-cycle tests; live App installation/permission evidence remains external and MDK policy cannot enable the guarded path |
 | Release/install | Signed source-bound release cohort, protected manual CI build/sign/upload workflow, exact action/image pins, artifact verification, content-addressed install, rollback, schema migration, isolated identities, hardened shadow timer, and inert active-runtime templates | Local tests and passing disposable-systemd clean install/reinstall/upgrade/rollback/restart gate; protected CI environment has not been provisioned or run |
 | Active controller | One `controller-cycle` command that ingests Hermes and isolated direct-worker results, reconciles CI and authorization, performs polling recovery intake, enforces all operational bounds, handles takeover, publishes branches/plans/PRs/reviews/dispositions, verifies final preflight, and routes only freshly authorized effects | Local fixture and restart tests; live activation remains unauthorized |
 | Final-review preflight | A durable observation effect joins the accepted plan/build/reviewer ledger, fresh issue/clarification and authorization evidence, exact numeric GitHub actor and role-stamped approvals, current head CI, clean draft-PR ownership/mergeability, and resolved review threads before final-review dispatch | State-machine, adapter, fixture, drift, and restart-safe lease tests |
@@ -29,8 +29,9 @@ exist. It is not evidence of live-host installation or a completed canary.
 | Draft PR publication | A review-ready builder result records only its clean local commit; after verified controller branch publication, the same durable effect creates or updates the stable case-owned draft PR and only then binds PR/head and releases independent CI observation | Initial/remediation identity, branch/PR outage retry, state-machine, and exact-head tests |
 | Branch publication | Builder tasks receive deterministic case-owned worktree and branch assignments but no GitHub credential; the controller uses a signed askpass executable plus systemd credential-file path, pins the sole push URL, disables repository hooks/filesystem monitors/credential helpers/proxies/HTTP headers, forces TLS, validates clean branch/head state, uses exact force-with-lease, verifies the remote SHA, and only then mutates the draft PR | Credential-path isolation, scope, URL-drift, real-bare-remote, race, retry, and controller-cycle tests |
 | Workspace allocation | Policy binds a canonical checkout, worktree root, artifact root, default branch, and branch prefix; dispatch fetches the policy-bound remote/default head, allocates the deterministic case worktree, and verifies exact clean branch/head state before projection | Real-Git checkout/worktree tests and production dispatch-boundary tests |
+| Workspace storage lifecycle | Policy requires a dedicated mounted worktree filesystem, a 500 GiB free-space reserve, and 24-hour terminal retention. The controller retires at most one eligible terminal worktree per cycle, excludes running direct attempts, refuses dirty/colliding paths, never forces Git, preserves branches, rechecks capacity, and records retired/absent outcomes immutably in schema v6. New intake/direct work/draft publication/dispatch stop below reserve; result/finalization paths remain available. | Fake-storage lifecycle tests, real-Git dirty/idempotent retirement test, ledger eligibility/immutability tests, and systemd mount contracts; target-host mount/probe remains required |
 | Hermes runtime bootstrap | `bootstrap-runtime` probes required CLI capabilities, creates/reprobes the repository board, writes only Pip-owned service-root/profile configuration, links canonical skills and shared auth, disables fallback/dangerous tools and per-profile dispatch, and verifies effective model/provider/reasoning/home values | Fake-CLI compatibility, ownership/drift, idempotency, and systemd-root tests |
-| Runtime isolation | Hermes workers see Hermes state plus read-only worktrees but not the ledger, direct artifacts, or provider home; direct workers use `pip-v2-worker`, see immutable inbox/worktrees/artifacts/provider state, and cannot open the ledger, Hermes state, repository cache, or credentials | Unit-file contracts, queue convergence tests, and disposable-systemd identity/directory lifecycle |
+| Runtime isolation | Hermes workers see Hermes state plus read-only worktrees but not the ledger, direct artifacts, or provider home; direct workers use `pip-worker`, see immutable inbox/worktrees/artifacts/provider state, and cannot open the ledger, Hermes state, repository cache, or credentials | Unit-file contracts, queue convergence tests, and disposable-systemd identity/directory lifecycle |
 | Guarded merge | An explicitly guarded/autonomous policy selects the merge method; the controller revalidates the complete final gate, marks the draft ready, revalidates, emits a separate merge effect, merges with expected-head protection, and verifies the recorded merge commit | Restart-convergence, shadow-disablement, state-machine, GraphQL, and mutation tests |
 | Human disposition | `HOLD_FOR_HUMAN`, `ESCALATE`, and shadow-ready effects publish idempotent provenance-marked issue or draft-PR comments; local completion, block, abandonment, and takeover effects commit evidence without writing after lost authorization | Mutation fixtures and transactional effect/evidence tests |
 | Provider retry control | Direct-provider failures are immutable attempts counted by Pip; Hermes tasks receive the policy retry limit and a terminal `gave_up` circuit breaker is converted to a Pip operational-bound escalation | Direct queue, Hermes projection, terminal-run, and escalation tests; live outage/recovery drill remains required |
@@ -51,13 +52,15 @@ exist. It is not evidence of live-host installation or a completed canary.
 The remaining gates require host-specific configuration or explicit authority;
 they are not claims that local adapter tests already proved production:
 
-1. Provision the canonical MDK checkout and provider/Hermes authentication
+1. Bind-mount the dedicated Pirate NVMe workspace storage at
+   `/var/lib/pip/worktrees`, then provision the canonical MDK checkout and provider/Hermes authentication
    under the installed service identities. Run `bootstrap-runtime` from the
    exact installed release and confirm the gateway observes the same root.
-2. Configure a trusted GitHub webhook ingress that preserves the raw payload and
-   `X-GitHub-Delivery`, `X-GitHub-Event`, and `X-Hub-Signature-256` values when
-   invoking `webhook-intake`. Provision its root-owned webhook secret. Polling
-   remains recovery, not the intended primary intake path.
+2. Complete the isolated service/install and spool-consumer boundary for the
+   loopback GitHub webhook receiver, then put a trusted TLS ingress in front of
+   it. Provision its root-owned webhook secret. Polling remains recovery, not
+   the intended primary intake path; a successfully spooled request is not yet
+   ledger ingestion.
 3. Populate and verify the three numeric GitHub actor identities and separately
    scoped credentials. Configure the actual required MDK CI contexts; the
    checked-in paused policy intentionally has none.
@@ -81,8 +84,8 @@ The active controller must not depend on an operator's personal
 `~/.hermes`. It uses a service-owned root:
 
 ```text
-pip-v2-control system identity
-  /var/lib/pip-v2/hermes
+pip-control system identity
+  /var/lib/pip/hermes
     Kanban database and board state
     managed profiles and canonical skill links
     shared authentication links provisioned outside the release
@@ -90,11 +93,18 @@ pip-v2-control system identity
 
 Both `HERMES_HOME` and `HERMES_KANBAN_HOME` are set to that root. The compatible
 Hermes gateway claims only Hermes-native tasks. Direct Cursor work is leased by
-the controller, written to `/var/lib/pip-v2/direct-queue/inbox`, executed by
-the separate `pip-v2-worker` identity, and returned through `results`; it is
+the controller, written to `/var/lib/pip/direct-queue/inbox`, executed by
+the separate `pip-worker` identity, and returned through `results`; it is
 never represented as a Hermes provider override. The controller alone records
 the attempt and ingests the result. Real-host compatibility and recovery
 evidence is still required before activation.
+
+The first exact-version compatibility review on 2026-09-03 targets Hermes
+`v2026.8.31` at commit
+`29112bef099274229cadff79cdff7bf7b99c4b77`. It corrected the adapter to use
+the immutable board `slug` instead of its display name and corrected the custom
+systemd gateway invocation to declare `--external-supervisor`. Installation and
+live service-identity probes on Pirate remain external evidence.
 
 Upstream references:
 
@@ -103,5 +113,8 @@ Upstream references:
 - [Hermes profiles guide](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/profiles.md)
 - [Hermes environment variables](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/reference/environment-variables.md)
 - [Hermes multi-gateway notes](https://github.com/NousResearch/hermes-agent/blob/main/docs/kanban/multi-gateway.md)
+- [Hermes v2026.8.31 release](https://github.com/NousResearch/hermes-agent/releases/tag/v2026.8.31)
+- [Pinned Kanban CLI source](https://github.com/NousResearch/hermes-agent/blob/29112bef099274229cadff79cdff7bf7b99c4b77/hermes_cli/kanban.py)
+- [Pinned gateway parser source](https://github.com/NousResearch/hermes-agent/blob/29112bef099274229cadff79cdff7bf7b99c4b77/hermes_cli/subcommands/gateway.py)
 - [GitHub GraphQL pull-request and review-thread schema](https://docs.github.com/en/graphql/reference/pulls)
 - [GitHub review rules, including the self-approval prohibition](https://docs.github.com/en/pull-requests/how-tos/review-pull-requests/approving-a-pull-request-with-required-reviews)

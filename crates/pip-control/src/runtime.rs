@@ -76,8 +76,8 @@ pub fn bootstrap_hermes_runtime_with<R: CommandRunner + Clone>(
         skills_root: skills_root.into(),
         auth_source: auth_source.into(),
         board: policy.board.clone(),
-        board_name: format!("Pip v2 - {repository}"),
-        board_description: format!("Pip v2 controlled shadow workflow for {repository}"),
+        board_name: format!("Pip - {repository}"),
+        board_description: format!("Pip controlled shadow workflow for {repository}"),
         profiles,
     })
     .map_err(Into::into)

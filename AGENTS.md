@@ -1,6 +1,6 @@
 # Repository instructions
 
-- Treat `docs/pip-v2-architecture-plan.md` as the target architecture.
+- Treat `docs/pip-architecture-plan.md` as the target architecture.
 - Implement the target control plane in Rust; retain Python only as a migration
   reference until parity and cutover gates pass.
 - Use strict TDD for executable behavior.

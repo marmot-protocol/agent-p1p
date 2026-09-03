@@ -114,7 +114,7 @@ def _comment_order(comment: dict[str, Any], field: str) -> tuple[datetime, int]:
 def _github_headers() -> dict[str, str]:
     headers = {
         "Accept": "application/vnd.github+json",
-        "User-Agent": "pip-v2-control/2",
+        "User-Agent": "pip-control/2",
         "X-GitHub-Api-Version": "2022-11-28",
     }
     credentials_directory = os.environ.get("CREDENTIALS_DIRECTORY")

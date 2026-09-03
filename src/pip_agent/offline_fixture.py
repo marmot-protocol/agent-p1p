@@ -196,7 +196,7 @@ def run_offline_fixture(database: Path, fault: Fault | None = None) -> dict[str,
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run Pip v2 offline workflow fixture")
+    parser = argparse.ArgumentParser(description="Run Pip offline workflow fixture")
     parser.add_argument("--database", type=Path)
     parser.add_argument(
         "--fault",
@@ -206,7 +206,7 @@ def main() -> int:
     if args.database:
         result = run_offline_fixture(args.database, args.fault)
     else:
-        with tempfile.TemporaryDirectory(prefix="pip-v2-fixture-") as directory:
+        with tempfile.TemporaryDirectory(prefix="pip-fixture-") as directory:
             result = run_offline_fixture(Path(directory) / "cases.db", args.fault)
     print(json.dumps(result, indent=2))
     return 0

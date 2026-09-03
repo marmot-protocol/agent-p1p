@@ -31,22 +31,22 @@ MAX_ROUTE_BYTES = 65_536
 PASSIVE_ACTIONS = {"wait", "stop", "continue", "request_explicit_command"}
 
 ROUTE_CONSUMER_SERVICE = """[Unit]
-Description=Pip v2 exact-canary Kanban router
-After=network-online.target pip-v2-control.service
+Description=Pip exact-canary Kanban router
+After=network-online.target pip-control.service
 Wants=network-online.target
-ConditionPathExists=/run/pip-v2/decision-route.json
+ConditionPathExists=/run/pip/decision-route.json
 
 [Service]
 Type=oneshot
 User=@CALLER@
 Group=@CALLER_GROUP@
-LoadCredential=github.token:/etc/pip-v2/github.token
+LoadCredential=github.token:/etc/pip/github.token
 Environment=HOME=@CALLER_HOME@
 Environment=PATH=@CALLER_HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
-Environment=PYTHONPATH=/opt/pip-v2/current
+Environment=PYTHONPATH=/opt/pip/current
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONSAFEPATH=1
-ExecStart=/usr/local/bin/pip-v2-route-consumer consume --route /run/pip-v2/decision-route.json --board pip-mdk --skills-repository-commit-file /opt/pip-v2/SOURCE.COMMIT
+ExecStart=/usr/local/bin/pip-route-consumer consume --route /run/pip/decision-route.json --board pip-mdk --skills-repository-commit-file /opt/pip/SOURCE.COMMIT
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
@@ -68,14 +68,14 @@ SystemCallArchitectures=native
 """
 
 ROUTE_CONSUMER_TIMER = """[Unit]
-Description=Poll Pip v2 exact-canary decision route
+Description=Poll Pip exact-canary decision route
 
 [Timer]
 OnActiveSec=15s
 OnUnitActiveSec=15s
 AccuracySec=1s
 Persistent=true
-Unit=pip-v2-route-consumer.service
+Unit=pip-route-consumer.service
 
 [Install]
 WantedBy=timers.target
@@ -159,7 +159,7 @@ def _list_canary_tasks(
         ["hermes", "kanban", "--board", board, "list", "--archived", "--json"]
     )
     if listed.returncode != 0:
-        raise RouteConsumerError("cannot list Pip v2 Kanban tasks")
+        raise RouteConsumerError("cannot list Pip Kanban tasks")
     try:
         payload = json.loads(listed.stdout)
     except json.JSONDecodeError as exc:
@@ -177,7 +177,7 @@ def _worker_pid(
 ) -> int | None:
     shown = runner(["hermes", "kanban", "--board", board, "show", task_id, "--json"])
     if shown.returncode != 0:
-        raise RouteConsumerError("cannot inspect running Pip v2 task")
+        raise RouteConsumerError("cannot inspect running Pip task")
     try:
         payload = json.loads(shown.stdout)
     except json.JSONDecodeError as exc:
@@ -252,7 +252,7 @@ def _terminate_worker(pid: int) -> None:
         identity is not None and _process_start(target) == identity
         for target, identity in identities.items()
     ):
-        raise RouteConsumerError("Pip v2 worker did not terminate")
+        raise RouteConsumerError("Pip worker did not terminate")
 
 
 def _archive_canary_tasks(
@@ -296,7 +296,7 @@ def _archive_canary_tasks(
         task["id"]
         for task in tasks
         if isinstance(task, dict)
-        and task.get("created_by") == "pip-v2-router"
+        and task.get("created_by") == "pip-router"
         and isinstance(task.get("body"), str)
         and '"case_id": "mdk#1240"' in task["body"]
         and not preserved(task["body"])
@@ -311,7 +311,7 @@ def _archive_canary_tasks(
         if task.get("id") in task_ids and task.get("status") == "running":
             pid = _worker_pid(board, task["id"], runner)
             if pid is None:
-                raise RouteConsumerError("running Pip v2 task has no worker PID")
+                raise RouteConsumerError("running Pip task has no worker PID")
             terminator(pid)
     command = [
         "hermes",
@@ -323,7 +323,7 @@ def _archive_canary_tasks(
     ]
     archived = runner(command)
     if archived.returncode != 0:
-        raise RouteConsumerError("cannot archive superseded Pip v2 Kanban tasks")
+        raise RouteConsumerError("cannot archive superseded Pip Kanban tasks")
     return task_ids
 
 
@@ -486,7 +486,7 @@ def consume_route(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Route Pip v2 decisions into Hermes Kanban"
+        description="Route Pip decisions into Hermes Kanban"
     )
     commands = parser.add_subparsers(dest="command", required=True)
     consume = commands.add_parser("consume")

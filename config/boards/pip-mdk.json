@@ -1,6 +1,6 @@
 {
   "slug": "pip-mdk",
-  "name": "Pip v2 — MDK Shadow Pilot",
+  "name": "Pip — MDK Shadow Pilot",
   "repository": "marmot-protocol/mdk",
   "intake_label": "pip-ok",
   "intake_enabled": false,

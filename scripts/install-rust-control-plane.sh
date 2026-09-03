@@ -26,8 +26,8 @@ done
 }
 [[ $(id -u) -eq 0 ]] || { echo "installer must run as root" >&2; exit 1; }
 
-exec 9>/run/lock/pip-v2-install.lock
-flock -n 9 || { echo "another Pip v2 installation is active" >&2; exit 1; }
+exec 9>/run/lock/pip-install.lock
+flock -n 9 || { echo "another Pip installation is active" >&2; exit 1; }
 
 [[ -d "$cohort/root" && ! -L "$cohort" && ! -L "$cohort/root" ]] || {
   echo "cohort must contain a real root directory" >&2
@@ -45,10 +45,11 @@ key_mode=$(stat -c '%a' "$public_key")
 systemctl_path=$(command -v systemctl)
 [[ -n "$systemctl_path" && -x "$systemctl_path" ]] || { echo "systemctl is unavailable" >&2; exit 1; }
 
-staging=$(mktemp -d /var/tmp/pip-v2-install.XXXXXX)
+staging=$(mktemp -d /var/tmp/pip-install.XXXXXX)
 created_paths=()
 control_user_created=false
 worker_user_created=false
+bootstrap_workspace_adopted=false
 installation_complete=false
 cleanup() {
   status=$?
@@ -62,14 +63,19 @@ cleanup() {
         cleanup_safe=false
       fi
     done
+    if [[ $bootstrap_workspace_adopted == true ]]; then
+      chown root:root /var/lib/pip/worktrees /var/lib/pip 2>/dev/null || true
+      chmod 0770 /var/lib/pip/worktrees 2>/dev/null || true
+      chmod 0755 /var/lib/pip 2>/dev/null || true
+    fi
     if [[ $worker_user_created == true && $cleanup_safe == true ]]; then
-      userdel pip-v2-worker >/dev/null 2>&1 || true
+      userdel pip-worker >/dev/null 2>&1 || true
     fi
     if [[ $control_user_created == true && $cleanup_safe == true ]]; then
-      userdel pip-v2-control >/dev/null 2>&1 || true
-      groupdel pip-v2-control >/dev/null 2>&1 || true
+      userdel pip-control >/dev/null 2>&1 || true
+      groupdel pip-control >/dev/null 2>&1 || true
     elif [[ $control_user_created == true ]]; then
-      echo "retained pip-v2-control because failed-install artifacts remain" >&2
+      echo "retained pip-control because failed-install artifacts remain" >&2
     fi
   fi
   exit "$status"
@@ -96,54 +102,94 @@ actual_binary_sha256=$(sha256sum "$staging/cohort/root/bin/pip-control" | awk '{
   exit 1
 }
 
-if ! getent passwd pip-v2-control >/dev/null; then
+if ! getent passwd pip-control >/dev/null; then
   useradd --system --user-group --no-create-home --home-dir /nonexistent \
-    --shell /usr/sbin/nologin pip-v2-control
+    --shell /usr/sbin/nologin pip-control
   control_user_created=true
 fi
 
-passwd_entry=$(getent passwd pip-v2-control)
+passwd_entry=$(getent passwd pip-control)
 IFS=: read -r account _ control_uid control_gid _ control_home control_shell <<<"$passwd_entry"
-[[ $account == pip-v2-control && $control_uid != 0 && $control_home == /nonexistent ]] || {
-  echo "pip-v2-control identity has an unsafe account definition" >&2
+[[ $account == pip-control && $control_uid != 0 && $control_home == /nonexistent ]] || {
+  echo "pip-control identity has an unsafe account definition" >&2
   exit 1
 }
 [[ $control_shell == /usr/sbin/nologin || $control_shell == /sbin/nologin ]] || {
-  echo "pip-v2-control must use a nologin shell" >&2
+  echo "pip-control must use a nologin shell" >&2
   exit 1
 }
-[[ ! -e $control_home ]] || { echo "pip-v2-control home must not exist" >&2; exit 1; }
-[[ $(id -G pip-v2-control) == "$control_gid" ]] || {
-  echo "pip-v2-control must not belong to supplementary groups" >&2
+[[ ! -e $control_home ]] || { echo "pip-control home must not exist" >&2; exit 1; }
+[[ $(id -G pip-control) == "$control_gid" ]] || {
+  echo "pip-control must not belong to supplementary groups" >&2
   exit 1
 }
 group_entry=$(getent group "$control_gid")
 IFS=: read -r control_group _ resolved_gid members <<<"$group_entry"
-[[ $control_group == pip-v2-control && $resolved_gid == "$control_gid" && -z $members ]] || {
-  echo "pip-v2-control primary group is unsafe" >&2
+[[ $control_group == pip-control && $resolved_gid == "$control_gid" && -z $members ]] || {
+  echo "pip-control primary group is unsafe" >&2
   exit 1
 }
 
-if ! getent passwd pip-v2-worker >/dev/null; then
-  useradd --system --gid pip-v2-control --no-create-home --home-dir /nonexistent \
-    --shell /usr/sbin/nologin pip-v2-worker
+if ! getent passwd pip-worker >/dev/null; then
+  useradd --system --gid pip-control --no-create-home --home-dir /nonexistent \
+    --shell /usr/sbin/nologin pip-worker
   worker_user_created=true
 fi
-worker_entry=$(getent passwd pip-v2-worker)
+worker_entry=$(getent passwd pip-worker)
 IFS=: read -r worker_account _ worker_uid worker_gid _ worker_home worker_shell <<<"$worker_entry"
-[[ $worker_account == pip-v2-worker && $worker_uid != 0 && $worker_uid != "$control_uid" &&
+[[ $worker_account == pip-worker && $worker_uid != 0 && $worker_uid != "$control_uid" &&
    $worker_gid == "$control_gid" && $worker_home == /nonexistent ]] || {
-  echo "pip-v2-worker identity has an unsafe account definition" >&2
+  echo "pip-worker identity has an unsafe account definition" >&2
   exit 1
 }
 [[ $worker_shell == /usr/sbin/nologin || $worker_shell == /sbin/nologin ]] || {
-  echo "pip-v2-worker must use a nologin shell" >&2
+  echo "pip-worker must use a nologin shell" >&2
   exit 1
 }
-[[ $(id -G pip-v2-worker) == "$control_gid" ]] || {
-  echo "pip-v2-worker must have only the control group" >&2
+[[ $(id -G pip-worker) == "$control_gid" ]] || {
+  echo "pip-worker must have only the control group" >&2
   exit 1
 }
+
+adopt_bootstrap_workspace_layout() {
+  local state_root=/var/lib/pip
+  local worktree_root=/var/lib/pip/worktrees
+
+  [[ -e $state_root || -L $state_root ]] || return 0
+  [[ $(stat -c '%u:%g:%a' "$state_root") == 0:0:755 ]] || return 0
+
+  [[ -d $state_root && ! -L $state_root && -d $worktree_root && ! -L $worktree_root ]] || {
+    echo "unsafe bootstrap workspace layout" >&2
+    exit 1
+  }
+  [[ $(stat -c '%u:%g:%a' "$worktree_root") == 0:0:770 ]] || {
+    echo "bootstrap worktree directory has unexpected ownership or mode" >&2
+    exit 1
+  }
+  mountpoint -q "$worktree_root" || {
+    echo "bootstrap worktree directory must be a mount point" >&2
+    exit 1
+  }
+  [[ $(stat -c '%d' "$state_root") != $(stat -c '%d' "$worktree_root") ]] || {
+    echo "bootstrap worktree storage must use a distinct filesystem" >&2
+    exit 1
+  }
+  [[ $(find "$state_root" -mindepth 1 -maxdepth 1 -printf '%f\n') == worktrees ]] || {
+    echo "bootstrap state directory contains unexpected entries" >&2
+    exit 1
+  }
+  if find "$worktree_root" -mindepth 1 -print -quit | grep -q .; then
+    echo "bootstrap worktree directory must be empty" >&2
+    exit 1
+  fi
+
+  chown "$control_uid:$control_gid" "$worktree_root" "$state_root"
+  chmod 0770 "$worktree_root"
+  chmod 0700 "$state_root"
+  bootstrap_workspace_adopted=true
+}
+
+adopt_bootstrap_workspace_layout
 
 ensure_directory() {
   path=$1
@@ -162,21 +208,21 @@ ensure_directory() {
   fi
 }
 
-ensure_directory /opt/pip-v2 root root 755
-ensure_directory /opt/pip-v2/releases root root 755
-ensure_directory /etc/pip-v2 root root 755
-ensure_directory /etc/pip-v2/repositories root root 755
+ensure_directory /opt/pip root root 755
+ensure_directory /opt/pip/releases root root 755
+ensure_directory /etc/pip root root 755
+ensure_directory /etc/pip/repositories root root 755
 ensure_directory /etc/systemd/system root root 755
-ensure_directory /var/lib/pip-v2 pip-v2-control pip-v2-control 700
-ensure_directory /var/lib/pip-v2/repositories pip-v2-control pip-v2-control 700
-ensure_directory /var/lib/pip-v2/worktrees pip-v2-control pip-v2-control 770
-ensure_directory /var/lib/pip-v2/artifacts pip-v2-control pip-v2-control 770
-ensure_directory /var/lib/pip-v2/provider-home pip-v2-worker pip-v2-control 700
-ensure_directory /var/lib/pip-v2/hermes pip-v2-control pip-v2-control 700
-ensure_directory /var/lib/pip-v2/direct-queue pip-v2-control pip-v2-control 750
-ensure_directory /var/lib/pip-v2/direct-queue/inbox pip-v2-control pip-v2-control 750
-ensure_directory /var/lib/pip-v2/direct-queue/results pip-v2-worker pip-v2-control 770
-ensure_directory /var/lib/pip-v2/direct-queue/archive pip-v2-control pip-v2-control 700
+ensure_directory /var/lib/pip pip-control pip-control 700
+ensure_directory /var/lib/pip/repositories pip-control pip-control 700
+ensure_directory /var/lib/pip/worktrees pip-control pip-control 770
+ensure_directory /var/lib/pip/artifacts pip-control pip-control 770
+ensure_directory /var/lib/pip/provider-home pip-worker pip-control 700
+ensure_directory /var/lib/pip/hermes pip-control pip-control 700
+ensure_directory /var/lib/pip/direct-queue pip-control pip-control 750
+ensure_directory /var/lib/pip/direct-queue/inbox pip-control pip-control 750
+ensure_directory /var/lib/pip/direct-queue/results pip-worker pip-control 770
+ensure_directory /var/lib/pip/direct-queue/archive pip-control pip-control 700
 
 "$staging/cohort/root/bin/pip-control" install-release \
   --cohort "$staging/cohort" \
@@ -186,10 +232,10 @@ ensure_directory /var/lib/pip-v2/direct-queue/archive pip-v2-control pip-v2-cont
   --systemctl "$systemctl_path" \
   --state-uid "$control_uid" \
   --state-gid "$control_gid" \
-  --install-root /opt/pip-v2 \
-  --config-root /etc/pip-v2 \
+  --install-root /opt/pip \
+  --config-root /etc/pip \
   --unit-root /etc/systemd/system \
-  --state-root /var/lib/pip-v2
+  --state-root /var/lib/pip
 
 installation_complete=true
 echo '{"ok":true,"intake_enabled":false,"dispatch_enabled":false,"timer_state":"preserved"}'

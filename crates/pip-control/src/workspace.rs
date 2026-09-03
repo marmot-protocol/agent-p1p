@@ -22,6 +22,7 @@ pub enum WorkspaceError {
     Checkout(CheckoutError),
     Allocation(AllocationError),
     Store(StoreError),
+    Lifecycle(crate::WorkspaceLifecycleError),
     MalformedRun(String),
 }
 
@@ -35,6 +36,7 @@ impl fmt::Display for WorkspaceError {
             Self::Checkout(error) => error.fmt(formatter),
             Self::Allocation(error) => error.fmt(formatter),
             Self::Store(error) => error.fmt(formatter),
+            Self::Lifecycle(error) => error.fmt(formatter),
             Self::MalformedRun(error) => write!(formatter, "malformed planner run: {error}"),
         }
     }
@@ -60,6 +62,12 @@ impl From<StoreError> for WorkspaceError {
     }
 }
 
+impl From<crate::WorkspaceLifecycleError> for WorkspaceError {
+    fn from(error: crate::WorkspaceLifecycleError) -> Self {
+        Self::Lifecycle(error)
+    }
+}
+
 pub trait WorkspacePreparer {
     fn prepare(
         &self,
@@ -81,6 +89,7 @@ impl WorkspacePreparer for GitWorkspacePreparer {
         case: &StoredCase,
         store: &Store,
     ) -> Result<(), WorkspaceError> {
+        crate::workspace_lifecycle::ensure_workspace_storage_ready(policy, store.path())?;
         if claimed.case_key != case.case_key || claimed.state_revision != case.state_revision {
             return Err(WorkspaceError::InvalidCase);
         }

@@ -313,7 +313,7 @@ class CaseStore:
                 f"case ID {case_id!r} does not match repository issue {expected_case_id!r}"
             )
         if intake_label != "pip-ok":
-            raise CaseStoreError("Pip v2 cases require the pip-ok intake label")
+            raise CaseStoreError("Pip cases require the pip-ok intake label")
         now = _now()
         try:
             with self._connect() as db:

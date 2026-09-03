@@ -1,0 +1,47 @@
+[Unit]
+Description=Pip active controller cycle for %i
+Documentation=https://github.com/marmot-protocol/agent-p1p
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/var/lib/pip/worktrees
+ConditionPathIsDirectory=/var/lib/pip/hermes
+ConditionPathIsMountPoint=/var/lib/pip/worktrees
+
+[Service]
+Type=oneshot
+User=pip-control
+Group=pip-control
+LoadCredential=github.token:/etc/pip/github.token
+LoadCredential=github-reviewer-general.app:/etc/pip/github-reviewer-general.app.json
+LoadCredential=github-reviewer-general.pem:/etc/pip/github-reviewer-general.pem
+LoadCredential=github-reviewer-secperf.app:/etc/pip/github-reviewer-secperf.app.json
+LoadCredential=github-reviewer-secperf.pem:/etc/pip/github-reviewer-secperf.pem
+Environment=HERMES_HOME=/var/lib/pip/hermes
+Environment=HERMES_KANBAN_HOME=/var/lib/pip/hermes
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/var/lib/pip
+ExecStart=/opt/pip/current/bin/pip-control controller-cycle --policy /etc/pip/repositories/%i.json --database /var/lib/pip/ledger.db --github-token %d/github.token --github-reviewer-general-app %d/github-reviewer-general.app --github-reviewer-general-key %d/github-reviewer-general.pem --github-reviewer-secperf-app %d/github-reviewer-secperf.app --github-reviewer-secperf-key %d/github-reviewer-secperf.pem --git-askpass /opt/pip/current/bin/pip-control --hermes hermes --owner pip-controller-%i --skills-commit-file /opt/pip/current/SOURCE.COMMIT --direct-queue /var/lib/pip/direct-queue
+UMask=0077
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/pip
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+StandardOutput=journal
+StandardError=journal

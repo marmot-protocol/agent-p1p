@@ -117,7 +117,7 @@ fn worktree_verification_requires_exact_clean_branch_and_head() {
     let worktree = temp.path().join("worktree");
     fs::create_dir(&worktree).unwrap();
     let runner = FakeRunner::default();
-    runner.push(0, "pip/v2/repo-1/issue-2/workflow-3\n");
+    runner.push(0, "pip/repo-1/issue-2/workflow-3\n");
     runner.push(0, format!("{}\n", "a".repeat(40)));
     runner.push(0, Vec::new());
     let reconciler = CheckoutReconciler::new(
@@ -132,7 +132,7 @@ fn worktree_verification_requires_exact_clean_branch_and_head() {
     reconciler
         .verify_worktree(
             &worktree,
-            "pip/v2/repo-1/issue-2/workflow-3",
+            "pip/repo-1/issue-2/workflow-3",
             "a".repeat(40).parse().unwrap(),
         )
         .unwrap();

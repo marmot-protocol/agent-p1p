@@ -244,7 +244,7 @@ fn direct_builder_is_durably_queued_without_any_hermes_command() {
     assert_eq!(job.payload["model"], "composer-2.5");
     assert_eq!(
         job.payload["workspace"],
-        "/var/lib/pip-v2/worktrees/mdk/repo-1055628515-issue-1240-workflow-2"
+        "/var/lib/pip/worktrees/mdk/repo-1055628515-issue-1240-workflow-2"
     );
     assert_eq!(job.payload["body"]["state_revision"], 2);
     assert_eq!(job.payload["body"]["execution"], "direct");

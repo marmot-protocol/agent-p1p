@@ -13,8 +13,8 @@ use serde_json::{Value, json};
 
 use super::{CommandRunner, CommandSpec, HermesError, HermesReader, valid_id};
 
-const ROOT_MARKER: &str = ".pip-v2-root.json";
-const PROFILE_MARKER: &str = ".pip-v2-profile.json";
+const ROOT_MARKER: &str = ".pip-root.json";
+const PROFILE_MARKER: &str = ".pip-profile.json";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProfileBootstrapSpec {
@@ -221,7 +221,7 @@ impl<R: CommandRunner + Clone> HermesBootstrap<R> {
         )?;
         self.require_help(
             vec!["gateway".into(), "run".into(), "--help".into()],
-            &["--no-supervise"],
+            &["--external-supervisor"],
             "foreground gateway",
         )
     }
@@ -434,7 +434,7 @@ impl PreparedSpec {
         )?;
         write_managed(
             &profile_root.join(".env"),
-            b"# Pip v2 profile secrets are provisioned through the shared auth link.\n",
+            b"# Pip profile secrets are provisioned through the shared auth link.\n",
             0o600,
         )?;
         ensure_symlink(&profile_root.join("auth.json"), &self.auth_source)?;
@@ -472,7 +472,7 @@ struct OwnershipMarker {
 fn root_marker() -> OwnershipMarker {
     OwnershipMarker {
         schema_version: 1,
-        owner: "pip-v2".into(),
+        owner: "pip".into(),
         kind: "hermes-root".into(),
         name: "dispatcher".into(),
     }
@@ -481,7 +481,7 @@ fn root_marker() -> OwnershipMarker {
 fn profile_marker(profile: &ProfileBootstrapSpec) -> OwnershipMarker {
     OwnershipMarker {
         schema_version: 1,
-        owner: "pip-v2".into(),
+        owner: "pip".into(),
         kind: "hermes-profile".into(),
         name: profile.name.clone(),
     }
@@ -637,7 +637,7 @@ fn write_managed(path: &Path, bytes: &[u8], mode: u32) -> Result<(), BootstrapEr
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| BootstrapError::UnsafePath(path.to_owned()))?;
-    let temporary = path.with_file_name(format!(".{file_name}.pip-v2-tmp"));
+    let temporary = path.with_file_name(format!(".{file_name}.pip-tmp"));
     if temporary.exists() {
         return Err(BootstrapError::ManagedPathDrift(temporary));
     }
@@ -691,7 +691,7 @@ fn reconcile_managed_symlink(path: &Path, target: &Path) -> Result<(), Bootstrap
                 .file_name()
                 .and_then(|name| name.to_str())
                 .ok_or_else(|| BootstrapError::UnsafePath(path.to_owned()))?;
-            let temporary = path.with_file_name(format!(".{file_name}.pip-v2-tmp"));
+            let temporary = path.with_file_name(format!(".{file_name}.pip-tmp"));
             if fs::symlink_metadata(&temporary).is_ok() {
                 return Err(BootstrapError::ManagedPathDrift(temporary));
             }

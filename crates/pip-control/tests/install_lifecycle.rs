@@ -28,17 +28,12 @@ fn clean_install_reinstall_and_upgrade_are_content_addressed_and_paused() {
     assert!(policy.contains(r#""enabled": false"#));
     assert!(policy.contains(r#""dispatch_enabled": false"#));
     assert!(!layout.unit_root.join("timers.target.wants").exists());
+    assert!(layout.unit_root.join("pip-controller@.service").is_file());
+    assert!(layout.unit_root.join("pip-controller@.timer").is_file());
     assert!(
         layout
             .unit_root
-            .join("pip-v2-controller@.service")
-            .is_file()
-    );
-    assert!(layout.unit_root.join("pip-v2-controller@.timer").is_file());
-    assert!(
-        layout
-            .unit_root
-            .join("pip-v2-hermes-gateway.service")
+            .join("pip-hermes-gateway.service")
             .is_file()
     );
 
@@ -74,23 +69,13 @@ fn every_injected_install_failure_restores_the_complete_preinstall_snapshot() {
         assert!(
             !layout
                 .unit_root
-                .join("pip-v2-shadow-reconcile.service")
+                .join("pip-shadow-reconcile.service")
                 .exists()
         );
-        assert!(!layout.unit_root.join("pip-v2-controller@.service").exists());
-        assert!(!layout.unit_root.join("pip-v2-controller@.timer").exists());
-        assert!(
-            !layout
-                .unit_root
-                .join("pip-v2-hermes-gateway.service")
-                .exists()
-        );
-        assert!(
-            !layout
-                .unit_root
-                .join("pip-v2-shadow-reconcile.timer")
-                .exists()
-        );
+        assert!(!layout.unit_root.join("pip-controller@.service").exists());
+        assert!(!layout.unit_root.join("pip-controller@.timer").exists());
+        assert!(!layout.unit_root.join("pip-hermes-gateway.service").exists());
+        assert!(!layout.unit_root.join("pip-shadow-reconcile.timer").exists());
         assert!(!layout.state_root.join("ledger.db").exists());
     }
 }
@@ -239,10 +224,10 @@ fn successful_host_install_preserves_a_fresh_disabled_timer() {
 
 fn layout(root: &Path) -> InstallLayout {
     InstallLayout {
-        install_root: root.join("opt/pip-v2"),
-        config_root: root.join("etc/pip-v2"),
+        install_root: root.join("opt/pip"),
+        config_root: root.join("etc/pip"),
         unit_root: root.join("etc/systemd/system"),
-        state_root: root.join("var/lib/pip-v2"),
+        state_root: root.join("var/lib/pip"),
     }
 }
 
@@ -261,47 +246,47 @@ fn cohort(parent: &Path, name: &str, binary: &[u8], source: &str, key: &str) -> 
     let cohort = parent.join(name);
     let root = cohort.join("root");
     fs::create_dir_all(root.join("bin")).unwrap();
-    fs::create_dir_all(root.join("share/pip-v2/config/repositories")).unwrap();
-    fs::create_dir_all(root.join("share/pip-v2/systemd")).unwrap();
+    fs::create_dir_all(root.join("share/pip/config/repositories")).unwrap();
+    fs::create_dir_all(root.join("share/pip/systemd")).unwrap();
     fs::write(root.join("bin/pip-control"), binary).unwrap();
     fs::write(
-        root.join("share/pip-v2/config/repositories/mdk.json"),
+        root.join("share/pip/config/repositories/mdk.json"),
         include_bytes!("../../../config/target/repositories/mdk.json"),
     )
     .unwrap();
     fs::write(
-        root.join("share/pip-v2/systemd/pip-v2-shadow-reconcile.service"),
-        include_bytes!("../../../packaging/systemd/pip-v2-shadow-reconcile.service"),
+        root.join("share/pip/systemd/pip-shadow-reconcile.service"),
+        include_bytes!("../../../packaging/systemd/pip-shadow-reconcile.service"),
     )
     .unwrap();
     fs::write(
-        root.join("share/pip-v2/systemd/pip-v2-shadow-reconcile.timer"),
-        include_bytes!("../../../packaging/systemd/pip-v2-shadow-reconcile.timer"),
+        root.join("share/pip/systemd/pip-shadow-reconcile.timer"),
+        include_bytes!("../../../packaging/systemd/pip-shadow-reconcile.timer"),
     )
     .unwrap();
     fs::write(
-        root.join("share/pip-v2/systemd/pip-v2-controller@.service"),
-        include_bytes!("../../../packaging/systemd/pip-v2-controller@.service"),
+        root.join("share/pip/systemd/pip-controller@.service"),
+        include_bytes!("../../../packaging/systemd/pip-controller@.service"),
     )
     .unwrap();
     fs::write(
-        root.join("share/pip-v2/systemd/pip-v2-controller@.timer"),
-        include_bytes!("../../../packaging/systemd/pip-v2-controller@.timer"),
+        root.join("share/pip/systemd/pip-controller@.timer"),
+        include_bytes!("../../../packaging/systemd/pip-controller@.timer"),
     )
     .unwrap();
     fs::write(
-        root.join("share/pip-v2/systemd/pip-v2-direct-worker@.service"),
-        include_bytes!("../../../packaging/systemd/pip-v2-direct-worker@.service"),
+        root.join("share/pip/systemd/pip-direct-worker@.service"),
+        include_bytes!("../../../packaging/systemd/pip-direct-worker@.service"),
     )
     .unwrap();
     fs::write(
-        root.join("share/pip-v2/systemd/pip-v2-direct-worker@.timer"),
-        include_bytes!("../../../packaging/systemd/pip-v2-direct-worker@.timer"),
+        root.join("share/pip/systemd/pip-direct-worker@.timer"),
+        include_bytes!("../../../packaging/systemd/pip-direct-worker@.timer"),
     )
     .unwrap();
     fs::write(
-        root.join("share/pip-v2/systemd/pip-v2-hermes-gateway.service"),
-        include_bytes!("../../../packaging/systemd/pip-v2-hermes-gateway.service"),
+        root.join("share/pip/systemd/pip-hermes-gateway.service"),
+        include_bytes!("../../../packaging/systemd/pip-hermes-gateway.service"),
     )
     .unwrap();
     for entry in walk_files(&root) {

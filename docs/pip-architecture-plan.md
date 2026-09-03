@@ -1,4 +1,4 @@
-# Pip v2 target architecture
+# Pip target architecture
 
 **Status:** Approved direction; Rust core migration in progress
 
@@ -454,6 +454,15 @@ emits one recovery event.
 - Builders cannot merge; reviewers cannot push; the final reviewer cannot
   merge; the merge transaction cannot reason about code.
 - Worktrees live under a controller-owned root and are assigned by exact path.
+- The worktree root is a required dedicated mount. Repository policy sets a
+  minimum free-byte reserve and terminal retention interval; a failed mount or
+  exhausted reserve blocks new intake and execution.
+- Terminal worktrees are retired only after the retention interval, when no
+  direct attempt remains running. Retirement verifies the deterministic
+  path/branch registration, refuses every dirty worktree, never forces Git,
+  removes at most one worktree per controller cycle, and records the result in
+  the authoritative ledger. Branch deletion is a separate lifecycle and is
+  not implied by worktree retirement.
 - Controller Git publication ignores worker-controlled hooks, filesystem
   monitors, credential helpers, proxies, and HTTP headers; requires the
   policy-bound push URL; and forces TLS verification before using its
@@ -531,7 +540,7 @@ production activation are distinct gates and must be reported separately.
 
 ## 19. Definition of done
 
-Pip v2 is ready to expand beyond the MDK canary when:
+Pip is ready to expand beyond the MDK canary when:
 
 - repository/issue identity is policy-driven rather than compiled in;
 - the Rust ledger is the sole workflow authority;

@@ -256,7 +256,7 @@ pub struct Capabilities {
 
 #[derive(Deserialize)]
 struct BoardSnapshot {
-    name: String,
+    slug: String,
 }
 
 pub struct HermesReader<R> {
@@ -302,10 +302,10 @@ impl<R: CommandRunner> HermesReader<R> {
         ])?;
         let mut names = Vec::with_capacity(boards.len());
         for board in boards {
-            if !valid_id(&board.name) {
+            if !valid_id(&board.slug) {
                 return Err(HermesError::InvalidBoard);
             }
-            names.push(board.name);
+            names.push(board.slug);
         }
         Ok(Capabilities {
             version,

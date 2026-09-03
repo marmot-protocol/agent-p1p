@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: u32 = 5;
+const SCHEMA_VERSION: u32 = 6;
 
 const MIGRATION_1: &str = r#"
 CREATE TABLE schema_migrations (
@@ -266,6 +266,28 @@ CREATE TRIGGER webhook_deliveries_no_delete BEFORE DELETE ON webhook_deliveries 
 END;
 "#;
 
+const MIGRATION_6: &str = r#"
+CREATE TABLE workspace_retirements (
+    case_key TEXT PRIMARY KEY REFERENCES cases(case_key),
+    state_revision INTEGER NOT NULL CHECK (state_revision > 0),
+    worktree_path TEXT NOT NULL,
+    outcome TEXT NOT NULL CHECK (outcome IN ('RETIRED', 'ABSENT')),
+    retired_at INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX workspace_retirements_time
+    ON workspace_retirements(retired_at, case_key);
+
+CREATE TRIGGER workspace_retirements_no_update
+BEFORE UPDATE ON workspace_retirements BEGIN
+    SELECT RAISE(ABORT, 'workspace retirements are immutable');
+END;
+CREATE TRIGGER workspace_retirements_no_delete
+BEFORE DELETE ON workspace_retirements BEGIN
+    SELECT RAISE(ABORT, 'workspace retirements are immutable');
+END;
+"#;
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct WebhookDeliveryInput {
     pub delivery_id: String,
@@ -274,6 +296,41 @@ pub struct WebhookDeliveryInput {
     pub action: String,
     pub received_at: u64,
     pub payload_sha256: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum WorkspaceRetirementOutcome {
+    Retired,
+    Absent,
+}
+
+impl WorkspaceRetirementOutcome {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Retired => "RETIRED",
+            Self::Absent => "ABSENT",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct WorkspaceRetirementInput {
+    pub case_key: String,
+    pub state_revision: u64,
+    pub worktree_path: String,
+    pub outcome: WorkspaceRetirementOutcome,
+    pub retired_at: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct WorkspaceRetirementCandidate {
+    pub case_key: String,
+    pub repository_id: u64,
+    pub issue_number: u64,
+    pub workflow_version: u32,
+    pub state_revision: u64,
+    pub updated_at: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -486,6 +543,7 @@ pub struct LedgerStatus {
     pub direct_attempts_complete: u64,
     pub direct_attempts_failed: u64,
     pub webhook_deliveries: u64,
+    pub workspace_retirements: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -716,6 +774,129 @@ impl Store {
                 input.action,
                 sql_u64(input.received_at)?,
                 input.payload_sha256,
+            ],
+        )?;
+        Ok(ApplyResult::Applied)
+    }
+
+    pub fn terminal_workspace_candidates(
+        &self,
+        repository_id: u64,
+        updated_before_or_at: u64,
+        limit: u32,
+    ) -> Result<Vec<WorkspaceRetirementCandidate>> {
+        if repository_id == 0 || limit == 0 || limit > 1_000 {
+            return Err(StoreError::InvalidInput(
+                "repository, retention cutoff, and bounded candidate limit are required",
+            ));
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT c.case_key, c.repository_id, c.issue_number, c.workflow_version,
+                    c.state_revision, c.updated_at
+             FROM cases c
+             WHERE c.repository_id = ?1
+               AND c.state IN ('COMPLETED', 'ABANDONED', 'TAKEN_OVER')
+               AND c.updated_at <= ?2
+               AND NOT EXISTS (
+                   SELECT 1 FROM workspace_retirements w WHERE w.case_key = c.case_key
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM direct_attempts d
+                   WHERE d.case_key = c.case_key AND d.status = 'RUNNING'
+               )
+             ORDER BY c.updated_at, c.case_key
+             LIMIT ?3",
+        )?;
+        statement
+            .query_map(
+                params![
+                    sql_u64(repository_id)?,
+                    sql_u64(updated_before_or_at)?,
+                    i64::from(limit),
+                ],
+                |row| {
+                    Ok(WorkspaceRetirementCandidate {
+                        case_key: row.get(0)?,
+                        repository_id: unsigned(row.get(1)?),
+                        issue_number: unsigned(row.get(2)?),
+                        workflow_version: u32::try_from(row.get::<_, i64>(3)?).unwrap_or_default(),
+                        state_revision: unsigned(row.get(4)?),
+                        updated_at: unsigned(row.get(5)?),
+                    })
+                },
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
+    pub fn record_workspace_retirement(
+        &mut self,
+        input: &WorkspaceRetirementInput,
+    ) -> Result<ApplyResult> {
+        self.ensure_writable()?;
+        let path = Path::new(&input.worktree_path);
+        if input.case_key.trim().is_empty()
+            || input.state_revision == 0
+            || !path.is_absolute()
+            || input.worktree_path.len() > 4096
+            || input.worktree_path.chars().any(char::is_control)
+        {
+            return Err(StoreError::InvalidInput(
+                "valid workspace retirement identity and absolute path are required",
+            ));
+        }
+        let existing: Option<(i64, String, String, i64)> = self
+            .connection
+            .query_row(
+                "SELECT state_revision, worktree_path, outcome, retired_at
+                 FROM workspace_retirements WHERE case_key = ?1",
+                [&input.case_key],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+        if let Some((revision, worktree_path, outcome, retired_at)) = existing {
+            if unsigned(revision) == input.state_revision
+                && worktree_path == input.worktree_path
+                && outcome == input.outcome.as_str()
+                && unsigned(retired_at) == input.retired_at
+            {
+                return Ok(ApplyResult::Replayed);
+            }
+            return Err(StoreError::IdempotencyConflict {
+                id: format!("workspace-retirement:{}", input.case_key),
+            });
+        }
+        let (state, revision): (String, i64) = self
+            .connection
+            .query_row(
+                "SELECT state, state_revision FROM cases WHERE case_key = ?1",
+                [&input.case_key],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::MissingCase(input.case_key.clone()))?;
+        if !matches!(state.as_str(), "COMPLETED" | "ABANDONED" | "TAKEN_OVER") {
+            return Err(StoreError::InvalidInput(
+                "workspace retirement requires a terminal case",
+            ));
+        }
+        let actual = unsigned(revision);
+        if actual != input.state_revision {
+            return Err(StoreError::StaleRevision {
+                expected: input.state_revision,
+                actual,
+            });
+        }
+        self.connection.execute(
+            "INSERT INTO workspace_retirements(
+                case_key, state_revision, worktree_path, outcome, retired_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                input.case_key,
+                sql_u64(input.state_revision)?,
+                input.worktree_path,
+                input.outcome.as_str(),
+                sql_u64(input.retired_at)?,
             ],
         )?;
         Ok(ApplyResult::Applied)
@@ -1253,6 +1434,7 @@ impl Store {
             direct_attempts_complete: unsigned(attempts_complete),
             direct_attempts_failed: unsigned(attempts_failed),
             webhook_deliveries: count(&self.connection, "webhook_deliveries")?,
+            workspace_retirements: count(&self.connection, "workspace_retirements")?,
         })
     }
 
@@ -2101,6 +2283,17 @@ fn migrate(connection: &mut Connection) -> Result<()> {
         transaction.commit()?;
         version = 5;
     }
+    if version == 5 {
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Exclusive)?;
+        transaction.execute_batch(MIGRATION_6)?;
+        transaction.execute(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (6, 0)",
+            [],
+        )?;
+        transaction.pragma_update(None, "user_version", 6)?;
+        transaction.commit()?;
+        version = 6;
+    }
     if version != SCHEMA_VERSION {
         return Err(StoreError::UnsupportedSchema(version));
     }
@@ -2472,6 +2665,7 @@ fn count(connection: &Connection, table: &str) -> Result<u64> {
         "findings" => "SELECT COUNT(*) FROM findings",
         "task_projections" => "SELECT COUNT(*) FROM task_projections",
         "webhook_deliveries" => "SELECT COUNT(*) FROM webhook_deliveries",
+        "workspace_retirements" => "SELECT COUNT(*) FROM workspace_retirements",
         _ => return Err(StoreError::InvalidInput("unknown count table")),
     };
     let value: i64 = connection.query_row(sql, [], |row| row.get(0))?;

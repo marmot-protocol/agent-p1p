@@ -1,20 +1,22 @@
 [Unit]
-Description=Pip v2 dedicated Hermes Kanban dispatcher
+Description=Pip dedicated Hermes Kanban dispatcher
 Documentation=https://github.com/marmot-protocol/agent-p1p
 After=network-online.target
 Wants=network-online.target
-ConditionPathExists=/var/lib/pip-v2/hermes/.pip-v2-root.json
+RequiresMountsFor=/var/lib/pip/worktrees
+ConditionPathExists=/var/lib/pip/hermes/.pip-root.json
+ConditionPathIsMountPoint=/var/lib/pip/worktrees
 
 [Service]
 Type=simple
-User=pip-v2-control
-Group=pip-v2-control
-Environment=HOME=/var/lib/pip-v2/hermes/home
-Environment=HERMES_HOME=/var/lib/pip-v2/hermes
-Environment=HERMES_KANBAN_HOME=/var/lib/pip-v2/hermes
+User=pip-control
+Group=pip-control
+Environment=HOME=/var/lib/pip/hermes/home
+Environment=HERMES_HOME=/var/lib/pip/hermes
+Environment=HERMES_KANBAN_HOME=/var/lib/pip/hermes
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
-WorkingDirectory=/var/lib/pip-v2
-ExecStart=/usr/local/bin/hermes gateway run --no-supervise
+WorkingDirectory=/var/lib/pip
+ExecStart=/usr/local/bin/hermes gateway run --external-supervisor
 Restart=on-failure
 RestartSec=5s
 UMask=0077
@@ -29,9 +31,9 @@ ProtectKernelLogs=yes
 ProtectKernelModules=yes
 ProtectKernelTunables=yes
 ProtectSystem=strict
-ReadOnlyPaths=/opt/pip-v2/current /var/lib/pip-v2/repositories /var/lib/pip-v2/worktrees
-ReadWritePaths=/var/lib/pip-v2/hermes
-InaccessiblePaths=/var/lib/pip-v2/ledger.db /var/lib/pip-v2/artifacts /var/lib/pip-v2/provider-home
+ReadOnlyPaths=/opt/pip/current /var/lib/pip/repositories /var/lib/pip/worktrees
+ReadWritePaths=/var/lib/pip/hermes
+InaccessiblePaths=/var/lib/pip/ledger.db /var/lib/pip/artifacts /var/lib/pip/provider-home
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 RestrictNamespaces=yes
 RestrictRealtime=yes

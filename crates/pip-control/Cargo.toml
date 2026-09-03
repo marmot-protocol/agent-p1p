@@ -7,6 +7,7 @@ publish = false
 
 [dependencies]
 base64.workspace = true
+axum.workspace = true
 ed25519-dalek.workspace = true
 pip-contracts = { path = "../pip-contracts" }
 pip-controller = { path = "../pip-controller" }
@@ -17,7 +18,11 @@ pip-hermes = { path = "../pip-hermes" }
 pip-store = { path = "../pip-store" }
 serde.workspace = true
 serde_json.workspace = true
+rustix.workspace = true
 sha2.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tower-http.workspace = true
 
 [dev-dependencies]
 hmac.workspace = true

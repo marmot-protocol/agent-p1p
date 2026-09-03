@@ -227,7 +227,7 @@ def test_planner_task_routing_is_deduplicated_and_force_loads_both_skills() -> N
     assert command.count("--skill") == 2
     assert "workflow-contract" in command
     assert "planner" in command
-    assert "pip-v2:marmot-protocol/mdk:1400:plan-v1" in command
+    assert "pip:marmot-protocol/mdk:1400:plan-v1" in command
     assert command[command.index("--initial-status") + 1] == "blocked"
 
     config["canary_issue_number"] = 1401
@@ -447,7 +447,7 @@ def test_managed_profile_migrates_from_source_tree_to_installed_release(
     )
     (profile_home / "auth.json").symlink_to(hermes_home / "auth.json")
     (profile_home / "auth.lock").symlink_to(hermes_home / "auth.lock")
-    marker = profile_home / "pip-v2-profile.json"
+    marker = profile_home / "pip-profile.json"
     marker.write_text(
         json.dumps(
             {
@@ -520,7 +520,7 @@ def test_managed_profile_migration_recovers_mixed_links_and_rejects_foreign(
     contract.symlink_to(old_root / "skills" / "shared" / "workflow-contract")
     (profile_home / "auth.json").symlink_to(hermes_home / "auth.json")
     (profile_home / "auth.lock").symlink_to(hermes_home / "auth.lock")
-    marker = profile_home / "pip-v2-profile.json"
+    marker = profile_home / "pip-profile.json"
     old_marker = {
         "managed_by": "agent-p1p",
         "workflow_version": 2,
@@ -658,7 +658,7 @@ def test_cursor_adapter_renders_both_skills_and_validates_fixture_output(
 
     assert result["outcome"] == "REVIEW_READY"
     prompt = (tmp_path / "artifacts/prompt.md").read_text()
-    assert "# Pip v2 Workflow Contract" in prompt
+    assert "# Pip Workflow Contract" in prompt
     assert "# Builder Grok" in prompt
     invocation = json.loads((tmp_path / "artifacts/invocation.json").read_text())
     assert invocation["model"] == "composer-2.5"

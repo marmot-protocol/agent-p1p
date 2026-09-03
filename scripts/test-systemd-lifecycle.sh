@@ -2,8 +2,8 @@
 set -euo pipefail
 
 repo_root=$(cd -- "$(dirname -- "$0")/.." && pwd -P)
-image="pip-v2-systemd-lifecycle:local"
-container="pip-v2-systemd-lifecycle-$$"
+image="pip-systemd-lifecycle:local"
+container="pip-systemd-lifecycle-$$"
 cleanup() {
   docker rm -f "$container" >/dev/null 2>&1 || true
 }
@@ -41,14 +41,14 @@ done
 docker exec "$container" bash -lc '
   set -euo pipefail
   mapfile -t expected </work/expected-release-targets
-  test "$(readlink -f /opt/pip-v2/current)" = "${expected[1]}"
+  test "$(readlink -f /opt/pip/current)" = "${expected[1]}"
   test -d "${expected[0]}"
-  test "$(systemctl is-enabled pip-v2-shadow-reconcile.timer || true)" = disabled
-  test "$(systemctl is-active pip-v2-shadow-reconcile.timer || true)" = inactive
-  test "$(systemctl is-enabled pip-v2-controller@mdk.timer || true)" = disabled
-  test "$(systemctl is-active pip-v2-controller@mdk.timer || true)" = inactive
-  /opt/pip-v2/current/bin/pip-control status --database /var/lib/pip-v2/ledger.db --now 1787220001 \
-    | jq -e ".ok and .ledger.schema_version == 5" >/dev/null
+  test "$(systemctl is-enabled pip-shadow-reconcile.timer || true)" = disabled
+  test "$(systemctl is-active pip-shadow-reconcile.timer || true)" = inactive
+  test "$(systemctl is-enabled pip-controller@mdk.timer || true)" = disabled
+  test "$(systemctl is-active pip-controller@mdk.timer || true)" = inactive
+  /opt/pip/current/bin/pip-control status --database /var/lib/pip/ledger.db --now 1787220001 \
+    | jq -e ".ok and .ledger.schema_version == 6" >/dev/null
 '
 
 echo '{"ok":true,"clean_install":true,"reinstall":true,"upgrade":true,"rollback":true,"restart_recovery":true,"timer_enabled":false}'

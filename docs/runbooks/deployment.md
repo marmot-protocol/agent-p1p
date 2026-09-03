@@ -102,7 +102,7 @@ clean reviewed checkout:
 
 ```bash
 scripts/build-rust-release.sh \
-  --output /staging/pip-v2-release \
+  --output /staging/pip-release \
   --version 0.1.0 \
   --built-at 2026-08-20T12:00:00Z \
   --builder-identity reviewed-builder \
@@ -115,9 +115,9 @@ cohort and retain its JSON output:
 
 ```bash
 pip-control verify-release \
-  --release-root /staging/pip-v2-release/root \
-  --manifest /staging/pip-v2-release/release-manifest.json \
-  --signature /staging/pip-v2-release/release-manifest.sig \
+  --release-root /staging/pip-release/root \
+  --manifest /staging/pip-release/release-manifest.json \
+  --signature /staging/pip-release/release-manifest.sig \
   --public-key /secure/release-public.key
 ```
 
@@ -134,24 +134,126 @@ before it executes the staged binary.
   unit and does not reuse a personal gateway.
 - Required provider CLIs and exact configured models available.
 - Root-owned credential files with documented mode and size bounds.
-- Dedicated no-login `pip-v2-control` and `pip-v2-worker` identities. Only the
+- Dedicated no-login `pip-control` and `pip-worker` identities. Only the
   former can open the ledger; only the latter receives direct-provider state.
 - Sufficient disk for a new release, database snapshot, and rollback release.
+- A real mount at `/var/lib/pip/worktrees`, backed by dedicated workspace
+  storage rather than the operating-system filesystem. The checked-in MDK
+  policy requires at least 500 GiB free and retains terminal worktrees for
+  86,400 seconds.
+
+On Pirate, `/mnt/raid0` is the intended NVMe workspace filesystem. Prepare a
+bind mount before installing Pip. Because the service identities do not exist
+yet, the bootstrap directories begin as root-owned. The installer adopts only
+the exact empty layout below after verifying the ownership, modes, mount point,
+and distinct filesystem; it rejects any extra entry or existing worktree:
+
+```bash
+sudo install -d -m 0755 /mnt/raid0/pip
+sudo install -d -m 0770 /mnt/raid0/pip/worktrees
+sudo install -d -m 0755 /var/lib/pip
+sudo install -d -m 0770 /var/lib/pip/worktrees
+sudo mount --bind /mnt/raid0/pip/worktrees /var/lib/pip/worktrees
+findmnt --target /var/lib/pip/worktrees
+```
+
+Do not make the bind mount persistent until the source/target paths and
+ownership have passed the installation probe. The controller, direct worker,
+and Hermes gateway units all require this exact mount point; a plain directory
+on `/` is deliberately insufficient. Before activation, add a reviewed
+`/etc/fstab` bind-mount entry and prove an unmount/mount cycle without enabling
+any Pip unit. Pirate's `/mnt/raid0` is RAID0 and therefore capacity storage,
+not redundant storage; the authoritative ledger remains outside it and GitHub
+remains the remote source of branch/PR state.
 
 The active runtime uses a dedicated service-owned Hermes root at
-`/var/lib/pip-v2/hermes`, with both `HERMES_HOME` and `HERMES_KANBAN_HOME`
+`/var/lib/pip/hermes`, with both `HERMES_HOME` and `HERMES_KANBAN_HOME`
 pointing there. The compatible Hermes gateway/dispatcher and every managed
 profile used by Pip must observe that same root. Personal operator state under
 `~/.hermes` is not an acceptable production dependency.
 
+### Pinned Hermes install on Pirate
+
+The Hermes compatibility snapshot verified on 2026-09-03 is release
+`v2026.8.31` (Hermes Agent `v0.21.0`), peeled commit
+`29112bef099274229cadff79cdff7bf7b99c4b77`. The installer at that exact commit
+has SHA-256
+`85ef536d455e51ab67aa74d79272efd49fe717597dbaadfd3cca179a905f4706`.
+Re-verify both values before a later installation rather than silently moving
+the pin.
+
+Install root-owned Hermes code separately from Pip's service-owned runtime
+state. In particular, do not point the upstream installer at
+`/var/lib/pip/hermes`: it creates initial configuration and ownership that Pip's
+strict bootstrap must treat as unmanaged. Use a credential-free installation
+home instead, skip interactive setup, bundled skills, browser components, and
+the separately downloaded Computer Use driver:
+
+```bash
+test "$(sha256sum /home/jeff/hermes-install-v2026.8.31.sh | awk '{print $1}')" = \
+  85ef536d455e51ab67aa74d79272efd49fe717597dbaadfd3cca179a905f4706
+
+sudo env HERMES_HOME=/var/lib/hermes-bootstrap \
+  /home/jeff/hermes-install-v2026.8.31.sh \
+  --branch v2026.8.31 \
+  --commit 29112bef099274229cadff79cdff7bf7b99c4b77 \
+  --skip-setup \
+  --skip-browser \
+  --skip-computer-use \
+  --no-skills \
+  --non-interactive
+
+test "$(sudo git -C /usr/local/lib/hermes-agent rev-parse HEAD)" = \
+  29112bef099274229cadff79cdff7bf7b99c4b77
+sudo env HERMES_HOME=/var/lib/hermes-bootstrap /usr/local/bin/hermes --version
+sudo env HERMES_HOME=/var/lib/hermes-bootstrap \
+  /usr/local/bin/hermes kanban create --help | \
+  grep -E -- '--workspace|--idempotency-key|--initial-status'
+sudo env HERMES_HOME=/var/lib/hermes-bootstrap \
+  /usr/local/bin/hermes gateway run --help | grep -- '--external-supervisor'
+```
+
+The verified Kanban boundary identifies boards by immutable `slug`, accepts
+typed `worktree:<path>` workspaces, exposes task identity and ownership in
+`kanban list --json`, and exposes completed attempt outcome, profile, and
+metadata in the `kanban show --json` `runs` array. Pip probes the required CLI
+flags before creating its board or any managed profile. Its custom systemd unit
+runs the gateway with `--external-supervisor`, so Hermes exits back to systemd
+for restart rather than spawning its own replacement.
+
 Credentials and provider secrets are provisioned outside this repository and
 outside the release manifest. An active repository requires three distinct
-GitHub identities and credentials: the controller/PR author,
-`reviewer-general`, and `reviewer-secperf`. The two review tokens are delivered
-only to the controller service and are never placed in worker profiles, prompts,
+GitHub identities: the controller/PR author, `reviewer-general`, and
+`reviewer-secperf`. The controller currently uses the dedicated machine-account
+token delivered as `github.token`. Each reviewer uses a separate private GitHub
+App. The controller receives that App's metadata plus PEM key through systemd
+credentials, creates an RS256 JWT with bounded clock skew/lifetime, and mints a
+repository-scoped installation token for that controller cycle. Reviewer tokens
+are never persisted as configuration or placed in worker profiles, prompts,
 task metadata, or environments. Git branch publication invokes the signed
-`pip-control` binary as askpass and gives Git a credential-file path, never a
-token value in argv or environment.
+`pip-control` binary as askpass and gives Git the controller credential-file
+path, never a token value in argv or environment.
+
+Each reviewer metadata file is non-secret JSON and must bind the installation
+to the policy's numeric repository ID:
+
+```json
+{
+  "app_id": 123456,
+  "installation_id": 987654,
+  "repository_id": 1055628515
+}
+```
+
+Provision these as
+`/etc/pip/github-reviewer-general.app.json` and
+`/etc/pip/github-reviewer-secperf.app.json`. Provision the corresponding
+private keys as `github-reviewer-general.pem` and
+`github-reviewer-secperf.pem`, root-owned and mode `0600`. The two App IDs and
+installation IDs must be distinct. The controller rejects unknown metadata
+fields, zero IDs, repository drift, duplicate reviewer Apps, unsafe PEM modes,
+invalid RSA keys, failed token responses, and non-201 token endpoints before it
+opens the ledger.
 
 ## Install ordering
 
@@ -161,6 +263,9 @@ token value in argv or environment.
    root-owned staging copy.
 4. Probe host, Hermes, provider, filesystem, credential, and identity
    prerequisites without mutation.
+   The filesystem probe must confirm `/var/lib/pip/worktrees` is a mount point,
+   resides on a different device from the ledger, and satisfies the policy's
+   free-space reserve.
 5. Quiesce dispatch and wait for or explicitly handle active leases.
 6. Snapshot:
    - active release target;
@@ -187,7 +292,7 @@ The reviewed operator invocation is:
 
 ```bash
 sudo scripts/install-rust-control-plane.sh \
-  --cohort /staging/pip-v2-release \
+  --cohort /staging/pip-release \
   --public-key /secure/release-public.key \
   --manifest-sha256 MANIFEST_SHA_FROM_VERIFY_OUTPUT \
   --binary-sha256 BINARY_SHA_FROM_VERIFY_OUTPUT
@@ -252,19 +357,23 @@ max_remediation_rounds: 3
 max_case_elapsed_seconds: 86400
 max_provider_failures: 3
 max_repeated_finding_fingerprint: 2
+workspace_storage:
+  require_distinct_filesystem: true
+  minimum_free_bytes: 536870912000
+  terminal_retention_seconds: 86400
 ```
 
 After reviewed release installation, but before enabling any timer:
 
-1. Provision `/var/lib/pip-v2/repositories/mdk` as a real checkout owned by
-   `pip-v2-control`, with exactly one `origin` URL matching
+1. Provision `/var/lib/pip/repositories/mdk` as a real checkout owned by
+   `pip-control`, with exactly one `origin` URL matching
    `https://github.com/marmot-protocol/mdk.git`.
 
    For the public MDK canary, the initial checkout is:
 
    ```bash
-   sudo -u pip-v2-control env \
-     HOME=/var/lib/pip-v2 \
+   sudo -u pip-control env \
+     HOME=/var/lib/pip \
      GIT_CONFIG_GLOBAL=/dev/null \
      GIT_CONFIG_NOSYSTEM=1 \
      GIT_TERMINAL_PROMPT=0 \
@@ -275,22 +384,22 @@ After reviewed release installation, but before enabling any timer:
        -c http.sslVerify=true \
        clone --no-checkout --origin origin \
        https://github.com/marmot-protocol/mdk.git \
-       /var/lib/pip-v2/repositories/mdk
+       /var/lib/pip/repositories/mdk
    ```
 2. Provision the service-owned Hermes auth file and direct-provider state
    outside the release. Do not copy tokens into policy or profiles.
-3. Run the exact installed bootstrap as `pip-v2-control`:
+3. Run the exact installed bootstrap as `pip-control`:
 
    ```bash
-   sudo -u pip-v2-control env \
-     HOME=/var/lib/pip-v2/hermes/home \
-     HERMES_HOME=/var/lib/pip-v2/hermes \
-     HERMES_KANBAN_HOME=/var/lib/pip-v2/hermes \
-     /opt/pip-v2/current/bin/pip-control bootstrap-runtime \
-       --policy /etc/pip-v2/repositories/mdk.json \
-       --hermes-root /var/lib/pip-v2/hermes \
-       --skills-root /opt/pip-v2/current/share/pip-v2/skills \
-       --auth-source /var/lib/pip-v2/hermes/auth.json \
+   sudo -u pip-control env \
+     HOME=/var/lib/pip/hermes/home \
+     HERMES_HOME=/var/lib/pip/hermes \
+     HERMES_KANBAN_HOME=/var/lib/pip/hermes \
+     /opt/pip/current/bin/pip-control bootstrap-runtime \
+       --policy /etc/pip/repositories/mdk.json \
+       --hermes-root /var/lib/pip/hermes \
+       --skills-root /opt/pip/current/share/pip/skills \
+       --auth-source /var/lib/pip/hermes/auth.json \
        --hermes /usr/local/bin/hermes
    ```
 
@@ -298,17 +407,37 @@ After reviewed release installation, but before enabling any timer:
    profile binding plus board visibility from the service-owned root.
 5. Configure all three numeric GitHub actor IDs and the actual required MDK CI
    contexts. Empty required contexts are not acceptable canary policy.
-6. Provision `/etc/pip-v2/github-webhook.secret` as a root-owned `0600` file.
-   Configure a trusted TLS ingress or webhook relay to preserve the raw request
-   body and invoke the exact installed binary with the GitHub delivery headers:
+6. Provision `/etc/pip/github-webhook.secret` as a root-owned `0600` file.
+   The built-in receiver can bind only to a loopback address and will verify the
+   raw request before atomically acknowledging it into a delivery-ID-addressed
+   spool:
+
+   ```bash
+   pip-control webhook-serve \
+     --listen 127.0.0.1:8787 \
+     --spool /var/spool/pip-webhooks \
+     --webhook-secret /run/credentials/INGRESS/github-webhook.secret
+   ```
+
+   It accepts only `POST /github` with one each of `X-GitHub-Delivery`,
+   `X-GitHub-Event`, and `X-Hub-Signature-256`, an `issues` event, JSON content,
+   a valid HMAC, and at most 4 MiB of raw body. Requests have a ten-second
+   deadline and four-request concurrency bound. It has no GitHub token, ledger,
+   repository, Hermes, or provider access.
+
+   **Do not expose or activate this command yet.** Its dedicated systemd
+   identity/install boundary and the controller-side spool consumer are not yet
+   complete. Until they are, a trusted external relay must preserve the raw
+   request body and invoke the exact installed binary with the GitHub delivery
+   headers:
 
    ```bash
    pip-control webhook-intake \
-     --policy /etc/pip-v2/repositories/mdk.json \
-     --database /var/lib/pip-v2/ledger.db \
+     --policy /etc/pip/repositories/mdk.json \
+     --database /var/lib/pip/ledger.db \
      --github-token /run/credentials/INGRESS/github.token \
      --webhook-secret /run/credentials/INGRESS/github-webhook.secret \
-     --payload /run/pip-v2-webhooks/DELIVERY.raw \
+     --payload /run/pip-webhooks/DELIVERY.raw \
      --delivery-id X_GITHUB_DELIVERY \
      --event X_GITHUB_EVENT \
      --signature X_HUB_SIGNATURE_256
@@ -326,10 +455,10 @@ Only after those checks and separate activation authorization:
 1. Verify the legacy pipeline will not intake the selected issue.
 2. Select one ordinary, repository-local, non-sensitive issue suitable for the
    planner to validate; do not encode it in policy.
-3. Confirm no other open MDK issue currently satisfies Pip v2 intake policy.
+3. Confirm no other open MDK issue currently satisfies Pip intake policy.
 4. Enable repository intake and dispatch with both active limits set to one.
-5. Start `pip-v2-hermes-gateway.service`, then enable the
-   `pip-v2-controller@mdk.timer` and `pip-v2-direct-worker@mdk.timer` units.
+5. Start `pip-hermes-gateway.service`, then enable the
+   `pip-controller@mdk.timer` and `pip-direct-worker@mdk.timer` units.
 6. Have a trusted actor apply `pip-ok` to that one issue.
 7. Observe the generic intake path create exactly one case and planner task.
 8. Keep merge mode `shadow` and autonomous merge false throughout the trial.

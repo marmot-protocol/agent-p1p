@@ -9,10 +9,15 @@
   },
   "board": "pip-mdk",
   "workflow_version": 2,
-  "checkout": "/var/lib/pip-v2/repositories/mdk",
-  "workspace": "/var/lib/pip-v2/worktrees/mdk",
-  "artifacts": "/var/lib/pip-v2/artifacts/mdk",
-  "branch_prefix": "pip/v2/",
+  "checkout": "/var/lib/pip/repositories/mdk",
+  "workspace": "/var/lib/pip/worktrees/mdk",
+  "artifacts": "/var/lib/pip/artifacts/mdk",
+  "workspace_storage": {
+    "require_distinct_filesystem": true,
+    "minimum_free_bytes": 536870912000,
+    "terminal_retention_seconds": 86400
+  },
+  "branch_prefix": "pip/",
   "github": {
     "automation_actor_id": null,
     "reviewer_general_actor_id": null,

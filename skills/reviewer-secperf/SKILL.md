@@ -1,6 +1,6 @@
 ---
 name: reviewer-secperf
-description: Use when reviewing a Pip v2 PR for security and performance.
+description: Use when reviewing a Pip PR for security and performance.
 version: 0.5.0
 author: agent-p1p
 license: MIT

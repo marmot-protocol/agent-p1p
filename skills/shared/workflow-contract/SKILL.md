@@ -1,6 +1,6 @@
 ---
 name: workflow-contract
-description: Use for every Pip v2 case task. Enforce shared invariants.
+description: Use for every Pip case task. Enforce shared invariants.
 version: 0.3.0
 author: agent-p1p
 license: MIT
@@ -10,11 +10,11 @@ metadata:
     related_skills: []
 ---
 
-# Pip v2 Workflow Contract
+# Pip Workflow Contract
 
 ## Overview
 
-This is the shared contract for every Pip v2 role. Role-specific skills add responsibilities but may not weaken these invariants.
+This is the shared contract for every Pip role. Role-specific skills add responsibilities but may not weaken these invariants.
 
 ## Invariants
 

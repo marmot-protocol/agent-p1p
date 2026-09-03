@@ -1,6 +1,6 @@
 # agent-p1p
 
-`agent-p1p` is the source repository for Pip v2: a repository-scoped,
+`agent-p1p` is the source repository for Pip: a repository-scoped,
 deterministic control plane that turns authorized GitHub issues into planned,
 built, independently reviewed, and finally adjudicated pull requests through
 Hermes Kanban boards.
@@ -36,7 +36,7 @@ The documentation distinguishes three things explicitly:
 
 ## Documentation
 
-- [`docs/pip-v2-architecture-plan.md`](docs/pip-v2-architecture-plan.md) —
+- [`docs/pip-architecture-plan.md`](docs/pip-architecture-plan.md) —
   canonical target architecture and invariants.
 - [`docs/current-python-canary.md`](docs/current-python-canary.md) — accurate
   inventory of the legacy Python prototype and its gaps.
@@ -100,7 +100,7 @@ Hermes Kanban is the repository-scoped queue and operational view for
 Hermes-native roles. Direct-provider jobs use the ledger's durable queue and
 may later be mirrored to the board for visibility, but Hermes never executes
 them. The direct queue crosses a controller-owned, immutable inbox/result-file
-boundary into a separate `pip-v2-worker` identity that cannot open the ledger,
+boundary into a separate `pip-worker` identity that cannot open the ledger,
 Hermes state, repository cache, or systemd credentials. Neither queue is a
 second workflow database: no completion can release downstream work until the
 control plane validates and commits it.
@@ -146,8 +146,8 @@ These commands inspect the Python reference implementation. They are not a
 production deployment procedure.
 
 ```bash
-uv run --locked pip-v2-bootstrap --repo-root "$PWD"
-uv run --locked pip-v2-fixture
+uv run --locked pip-bootstrap --repo-root "$PWD"
+uv run --locked pip-fixture
 uv run --locked --dev pytest -q
 uv build --wheel
 ```

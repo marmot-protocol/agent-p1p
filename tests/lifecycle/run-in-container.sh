@@ -33,7 +33,7 @@ runuser -u builder -- bash -lc '
   done
 '
 
-install -o root -g root -m 0400 /work/keys/public.key /etc/pip-v2-release-public.key
+install -o root -g root -m 0400 /work/keys/public.key /etc/pip-release-public.key
 
 verified_values() {
   local release=$1
@@ -41,7 +41,7 @@ verified_values() {
     --release-root "$release/root" \
     --manifest "$release/release-manifest.json" \
     --signature "$release/release-manifest.sig" \
-    --public-key /etc/pip-v2-release-public.key
+    --public-key /etc/pip-release-public.key
 }
 
 install_version() {
@@ -52,40 +52,55 @@ install_version() {
   binary_sha=$(jq -r .binary_sha256 <<<"$verified")
   /work/repo/scripts/install-rust-control-plane.sh \
     --cohort "$release" \
-    --public-key /etc/pip-v2-release-public.key \
+    --public-key /etc/pip-release-public.key \
     --manifest-sha256 "$manifest_sha" \
     --binary-sha256 "$binary_sha" >/dev/null
 }
 
-install_version /work/releases/v0
-first_target=$(readlink -f /opt/pip-v2/current)
-test -x /opt/pip-v2/current/bin/pip-control
-test "$(stat -c '%U:%G:%a' /var/lib/pip-v2/ledger.db)" = pip-v2-control:pip-v2-control:600
-grep -q '"enabled": false' /etc/pip-v2/repositories/mdk.json
-grep -q '"dispatch_enabled": false' /etc/pip-v2/repositories/mdk.json
-test "$(systemctl is-enabled pip-v2-shadow-reconcile.timer || true)" = disabled
-test "$(systemctl is-active pip-v2-shadow-reconcile.timer || true)" = inactive
-systemctl cat pip-v2-controller@.service >/dev/null
-systemctl cat pip-v2-controller@.timer >/dev/null
-test "$(systemctl is-enabled pip-v2-controller@mdk.timer || true)" = disabled
-test "$(systemctl is-active pip-v2-controller@mdk.timer || true)" = inactive
+# Mirror Pirate's pre-install storage preparation: the operator creates the
+# mount point before the Pip service identities exist, so these two bootstrap
+# directories are necessarily root-owned. The installer must adopt only this
+# exact, empty, safe shape after it creates the identities.
+install -d -o root -g root -m 0755 /var/lib/pip
+install -d -o root -g root -m 0770 /work/bootstrap-worktrees
+mount -t tmpfs -o size=16m pip-worktree-test /work/bootstrap-worktrees
+chmod 0770 /work/bootstrap-worktrees
+install -d -o root -g root -m 0770 /var/lib/pip/worktrees
+mount --bind /work/bootstrap-worktrees /var/lib/pip/worktrees
+test "$(stat -c '%U:%G:%a' /var/lib/pip)" = root:root:755
+test "$(stat -c '%U:%G:%a' /var/lib/pip/worktrees)" = root:root:770
 
 install_version /work/releases/v0
-test "$(readlink -f /opt/pip-v2/current)" = "$first_target"
+first_target=$(readlink -f /opt/pip/current)
+test -x /opt/pip/current/bin/pip-control
+test "$(stat -c '%U:%G:%a' /var/lib/pip/ledger.db)" = pip-control:pip-control:600
+test "$(stat -c '%U:%G:%a' /var/lib/pip)" = pip-control:pip-control:700
+test "$(stat -c '%U:%G:%a' /var/lib/pip/worktrees)" = pip-control:pip-control:770
+grep -q '"enabled": false' /etc/pip/repositories/mdk.json
+grep -q '"dispatch_enabled": false' /etc/pip/repositories/mdk.json
+test "$(systemctl is-enabled pip-shadow-reconcile.timer || true)" = disabled
+test "$(systemctl is-active pip-shadow-reconcile.timer || true)" = inactive
+systemctl cat pip-controller@.service >/dev/null
+systemctl cat pip-controller@.timer >/dev/null
+test "$(systemctl is-enabled pip-controller@mdk.timer || true)" = disabled
+test "$(systemctl is-active pip-controller@mdk.timer || true)" = inactive
+
+install_version /work/releases/v0
+test "$(readlink -f /opt/pip/current)" = "$first_target"
 
 install_version /work/releases/v1
-second_target=$(readlink -f /opt/pip-v2/current)
+second_target=$(readlink -f /opt/pip/current)
 test "$second_target" != "$first_target"
 test -d "$first_target"
-/opt/pip-v2/current/bin/pip-control status --database /var/lib/pip-v2/ledger.db --now 1787220000 \
-  | jq -e '.ok and .ledger.schema_version == 5' >/dev/null
+/opt/pip/current/bin/pip-control status --database /var/lib/pip/ledger.db --now 1787220000 \
+  | jq -e '.ok and .ledger.schema_version == 6' >/dev/null
 
 install -d -m 0755 /failure-bin
-touch /run/pip-v2-fail-reload-once
+touch /run/pip-fail-reload-once
 cat >/failure-bin/systemctl <<'EOF'
 #!/bin/sh
-if [ "${1-}" = daemon-reload ] && [ -e /run/pip-v2-fail-reload-once ]; then
-  rm -f /run/pip-v2-fail-reload-once
+if [ "${1-}" = daemon-reload ] && [ -e /run/pip-fail-reload-once ]; then
+  rm -f /run/pip-fail-reload-once
   exit 1
 fi
 exec /usr/bin/systemctl "$@"
@@ -94,18 +109,18 @@ chmod 0755 /failure-bin/systemctl
 verified=$(verified_values /work/releases/v2)
 if PATH=/failure-bin:/usr/bin:/bin /work/repo/scripts/install-rust-control-plane.sh \
   --cohort /work/releases/v2 \
-  --public-key /etc/pip-v2-release-public.key \
+  --public-key /etc/pip-release-public.key \
   --manifest-sha256 "$(jq -r .manifest_sha256 <<<"$verified")" \
   --binary-sha256 "$(jq -r .binary_sha256 <<<"$verified")"; then
   echo "faulted upgrade unexpectedly succeeded" >&2
   exit 1
 fi
-test "$(readlink -f /opt/pip-v2/current)" = "$second_target"
-test "$(systemctl is-enabled pip-v2-shadow-reconcile.timer || true)" = disabled
-test "$(systemctl is-active pip-v2-shadow-reconcile.timer || true)" = inactive
-test "$(find /opt/pip-v2/releases -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 2
-systemctl cat pip-v2-shadow-reconcile.service >/dev/null
-systemctl cat pip-v2-controller@.service >/dev/null
-systemctl cat pip-v2-controller@.timer >/dev/null
+test "$(readlink -f /opt/pip/current)" = "$second_target"
+test "$(systemctl is-enabled pip-shadow-reconcile.timer || true)" = disabled
+test "$(systemctl is-active pip-shadow-reconcile.timer || true)" = inactive
+test "$(find /opt/pip/releases -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 2
+systemctl cat pip-shadow-reconcile.service >/dev/null
+systemctl cat pip-controller@.service >/dev/null
+systemctl cat pip-controller@.timer >/dev/null
 
 printf '%s\n' "$first_target" "$second_target" >/work/expected-release-targets

@@ -145,16 +145,16 @@ def test_builder_dag_binds_exact_installed_skills_commit() -> None:
 def test_dag_upgrade_revisions_builder_after_historical_red_ci() -> None:
     route_id = str(_active_route()["route_id"])
     assert kanban_router._task_idempotency_key(route_id, "build") == (
-        f"pip-v2:{route_id}:dag-v4:build"
+        f"pip:{route_id}:dag-v4:build"
     )
     assert kanban_router._task_idempotency_key(route_id, "review-general-1") == (
-        f"pip-v2:{route_id}:dag-v4:review-general-1"
+        f"pip:{route_id}:dag-v4:review-general-1"
     )
     assert kanban_router._gate_idempotency_key(route_id, "build") == (
-        f"pip-v2:{route_id}:gate:dag-v4:build"
+        f"pip:{route_id}:gate:dag-v4:build"
     )
     assert kanban_router._gate_idempotency_key(route_id, "review-general-1") == (
-        f"pip-v2:{route_id}:gate:dag-v4:review-general-1"
+        f"pip:{route_id}:gate:dag-v4:review-general-1"
     )
 
 

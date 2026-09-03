@@ -171,7 +171,7 @@ fn owned_exact_head_draft_is_marked_ready_through_graphql_once() {
         "body": "owned",
         "html_url": "https://github.test/pr/77",
         "user": {"id": 1001},
-        "head": {"ref": "pip/v2/repo-984321/issue-1240/workflow-1", "sha": "b".repeat(40), "repo": {"id": 984321}},
+        "head": {"ref": "pip/repo-984321/issue-1240/workflow-1", "sha": "b".repeat(40), "repo": {"id": 984321}},
         "base": {"ref": "main"}
     });
     let mut ready = draft.clone();
@@ -191,7 +191,7 @@ fn owned_exact_head_draft_is_marked_ready_through_graphql_once() {
                 repository_id: 984_321,
                 pull_request_number: 77,
                 expected_actor_id: 1001,
-                expected_head_branch: "pip/v2/repo-984321/issue-1240/workflow-1".into(),
+                expected_head_branch: "pip/repo-984321/issue-1240/workflow-1".into(),
                 expected_head_sha: "b".repeat(40),
                 expected_base_branch: "main".into(),
                 client_mutation_id: "repo:984321#1240@1:ready".into(),
@@ -221,7 +221,7 @@ fn pull_request() -> PullRequestSpec {
         expected_actor_id: 1001,
         title: "Fix issue 1240".into(),
         body: "Implements the accepted plan.".into(),
-        head_branch: "pip/v2/repo-984321/issue-1240/workflow-1".into(),
+        head_branch: "pip/repo-984321/issue-1240/workflow-1".into(),
         head_sha: "b".repeat(40),
         base_branch: "main".into(),
     }
@@ -241,7 +241,7 @@ fn draft_pull_request_is_created_once_on_the_owned_exact_head() {
         "html_url": "https://github.test/pr/77",
         "user": {"id": 1001},
         "head": {
-            "ref": "pip/v2/repo-984321/issue-1240/workflow-1",
+            "ref": "pip/repo-984321/issue-1240/workflow-1",
             "sha": "b".repeat(40),
             "repo": {"id": 984321}
         },

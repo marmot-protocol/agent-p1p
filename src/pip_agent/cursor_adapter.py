@@ -439,7 +439,7 @@ def _validate_task_bindings(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run a direct Pip v2 Cursor role")
+    parser = argparse.ArgumentParser(description="Run a direct Pip Cursor role")
     parser.add_argument("role", choices=("builder-grok", "reviewer-secperf"))
     parser.add_argument("--repo-root", type=Path, required=True)
     parser.add_argument("--task", type=Path, required=True)

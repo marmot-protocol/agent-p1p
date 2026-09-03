@@ -234,7 +234,7 @@ fn evidence(check_runs: Vec<CheckRunSnapshot>) -> PullRequestEvidence {
             author_id: 10,
             head_repository_id: 984_321,
             head_repository: "marmot-protocol/mdk".into(),
-            head_branch: "pip/v2/issue-1240".into(),
+            head_branch: "pip/issue-1240".into(),
             head_sha: "b".repeat(40),
             base_branch: "master".into(),
             base_sha: "a".repeat(40),

@@ -38,14 +38,14 @@ def test_passive_route_does_not_touch_kanban() -> None:
 def test_router_unit_has_no_custom_ledger_or_worktree_mutation() -> None:
     unit = render_route_consumer_service("jeff", "jeff", Path("/home/jeff"))
     assert "--board pip-mdk" in unit
-    assert "--skills-repository-commit-file /opt/pip-v2/SOURCE.COMMIT" in unit
+    assert "--skills-repository-commit-file /opt/pip/SOURCE.COMMIT" in unit
     assert "ledger" not in unit
     assert "/code/worktrees" not in unit
     assert "ReadWritePaths=/home/jeff/.hermes" in unit
     assert "Environment=PATH=/home/jeff/.local/bin:/usr/local/bin:/usr/bin:/bin" in unit
 
 
-def test_stop_archives_only_nonterminal_pip_v2_canary_tasks() -> None:
+def test_stop_archives_only_nonterminal_pip_canary_tasks() -> None:
     commands: list[list[str]] = []
     terminated: list[int] = []
 
@@ -56,7 +56,7 @@ def test_stop_archives_only_nonterminal_pip_v2_canary_tasks() -> None:
                 [
                     {
                         "id": "t-active",
-                        "created_by": "pip-v2-router",
+                        "created_by": "pip-router",
                         "body": 'Authorization: {"case_id": "mdk#1240"}',
                         "status": "running",
                     },
@@ -68,19 +68,19 @@ def test_stop_archives_only_nonterminal_pip_v2_canary_tasks() -> None:
                     },
                     {
                         "id": "t-staged",
-                        "created_by": "pip-v2-router",
+                        "created_by": "pip-router",
                         "body": 'Authorization: ***"case_id": "mdk#1240"',
                         "status": "blocked",
                     },
                     {
                         "id": "t-done-gate",
-                        "created_by": "pip-v2-router",
+                        "created_by": "pip-router",
                         "body": '{"activation_gate": "build", "case_id": "mdk#1240", "route_id": "old"}',
                         "status": "done",
                     },
                     {
                         "id": "t-final-disposition",
-                        "created_by": "pip-v2-router",
+                        "created_by": "pip-router",
                         "body": '{"case_id": "mdk#1240", "outcome": "BLOCKED", "route_id": "old"}\nBlocked disposition',
                         "status": "blocked",
                     },
@@ -123,13 +123,13 @@ def test_dispatch_upgrade_archives_only_superseded_same_route_dag() -> None:
                 [
                     {
                         "id": "t-v3",
-                        "created_by": "pip-v2-router",
+                        "created_by": "pip-router",
                         "body": '{"case_id": "mdk#1240", "route_id": "route-a", "dag_revision": 3}',
                         "status": "done",
                     },
                     {
                         "id": "t-v4",
-                        "created_by": "pip-v2-router",
+                        "created_by": "pip-router",
                         "body": '{"case_id": "mdk#1240", "route_id": "route-a", "dag_revision": 4}',
                         "status": "blocked",
                     },
@@ -172,7 +172,7 @@ def test_dispatch_route_quiesces_superseded_dag_before_materializing_current(
                 [
                     {
                         "id": "t-v3",
-                        "created_by": "pip-v2-router",
+                        "created_by": "pip-router",
                         "body": json.dumps(
                             {
                                 "case_id": "mdk#1240",
@@ -184,7 +184,7 @@ def test_dispatch_route_quiesces_superseded_dag_before_materializing_current(
                     },
                     {
                         "id": "t-v4",
-                        "created_by": "pip-v2-router",
+                        "created_by": "pip-router",
                         "body": json.dumps(
                             {
                                 "case_id": "mdk#1240",
@@ -390,7 +390,7 @@ def _active_task_runner(
                 [
                     {
                         "id": "t-active",
-                        "created_by": "pip-v2-router",
+                        "created_by": "pip-router",
                         "body": 'Authorization: ***"case_id": "mdk#1240"}',
                         "status": "running",
                     }

@@ -24,7 +24,7 @@ so every effect carries a stable idempotency key.
 Hermes-native work is projected to the repository board. Direct-provider work
 remains a ledger effect until the controller validates it, records an immutable
 attempt, and atomically publishes a read-only inbox envelope. The separate
-`pip-v2-worker` service executes that envelope without ledger or credential
+`pip-worker` service executes that envelope without ledger or credential
 access and writes a bounded result envelope. Only a freshly authorized
 controller cycle can validate, record, and ingest that result; the worker never
 advances state itself.

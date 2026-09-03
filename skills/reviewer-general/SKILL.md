@@ -1,6 +1,6 @@
 ---
 name: reviewer-general
-description: Use for exact-head correctness review of a Pip v2 PR.
+description: Use for exact-head correctness review of a Pip PR.
 version: 0.4.0
 author: agent-p1p
 license: MIT

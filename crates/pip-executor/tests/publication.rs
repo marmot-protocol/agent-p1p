@@ -46,7 +46,7 @@ fn spec(worktree: &Path, remote: Option<GitSha>) -> GitPublicationSpec {
     GitPublicationSpec::new(
         worktree,
         "origin",
-        "pip/v2/repo-984321/issue-1240/workflow-2",
+        "pip/repo-984321/issue-1240/workflow-2",
         sha('b'),
         remote,
     )
@@ -73,7 +73,7 @@ fn scoped_publication_rejects_a_worktree_outside_the_controller_root() {
             &inside,
             "origin",
             "https://github.com/marmot-protocol/mdk.git",
-            "pip/v2/repo-984321/issue-1240/workflow-2",
+            "pip/repo-984321/issue-1240/workflow-2",
             sha('b'),
             None,
         )
@@ -85,7 +85,7 @@ fn scoped_publication_rejects_a_worktree_outside_the_controller_root() {
             &outside,
             "origin",
             "https://github.com/marmot-protocol/mdk.git",
-            "pip/v2/repo-984321/issue-1240/workflow-2",
+            "pip/repo-984321/issue-1240/workflow-2",
             sha('b'),
             None,
         ),
@@ -104,7 +104,7 @@ fn scoped_publication_rejects_remote_url_drift_before_push() {
         &worktree,
         "origin",
         "https://github.com/marmot-protocol/mdk.git",
-        "pip/v2/repo-984321/issue-1240/workflow-2",
+        "pip/repo-984321/issue-1240/workflow-2",
         sha('b'),
         None,
     )
@@ -136,7 +136,7 @@ fn scoped_publication_rejects_multiple_push_urls_before_network_access() {
         &worktree,
         "origin",
         "https://github.com/marmot-protocol/mdk.git",
-        "pip/v2/repo-984321/issue-1240/workflow-2",
+        "pip/repo-984321/issue-1240/workflow-2",
         sha('b'),
         None,
     )
@@ -181,7 +181,7 @@ fn scoped_publication_uses_the_bound_url_for_every_network_command() {
         &worktree,
         "origin",
         bound_url,
-        "pip/v2/repo-984321/issue-1240/workflow-2",
+        "pip/repo-984321/issue-1240/workflow-2",
         sha('b'),
         None,
     )
@@ -189,14 +189,14 @@ fn scoped_publication_uses_the_bound_url_for_every_network_command() {
     let runner = FakeGit::default();
     runner.push(0, format!("{bound_url}\n"));
     runner.push(0, format!("{}\n", sha('b')));
-    runner.push(0, b"pip/v2/repo-984321/issue-1240/workflow-2\n".to_vec());
+    runner.push(0, b"pip/repo-984321/issue-1240/workflow-2\n".to_vec());
     runner.push(0, Vec::new());
     runner.push(0, Vec::new());
     runner.push(0, Vec::new());
     runner.push(
         0,
         format!(
-            "{}\trefs/heads/pip/v2/repo-984321/issue-1240/workflow-2\n",
+            "{}\trefs/heads/pip/repo-984321/issue-1240/workflow-2\n",
             sha('b')
         ),
     );
@@ -239,12 +239,12 @@ fn owned_branch_update_uses_an_exact_force_with_lease_and_verifies_remote() {
     let tmp = tempfile::tempdir().unwrap();
     let runner = FakeGit::default();
     runner.push(0, format!("{}\n", sha('b')));
-    runner.push(0, b"pip/v2/repo-984321/issue-1240/workflow-2\n".to_vec());
+    runner.push(0, b"pip/repo-984321/issue-1240/workflow-2\n".to_vec());
     runner.push(0, Vec::new());
     runner.push(
         0,
         format!(
-            "{}\trefs/heads/pip/v2/repo-984321/issue-1240/workflow-2\n",
+            "{}\trefs/heads/pip/repo-984321/issue-1240/workflow-2\n",
             sha('a')
         ),
     );
@@ -252,7 +252,7 @@ fn owned_branch_update_uses_an_exact_force_with_lease_and_verifies_remote() {
     runner.push(
         0,
         format!(
-            "{}\trefs/heads/pip/v2/repo-984321/issue-1240/workflow-2\n",
+            "{}\trefs/heads/pip/repo-984321/issue-1240/workflow-2\n",
             sha('b')
         ),
     );
@@ -291,9 +291,9 @@ fn owned_branch_update_uses_an_exact_force_with_lease_and_verifies_remote() {
             "remote.origin.proxy=",
             "push",
             "--porcelain",
-            "--force-with-lease=refs/heads/pip/v2/repo-984321/issue-1240/workflow-2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--force-with-lease=refs/heads/pip/repo-984321/issue-1240/workflow-2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "origin",
-            "HEAD:refs/heads/pip/v2/repo-984321/issue-1240/workflow-2",
+            "HEAD:refs/heads/pip/repo-984321/issue-1240/workflow-2",
         ]
     );
 }
@@ -303,12 +303,12 @@ fn successful_retry_is_a_noop_and_remote_race_never_pushes() {
     let tmp = tempfile::tempdir().unwrap();
     let runner = FakeGit::default();
     runner.push(0, format!("{}\n", sha('b')));
-    runner.push(0, b"pip/v2/repo-984321/issue-1240/workflow-2\n".to_vec());
+    runner.push(0, b"pip/repo-984321/issue-1240/workflow-2\n".to_vec());
     runner.push(0, Vec::new());
     runner.push(
         0,
         format!(
-            "{}\trefs/heads/pip/v2/repo-984321/issue-1240/workflow-2\n",
+            "{}\trefs/heads/pip/repo-984321/issue-1240/workflow-2\n",
             sha('b')
         ),
     );
@@ -328,12 +328,12 @@ fn successful_retry_is_a_noop_and_remote_race_never_pushes() {
 
     let runner = FakeGit::default();
     runner.push(0, format!("{}\n", sha('b')));
-    runner.push(0, b"pip/v2/repo-984321/issue-1240/workflow-2\n".to_vec());
+    runner.push(0, b"pip/repo-984321/issue-1240/workflow-2\n".to_vec());
     runner.push(0, Vec::new());
     runner.push(
         0,
         format!(
-            "{}\trefs/heads/pip/v2/repo-984321/issue-1240/workflow-2\n",
+            "{}\trefs/heads/pip/repo-984321/issue-1240/workflow-2\n",
             sha('c')
         ),
     );
@@ -361,12 +361,12 @@ fn authenticated_publication_passes_only_credential_paths_to_git() {
     fs::set_permissions(&credential, fs::Permissions::from_mode(0o400)).unwrap();
     let runner = FakeGit::default();
     runner.push(0, format!("{}\n", sha('b')));
-    runner.push(0, b"pip/v2/repo-984321/issue-1240/workflow-2\n".to_vec());
+    runner.push(0, b"pip/repo-984321/issue-1240/workflow-2\n".to_vec());
     runner.push(0, Vec::new());
     runner.push(
         0,
         format!(
-            "{}\trefs/heads/pip/v2/repo-984321/issue-1240/workflow-2\n",
+            "{}\trefs/heads/pip/repo-984321/issue-1240/workflow-2\n",
             sha('b')
         ),
     );
@@ -388,14 +388,14 @@ fn authenticated_publication_passes_only_credential_paths_to_git() {
             askpass.to_str().unwrap()
         );
         assert_eq!(
-            command.environment.get("PIP_V2_GIT_TOKEN_FILE").unwrap(),
+            command.environment.get("PIP_GIT_TOKEN_FILE").unwrap(),
             credential.to_str().unwrap()
         );
         assert_eq!(
             command.environment.get("GIT_ASKPASS_REQUIRE").unwrap(),
             "force"
         );
-        assert_eq!(command.environment.get("PIP_V2_GIT_ASKPASS").unwrap(), "1");
+        assert_eq!(command.environment.get("PIP_GIT_ASKPASS").unwrap(), "1");
         assert!(
             !command
                 .environment
@@ -430,7 +430,7 @@ fn process_publisher_creates_and_updates_a_real_bare_remote() {
     run(&repository, &["commit", "-qm", "first"]);
     run(
         &repository,
-        &["switch", "-qc", "pip/v2/repo-984321/issue-1240/workflow-2"],
+        &["switch", "-qc", "pip/repo-984321/issue-1240/workflow-2"],
     );
     let first = read_sha(&repository);
     let publisher =
@@ -440,7 +440,7 @@ fn process_publisher_creates_and_updates_a_real_bare_remote() {
         &repository,
         "origin",
         remote.to_str().unwrap(),
-        "pip/v2/repo-984321/issue-1240/workflow-2",
+        "pip/repo-984321/issue-1240/workflow-2",
         first,
         None,
     )
@@ -458,7 +458,7 @@ fn process_publisher_creates_and_updates_a_real_bare_remote() {
         &repository,
         "origin",
         remote.to_str().unwrap(),
-        "pip/v2/repo-984321/issue-1240/workflow-2",
+        "pip/repo-984321/issue-1240/workflow-2",
         second,
         Some(first),
     )
@@ -500,7 +500,7 @@ fn remote_sha(repository: &Path) -> GitSha {
             "ls-remote",
             "--heads",
             "origin",
-            "refs/heads/pip/v2/repo-984321/issue-1240/workflow-2",
+            "refs/heads/pip/repo-984321/issue-1240/workflow-2",
         ])
         .current_dir(repository)
         .output()

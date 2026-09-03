@@ -236,9 +236,9 @@ impl<R: GitRunner> GitPublisher<R> {
         self.environment
             .insert("GIT_ASKPASS_REQUIRE".into(), "force".into());
         self.environment
-            .insert("PIP_V2_GIT_ASKPASS".into(), "1".into());
+            .insert("PIP_GIT_ASKPASS".into(), "1".into());
         self.environment.insert(
-            "PIP_V2_GIT_TOKEN_FILE".into(),
+            "PIP_GIT_TOKEN_FILE".into(),
             credential
                 .to_str()
                 .ok_or(PublicationError::InvalidConfiguration)?

@@ -21,5 +21,5 @@ pub use publication::{GitPublicationSpec, GitPublisher, PublicationError, Public
 
 pub use worktree::{
     AllocationError, AllocationResult, GitCommand, GitOutput, GitRunner, ProcessGitRunner,
-    WorktreeAllocator, WorktreeSpec,
+    RetirementResult, WorktreeAllocator, WorktreeRetirementSpec, WorktreeRetirer, WorktreeSpec,
 };

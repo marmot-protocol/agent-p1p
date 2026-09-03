@@ -184,7 +184,7 @@ fn pull_request() -> PullRequestEvidence {
             author_id: 202880,
             head_repository_id: 1_055_628_515,
             head_repository: "marmot-protocol/mdk".into(),
-            head_branch: "pip/v2/repo-1055628515/issue-1240/workflow-2".into(),
+            head_branch: "pip/repo-1055628515/issue-1240/workflow-2".into(),
             head_sha: "b".repeat(40),
             base_branch: "master".into(),
             base_sha: "a".repeat(40),
