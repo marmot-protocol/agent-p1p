@@ -446,6 +446,9 @@ After reviewed release installation, but before enabling any timer:
    intake result before hard-linking the envelope into `processed/` and
    removing it from `pending/`. GitHub outages and crashes leave the item
    pending; a retry converges through ledger delivery-ID replay protection.
+   The consumer's systemd writable sandbox names the common spool root so the
+   hard link remains on one mount. Directory ownership and modes above still
+   prevent the controller identity from modifying `receipts/`.
 
    For a manual diagnostic, the equivalent direct boundary remains:
 

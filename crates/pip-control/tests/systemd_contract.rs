@@ -138,6 +138,10 @@ fn webhook_consumer_is_controller_owned_bounded_and_credential_scoped() {
     assert!(service.contains("--database /var/lib/pip/ledger.db"));
     assert!(service.contains("--spool /var/spool/pip-webhooks"));
     assert!(service.contains("ProtectSystem=strict"));
+    assert!(service.contains("ReadWritePaths=/var/lib/pip /var/spool/pip-webhooks"));
+    assert!(!service.contains(
+        "ReadWritePaths=/var/lib/pip /var/spool/pip-webhooks/pending /var/spool/pip-webhooks/processed"
+    ));
     assert!(service.contains(
         "InaccessiblePaths=/var/lib/pip/hermes /var/lib/pip/repositories /var/lib/pip/worktrees /var/lib/pip/artifacts /var/lib/pip/provider-home /var/lib/pip/direct-queue"
     ));
