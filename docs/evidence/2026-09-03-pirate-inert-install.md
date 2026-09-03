@@ -1,30 +1,37 @@
 # Pirate inert installation evidence — 2026-09-03
 
-**Evidence boundary:** exact signed local-bootstrap Rust cohort installed on the
-Pirate Linux/systemd host, with a persistent, reboot-verified workspace bind
-mount and no active Pip runtime. This is not protected-CI release evidence, a
-live Hermes/provider probe, GitHub credential evidence, webhook ingestion, or a
-canary run.
+**Evidence boundary:** corrected exact signed local-bootstrap Rust cohort
+installed on the Pirate Linux/systemd host, with a persistent, reboot-verified
+workspace bind mount, a canonical MDK checkout, and a successfully bootstrapped
+service-owned Hermes root. No Pip runtime is active. This is not protected-CI
+release evidence, a live provider API/outage probe, GitHub App credential
+evidence, webhook ingestion, or a canary run.
 
 ## Installed cohort
 
-- Source commit: `9e2c9ee56e07f77dde8e2b25baaa6c74a7c9318f`
+- Source commit: `ff15894be798d403ea28ac668f82a15dd30575fd`
 - Release/manifest ID:
-  `e478e014bdfcbf4b7813a24dbb7d19d3a120b44c7f26d3e227e11174a55fa4ea`
+  `89786823409d5d18d612d2fb10412e04c240d1d34a958ada94b6a8b4ac1a91cc`
 - Installed binary SHA-256:
-  `0346f31e591bde43e072507c2c4bb6af453051ebe0c4269c37dd899514479b6d`
+  `5dbc54ee21cbe937686f21bbeeb08b1ceef7f53628c1cac2ee866b66843133fc`
 - Installer SHA-256:
   `73828a923632a44da2a9d94abc84bc53d8958a7df623d460a77d9580b477c44c`
 - Bootstrap public-key SHA-256:
   `651e0fc5016d073ab638667615a279ace1f6445b9f18b80751f22899fb62ac34`
 - Installed release target:
-  `/opt/pip/releases/e478e014bdfcbf4b7813a24dbb7d19d3a120b44c7f26d3e227e11174a55fa4ea`
+  `/opt/pip/releases/89786823409d5d18d612d2fb10412e04c240d1d34a958ada94b6a8b4ac1a91cc`
 
 The root-staged installer was mode `0555`; the installed bootstrap public key
 was root-owned mode `0444`. The installer returned `installed` and preserved
 the disabled intake, dispatch, and timer state. This cohort was signed by the
 temporary operator-controlled local-bootstrap trust boundary, not the future
 protected `pip-release` CI environment.
+
+This cohort superseded the initially installed `9e2c9ee` cohort after a
+disposable live probe found that Hermes v0.21 renders `config get model` as a
+default/provider pair. Commit `ff15894` corrected the compatibility check; the
+corrected cohort passed the disposable bootstrap lifecycle before installation
+on the real service root.
 
 ## Identity and ledger boundary
 
@@ -77,6 +84,32 @@ This closes the mount boot-order and reboot-recovery gate. `/mnt/raid0` is
 RAID0 capacity storage, not redundant storage; the authoritative ledger remains
 outside it.
 
+## Canonical checkout and isolated Hermes bootstrap
+
+Before bootstrap, the service-owned inputs were validated as follows:
+
+- `/var/lib/pip/repositories/mdk` was a `pip-control:pip-control` mode-`0775`
+  Git worktree;
+- its only remote was `origin`, exactly
+  `https://github.com/marmot-protocol/mdk.git`;
+- Git reported `true` for `--is-inside-work-tree`; and
+- `/var/lib/pip/hermes/auth.json` was a non-empty
+  `pip-control:pip-control` mode-`0600` regular file.
+
+The exact installed `pip-control` binary then ran `bootstrap-runtime` as
+`pip-control`, with both `HERMES_HOME` and `HERMES_KANBAN_HOME` bound to
+`/var/lib/pip/hermes`. It reported:
+
+```json
+{"ok":true,"policy_revision":1,"repository":"marmot-protocol/mdk","runtime":{"board_created":true,"hermes_version":"Hermes Agent v0.21.0 (2026.8.31)","profiles_created":3,"profiles_reconciled":0}}
+```
+
+The bootstrap created and re-probed the `pip-mdk` board, created the managed
+`planner`, `reviewer-general`, and `final-reviewer` profiles, and verified each
+effective model/provider, reasoning-effort, and terminal-home binding. It did
+not start a gateway, dispatch a task, exercise the provider API, or enable a
+systemd unit.
+
 ## Inert-state proof
 
 All installed execution units were disabled and inactive:
@@ -90,23 +123,22 @@ The final process probe found no Pip controller, direct worker, or Hermes
 gateway runtime. No issue, task, branch, comment, pull request, review, or merge
 was created by this installation.
 
-The same inert conditions held after the real reboot: every execution unit was
-still disabled and inactive, the runtime process count was zero, and the
-installed source and binary hashes were unchanged. The operator account could
-not traverse the mode-`0700` service data root, and passwordless sudo was not
-available; therefore this read-only post-reboot probe did not reopen the ledger
-as `pip-control`. The successful pre-reboot service-identity ledger probe above
+The same inert conditions held after the real reboot and after the corrected
+cohort upgrade: every execution unit was still disabled and inactive and the
+runtime process count was zero. The operator account could not traverse the
+mode-`0700` service data root, and passwordless sudo was not available;
+therefore the unprivileged remote probes did not reopen the ledger as
+`pip-control`. The successful pre-reboot service-identity ledger probe above
 remains the ledger evidence.
 
 ## Gates still open
 
-- Provision the canonical MDK checkout.
-- Bootstrap and probe the Pip-owned Hermes root and exact provider models under
-  the service identities.
 - Provision and validate the controller and two reviewer GitHub App identities
   and credentials.
 - Configure exact required MDK CI contexts.
 - Complete and deploy isolated webhook spool consumption behind trusted TLS.
 - Replace local-bootstrap signing trust with protected CI signing evidence.
+- Record a non-dispatching live provider capability and outage/recovery probe,
+  and confirm the separately supervised gateway observes the same Hermes root.
 - Obtain explicit authorization before enabling any unit or labeling a canary
   issue.

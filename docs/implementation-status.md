@@ -32,7 +32,7 @@ a completed canary.
 | Branch publication | Builder tasks receive deterministic case-owned worktree and branch assignments but no GitHub credential; the controller uses a signed askpass executable plus systemd credential-file path, pins the sole push URL, disables repository hooks/filesystem monitors/credential helpers/proxies/HTTP headers, forces TLS, validates clean branch/head state, uses exact force-with-lease, verifies the remote SHA, and only then mutates the draft PR | Credential-path isolation, scope, URL-drift, real-bare-remote, race, retry, and controller-cycle tests |
 | Workspace allocation | Policy binds a canonical checkout, worktree root, artifact root, default branch, and branch prefix; dispatch fetches the policy-bound remote/default head, allocates the deterministic case worktree, and verifies exact clean branch/head state before projection | Real-Git checkout/worktree tests and production dispatch-boundary tests |
 | Workspace storage lifecycle | Policy requires a dedicated mounted worktree filesystem, a 500 GiB free-space reserve, and 24-hour terminal retention. The controller retires at most one eligible terminal worktree per cycle, excludes running direct attempts, refuses dirty/colliding paths, never forces Git, preserves branches, rechecks capacity, and records retired/absent outcomes immutably in schema v6. New intake/direct work/draft publication/dispatch stop below reserve; result/finalization paths remain available. | Fake-storage lifecycle tests, real-Git dirty/idempotent retirement test, ledger eligibility/immutability tests, systemd mount contracts, and successful persistent Pirate bind-mount manual-remount and post-reboot probes |
-| Hermes runtime bootstrap | `bootstrap-runtime` probes required CLI capabilities, creates/reprobes the repository board, writes only Pip-owned service-root/profile configuration, links canonical skills and shared auth, disables fallback/dangerous tools and per-profile dispatch, and verifies effective model/provider/reasoning/home values | Fake-CLI compatibility, ownership/drift, idempotency, and systemd-root tests |
+| Hermes runtime bootstrap | `bootstrap-runtime` probes required CLI capabilities, creates/reprobes the repository board, writes only Pip-owned service-root/profile configuration, links canonical skills and shared auth, disables fallback/dangerous tools and per-profile dispatch, and verifies effective model/provider/reasoning/home values | Fake-CLI compatibility, ownership/drift, idempotency, and systemd-root tests plus a successful inert Pirate bootstrap against Hermes v0.21.0 |
 | Runtime isolation | Hermes workers see Hermes state plus read-only worktrees but not the ledger, direct artifacts, or provider home; direct workers use `pip-worker`, see immutable inbox/worktrees/artifacts/provider state, and cannot open the ledger, Hermes state, repository cache, or credentials | Unit-file contracts, queue convergence tests, and disposable-systemd identity/directory lifecycle |
 | Guarded merge | An explicitly guarded/autonomous policy selects the merge method; the controller revalidates the complete final gate, marks the draft ready, revalidates, emits a separate merge effect, merges with expected-head protection, and verifies the recorded merge commit | Restart-convergence, shadow-disablement, state-machine, GraphQL, and mutation tests |
 | Human disposition | `HOLD_FOR_HUMAN`, `ESCALATE`, and shadow-ready effects publish idempotent provenance-marked issue or draft-PR comments; local completion, block, abandonment, and takeover effects commit evidence without writing after lost authorization | Mutation fixtures and transactional effect/evidence tests |
@@ -54,11 +54,11 @@ a completed canary.
 The remaining gates require host-specific configuration or explicit authority;
 they are not claims that local adapter tests already proved production:
 
-1. Provision the canonical MDK checkout and provider/Hermes authentication
-   under the installed service identities. Run `bootstrap-runtime` from the
-   exact installed release and confirm the gateway observes the same root. The
-   dedicated Pirate workspace bind mount is installed and has passed both a
-   manual unmount/remount probe and a real reboot.
+1. Confirm the separately supervised gateway observes the successfully
+   bootstrapped service-owned Hermes root, and record a non-dispatching live
+   provider capability and outage/recovery probe. The canonical checkout,
+   service-owned Hermes auth, exact-release `bootstrap-runtime`, and dedicated
+   Pirate workspace mount have passed their inert real-host gates.
 2. Complete the isolated service/install and spool-consumer boundary for the
    loopback GitHub webhook receiver, then put a trusted TLS ingress in front of
    it. Provision its root-owned webhook secret. Polling remains recovery, not
@@ -108,9 +108,10 @@ The first exact-version compatibility review on 2026-09-03 targets Hermes
 the immutable board `slug` instead of its display name and corrected the custom
 systemd gateway invocation to declare `--external-supervisor`. That pinned code
 is installed root-owned on Pirate. Pip's service-owned Hermes runtime bootstrap
-and live service-identity/provider probes remain external evidence.
+has now passed against that installation; the separately supervised gateway and
+live provider capability/recovery probes remain external evidence.
 
-The inert Pirate installation is recorded in
+The inert Pirate installation and service-root bootstrap are recorded in
 [`evidence/2026-09-03-pirate-inert-install.md`](evidence/2026-09-03-pirate-inert-install.md).
 
 Upstream references:

@@ -27,7 +27,7 @@ authorized issue.
 | Planner before builder | Implemented locally | Typed planner contract, durable plan publication gate, and dispatch ordering |
 | Assigned builder worktree and draft PR | Implemented locally | Controller-owned checkout/worktree/branch, credential-free builder, exact push, and stable draft-PR transaction |
 | Bounded worktree storage | Installed, persistently mounted, and reboot-verified on Pirate | Dedicated-mount and free-space gates, 24-hour terminal retention, no-force clean retirement, running-attempt exclusion, one-per-cycle cleanup, immutable retirement evidence, and successful manual-remount and post-reboot systemd mount-unit probes |
-| Pinned Hermes compatibility | Code installed on Pirate; service-owned runtime bootstrap pending | Exact `v2026.8.31` commit and installer hash, slug-based board identity, task/run JSON contract, typed workspaces, and external-supervisor gateway flag |
+| Pinned Hermes compatibility | Service-owned runtime bootstrapped inertly on Pirate | Exact `v2026.8.31` commit and installer hash, slug-based board identity, task/run JSON contract, typed workspaces, external-supervisor gateway flag, and successful exact-release service-root bootstrap |
 | Exact-head CI and two independent reviews | Implemented locally | CI reconciliation, distinct review identities, role stamps, exact-head joins, and publication retries |
 | Dynamic remediation and convergence | Implemented locally | State-driven redispatch rather than a fixed DAG; round, elapsed-time, repeated-finding, direct-attempt, and Hermes circuit-breaker bounds |
 | Holistic final review | Implemented locally | Atomic final preflight plus full immutable evidence bundle |
@@ -50,7 +50,7 @@ authorized issue.
 | 5 — projections and execution | Complete locally for Hermes and direct Cursor paths |
 | 6 — controlled GitHub writes | Complete locally; live credential scope evidence remains external |
 | 7 — packaging and lifecycle | Inert local-bootstrap cohort installed on Pirate; protected signing environment and exact CI run remain external release gates |
-| 8 — parity and non-dispatching live shadow | Inert host install and persistent workspace mount complete; service-owned Hermes/provider bootstrap plus outage and recovery drill still required |
+| 8 — parity and non-dispatching live shadow | Inert host install, persistent workspace mount, canonical checkout, and service-owned Hermes bootstrap complete; provider capability plus outage and recovery drill still required |
 | 9 — one MDK shadow case | Not authorized and not run |
 | 10 — controlled expansion | Intentionally not started before Phase 9 acceptance |
 | Legacy retirement | Vault runtime retired early on 2026-09-01 by explicit JG authorization; no Python rollback data retained, while repository source and curated parity fixtures remain |
@@ -73,36 +73,39 @@ authentication is not service credential evidence.
 
 ## Verified Pirate installation evidence
 
-On 2026-09-03, source commit
-`9e2c9ee56e07f77dde8e2b25baaa6c74a7c9318f` was built as a signed
+On 2026-09-03, corrected source commit
+`ff15894be798d403ea28ac668f82a15dd30575fd` was built as a signed
 local-bootstrap cohort and installed on Pirate under content-addressed release
-ID `e478e014bdfcbf4b7813a24dbb7d19d3a120b44c7f26d3e227e11174a55fa4ea`.
-The installed binary, installer, public key, ownership boundary, empty schema-v6
-ledger, persistent workspace bind mount, and disabled/inactive execution units
-were then checked independently. See
+ID `89786823409d5d18d612d2fb10412e04c240d1d34a958ada94b6a8b4ac1a91cc`.
+It superseded the initial `9e2c9ee` cohort after a disposable live probe found
+and corrected a Hermes v0.21 profile-output compatibility mismatch. The
+installed binary, installer, public key, ownership boundary, empty schema-v6
+ledger, persistent workspace bind mount, canonical checkout, disabled/inactive
+execution units, and exact-release service-owned Hermes bootstrap were then
+checked. See
 [`evidence/2026-09-03-pirate-inert-install.md`](evidence/2026-09-03-pirate-inert-install.md).
 
 This proves an inert installation, a mechanical unmount/remount cycle, and
-correct mount recovery after a real reboot. It does not prove service-owned
-Hermes/provider operation, GitHub-App credentials, webhook delivery, or a
-canary.
+correct mount recovery after a real reboot. It also proves creation and
+effective-configuration verification of the isolated `pip-mdk` board and three
+Hermes-native profiles. It does not prove a live provider API call,
+GitHub-App credentials, webhook delivery, or a canary.
 
 ## Inputs required before work can continue safely
 
 These are external state or authority, not remaining opportunities for a local
 implementation guess:
 
-1. Service-owned Hermes/provider authentication on Pirate, followed by the
-   exact installed release's non-dispatching runtime bootstrap and capability
-   probes. The compatible Hermes code is installed; its Pip-owned runtime is
-   not yet bootstrapped.
+1. A non-dispatching live provider capability probe and outage/recovery drill,
+   plus confirmation that the separately supervised gateway uses the already
+   bootstrapped service-owned Hermes root.
 2. A trusted webhook TLS ingress or relay, its GitHub webhook secret, and the
    completed isolated spool-to-ledger service mapping. The local loopback
    receiver and durable spool exist, but are not an activated delivery path.
 3. Three distinct numeric GitHub actors and separately scoped controller,
    general-reviewer, and security/performance-reviewer credentials.
-4. The actual required MDK CI contexts and confirmation that the canonical
-   checkout/branch policy matches the target repository.
+4. The actual required MDK CI contexts and confirmation that the configured
+   branch policy matches the canonical checkout.
 5. A protected `pip-release` GitHub environment with approved signing trust
    material, followed by an independently verified exact-head workflow run.
 6. Explicit authorization to activate the inert services and label exactly one
