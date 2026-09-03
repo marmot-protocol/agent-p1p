@@ -432,10 +432,12 @@ After reviewed release installation, but before enabling any timer:
    ```
 
    It accepts only `POST /github` with one each of `X-GitHub-Delivery`,
-   `X-GitHub-Event`, and `X-Hub-Signature-256`, an `issues` event, JSON content,
-   a valid HMAC, and at most 4 MiB of raw body. Requests have a ten-second
-   deadline and four-request concurrency bound. It has no GitHub token, ledger,
-   repository, Hermes, or provider access.
+   `X-GitHub-Event`, and `X-Hub-Signature-256`, JSON content, a valid HMAC, and
+   at most 4 MiB of raw body. Authenticated `issues` events are durably spooled.
+   An authenticated GitHub `ping` is answered with `204 No Content` without
+   creating a receipt or workflow input; all other event types fail closed.
+   Requests have a ten-second deadline and four-request concurrency bound. It
+   has no GitHub token, ledger, repository, Hermes, or provider access.
 
    `pip-webhook-consumer@mdk.timer` runs a separate `pip-control` oneshot at a
    bounded rate. Each invocation reads at most one canonical pending envelope,

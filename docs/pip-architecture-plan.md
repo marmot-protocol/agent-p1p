@@ -188,6 +188,9 @@ pending envelope at a time, revalidates its canonical encoding, payload digest,
 HMAC, and live GitHub evidence, commits the ledger transaction, and only then
 marks the spool item processed. A crash or GitHub outage before completion
 leaves the item pending; replay is resolved by the immutable delivery record.
+GitHub's signed `ping` lifecycle event is authenticated at the same HTTP
+boundary and answered without creating a receipt or workflow input. All other
+non-`issues` events fail closed.
 
 An issue becomes eligible only when:
 

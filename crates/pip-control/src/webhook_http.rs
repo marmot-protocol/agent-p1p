@@ -17,6 +17,7 @@ use axum::routing::post;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 
+use crate::webhook_spool::validate_webhook_authentication;
 use crate::{SpoolApplyResult, WebhookSpool, WebhookSpoolError, WebhookSpoolInput};
 
 const MAX_PAYLOAD_BYTES: usize = 4 * 1024 * 1024;
@@ -81,6 +82,13 @@ async fn receive_github_webhook(
     ) else {
         return StatusCode::BAD_REQUEST;
     };
+    if event_name == "ping" {
+        return match validate_webhook_authentication(delivery_id, signature, &body, &state.secret.0)
+        {
+            Ok(()) => StatusCode::NO_CONTENT,
+            Err(_) => StatusCode::BAD_REQUEST,
+        };
+    }
     let Ok(received_at) = SystemTime::now().duration_since(UNIX_EPOCH) else {
         return StatusCode::SERVICE_UNAVAILABLE;
     };

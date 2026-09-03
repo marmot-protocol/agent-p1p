@@ -84,6 +84,55 @@ async fn http_ingress_accepts_only_signed_bounded_github_issue_deliveries() {
     );
 }
 
+#[tokio::test]
+async fn http_ingress_authenticates_github_ping_without_spooling_it() {
+    let directory = tempfile::tempdir().unwrap();
+    for child in ["receipts", "pending", "processed"] {
+        fs::create_dir(directory.path().join(child)).unwrap();
+    }
+    let state = WebhookIngressState::new(
+        WebhookSpool::open(directory.path()).unwrap(),
+        b"webhook-secret".to_vec(),
+    )
+    .unwrap();
+    let app = webhook_ingress_router(state);
+    let payload = b"{\"zen\":\"Keep it logically awesome.\"}";
+    let valid_ping = Request::builder()
+        .method("POST")
+        .uri("/github")
+        .header("content-type", "application/json")
+        .header("x-github-delivery", "31234567-89ab-cdef-0123-456789abcdef")
+        .header("x-github-event", "ping")
+        .header("x-hub-signature-256", signature(b"webhook-secret", payload))
+        .body(Body::from(payload.as_slice()))
+        .unwrap();
+
+    assert_eq!(
+        app.clone().oneshot(valid_ping).await.unwrap().status(),
+        StatusCode::NO_CONTENT
+    );
+    for child in ["receipts", "pending", "processed"] {
+        assert_eq!(
+            fs::read_dir(directory.path().join(child)).unwrap().count(),
+            0
+        );
+    }
+
+    let invalid_ping = Request::builder()
+        .method("POST")
+        .uri("/github")
+        .header("content-type", "application/json")
+        .header("x-github-delivery", "41234567-89ab-cdef-0123-456789abcdef")
+        .header("x-github-event", "ping")
+        .header("x-hub-signature-256", "sha256=00")
+        .body(Body::from(payload.as_slice()))
+        .unwrap();
+    assert_eq!(
+        app.oneshot(invalid_ping).await.unwrap().status(),
+        StatusCode::BAD_REQUEST
+    );
+}
+
 fn signature(secret: &[u8], payload: &[u8]) -> String {
     let mut mac = HmacSha256::new_from_slice(secret).unwrap();
     mac.update(payload);

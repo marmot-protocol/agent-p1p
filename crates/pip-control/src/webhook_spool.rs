@@ -225,23 +225,33 @@ impl WebhookSpool {
 }
 
 fn validate_input(input: WebhookSpoolInput<'_>, secret: &[u8]) -> Result<(), WebhookSpoolError> {
-    if !valid_delivery_id(input.delivery_id) {
-        return Err(WebhookSpoolError::InvalidInput("invalid delivery ID"));
-    }
+    validate_webhook_authentication(input.delivery_id, input.signature, input.payload, secret)?;
     if input.event_name != "issues" {
         return Err(WebhookSpoolError::InvalidInput("unsupported event"));
     }
-    if input.payload.is_empty() || input.payload.len() > MAX_PAYLOAD_BYTES {
+    if input.received_at == 0 {
+        return Err(WebhookSpoolError::InvalidInput("invalid receive time"));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_webhook_authentication(
+    delivery_id: &str,
+    signature: &str,
+    payload: &[u8],
+    secret: &[u8],
+) -> Result<(), WebhookSpoolError> {
+    if !valid_delivery_id(delivery_id) {
+        return Err(WebhookSpoolError::InvalidInput("invalid delivery ID"));
+    }
+    if payload.is_empty() || payload.len() > MAX_PAYLOAD_BYTES {
         return Err(WebhookSpoolError::InvalidInput("invalid payload size"));
     }
     if secret.is_empty()
         || secret.len() > 1024
-        || !pip_github::verify_webhook(secret, input.payload, input.signature)
+        || !pip_github::verify_webhook(secret, payload, signature)
     {
         return Err(WebhookSpoolError::InvalidInput("signature rejected"));
-    }
-    if input.received_at == 0 {
-        return Err(WebhookSpoolError::InvalidInput("invalid receive time"));
     }
     Ok(())
 }
