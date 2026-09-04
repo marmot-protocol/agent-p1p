@@ -47,6 +47,33 @@ fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
 }
 
 #[test]
+fn phase9_mdk_policy_changes_only_revision_and_activation_controls() {
+    let target_bytes = include_bytes!("../../../config/target/repositories/mdk.json");
+    let active_bytes = include_bytes!("../../../config/activation/repositories/mdk-phase9.json");
+    let target = load_repository_policy(target_bytes).unwrap();
+    let active = load_repository_policy(active_bytes).unwrap();
+
+    assert_eq!(target.revision, 3);
+    assert_eq!(active.revision, 4);
+    assert!(active.intake.enabled);
+    assert!(!active.intake.paused);
+    assert!(active.dispatch_enabled);
+    assert_eq!(active.intake.repository_active_limit, 1);
+    assert_eq!(active.intake.global_active_limit, 1);
+    assert!(active.merge.is_shadow());
+    assert!(!active.merge.autonomous);
+
+    let mut target: serde_json::Value = serde_json::from_slice(target_bytes).unwrap();
+    let active: serde_json::Value = serde_json::from_slice(active_bytes).unwrap();
+    target["revision"] = active["revision"].clone();
+    target["intake"]["enabled"] = active["intake"]["enabled"].clone();
+    target["intake"]["paused"] = active["intake"]["paused"].clone();
+    target["dispatch_enabled"] = active["dispatch_enabled"].clone();
+    assert_eq!(active, target);
+    assert!(active.get("canary_issue").is_none());
+}
+
+#[test]
 fn policy_rejects_unknown_fields_model_fallback_and_shadow_merge_authority() {
     let bytes = include_bytes!("../../../config/target/repositories/mdk.json");
     let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();

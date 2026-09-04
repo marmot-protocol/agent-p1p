@@ -1,0 +1,130 @@
+{
+  "policy_format": 2,
+  "revision": 4,
+  "repository": {
+    "id": 1055628515,
+    "owner": "marmot-protocol",
+    "name": "mdk",
+    "default_branch": "master"
+  },
+  "board": "pip-mdk",
+  "workflow_version": 3,
+  "checkout": "/var/lib/pip/repositories/mdk",
+  "workspace": "/var/lib/pip/worktrees/mdk",
+  "artifacts": "/var/lib/pip/artifacts/mdk",
+  "workspace_storage": {
+    "require_distinct_filesystem": true,
+    "minimum_free_bytes": 536870912000,
+    "terminal_retention_seconds": 86400
+  },
+  "branch_prefix": "pip/",
+  "github": {
+    "automation_actor_id": 292420120,
+    "reviewer_general_actor_id": 323997422,
+    "reviewer_secperf_actor_id": 323998100
+  },
+  "intake": {
+    "enabled": true,
+    "paused": false,
+    "label": "pip-ok",
+    "trusted_actor_ids": [202880, 258432291, 292420120],
+    "excluded_issue_numbers": [1366, 1384],
+    "held_issue_numbers": [],
+    "repository_active_limit": 1,
+    "global_active_limit": 1
+  },
+  "dispatch_enabled": true,
+  "merge": {
+    "mode": "shadow",
+    "autonomous": false,
+    "method": "squash"
+  },
+  "max_remediation_rounds": 3,
+  "max_case_elapsed_seconds": 86400,
+  "max_provider_failures": 3,
+  "max_repeated_finding_fingerprint": 2,
+  "sensitive_scope_categories": [
+    "CRYPTOGRAPHY",
+    "MLS_CGKA",
+    "KEY_HANDLING",
+    "TRUST_ANCHOR",
+    "MEMBERSHIP_AUTHORIZATION",
+    "ADMIN_AUTHORIZATION",
+    "PUSH_PAYLOAD_CONTEXT"
+  ],
+  "required_ci_contexts": ["Required CI"],
+  "roles": [
+    {
+      "role": "planner",
+      "profile": "planner",
+      "execution": "hermes",
+      "provider": "openai-codex",
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": "xhigh",
+      "max_runtime": "PT30M",
+      "priority": 50,
+      "skills": ["workflow-contract", "planner"]
+    },
+    {
+      "role": "builder",
+      "profile": "builder-grok",
+      "execution": "direct",
+      "provider": "cursor",
+      "model": "cursor-grok-4.6-high-fast",
+      "reasoning_effort": null,
+      "max_runtime": "PT45M",
+      "priority": 50,
+      "skills": ["workflow-contract", "builder-grok"]
+    },
+    {
+      "role": "reviewer-general",
+      "reviewer_id": "general-sol",
+      "review_mode": "required",
+      "profile": "reviewer-general",
+      "execution": "hermes",
+      "provider": "openai-codex",
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": "high",
+      "max_runtime": "PT30M",
+      "priority": 50,
+      "skills": ["workflow-contract", "reviewer-general"]
+    },
+    {
+      "role": "reviewer-secperf",
+      "reviewer_id": "secperf-kimi",
+      "review_mode": "required",
+      "profile": "reviewer-secperf-kimi",
+      "execution": "direct",
+      "provider": "cursor",
+      "model": "kimi-k3-max",
+      "reasoning_effort": null,
+      "max_runtime": "PT30M",
+      "priority": 50,
+      "skills": ["workflow-contract", "reviewer-secperf"]
+    },
+    {
+      "role": "reviewer-secperf",
+      "reviewer_id": "secperf-opus",
+      "review_mode": "shadow",
+      "profile": "reviewer-secperf-opus",
+      "execution": "direct",
+      "provider": "cursor",
+      "model": "claude-opus-5-thinking-high",
+      "reasoning_effort": null,
+      "max_runtime": "PT30M",
+      "priority": 40,
+      "skills": ["workflow-contract", "reviewer-secperf"]
+    },
+    {
+      "role": "final-reviewer",
+      "profile": "final-reviewer",
+      "execution": "hermes",
+      "provider": "openai-codex",
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": "xhigh",
+      "max_runtime": "PT30M",
+      "priority": 50,
+      "skills": ["workflow-contract", "final-reviewer"]
+    }
+  ]
+}
