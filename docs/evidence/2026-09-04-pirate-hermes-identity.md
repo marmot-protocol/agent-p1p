@@ -80,13 +80,49 @@ and multi-repository scheduler state were removed. The new documents state that
 the Rust ledger is authoritative and that the conversational gateway must not
 recreate or bypass control-plane automation.
 
+## Immediate connector update
+
+After the identity migration passed its initial local probes, the conversational
+runtime was updated from the matching Vault release to the newest published WN
+Agent release, GitHub prerelease `wn-agent-v0.9.17`, from MDK commit
+`2bbcca3ebe4a971152412c16c3049cc7bd08d278`.
+
+The exact-tag installer and its companion checksum were downloaded from the MDK
+release. The installer itself matched SHA-256
+`085133219ec5992fcec73fd5e5b5f26012762359b1fc56dc69e8d0543b4bab09`
+before execution. `--no-configure-hermes` preserved the already validated
+Hermes configuration, Marmot sender authorization, curated persona, memories,
+and provider authentication.
+
+The installer started the updated connector but its immediate bootstrap probe
+lost a socket-startup race and returned `Connection refused`. The service was
+already healthy with an owner-only socket, so the same idempotent bootstrap was
+rerun after readiness and returned the original public identity with
+`created: false`. The user gateway was then started and both effective
+components reported `0.9.17`:
+
+- `wn-agent` binary SHA-256:
+  `f06e971fd055b019600c37f1811046f35bf4b4455ddd1eaa761ce5c00906d8ee`
+- Marmot plugin source commit:
+  `2bbcca3ebe4a971152412c16c3049cc7bd08d278`
+
+The installer's retained `marmot.backup.*` directory made Hermes discover both
+plugin versions and initially report `0.9.15`. That redundant backup contained
+the known old plugin and was removed; `hermes plugins list` then reported the
+active plugin as `0.9.17`.
+
+An exact `gpt-5.6-sol` post-update provider probe returned only
+`PIP_0917_OK`. An outbound message sent through the updated Marmot plugin
+succeeded as message
+`fe815d88ff35ce75cf68b846f8f9b109ed171a5e08b35d477afae14adb185a62`.
+
 ## Live result
 
 On Pirate:
 
 - `wn-agent-hermes.service` is enabled and active;
 - user `hermes-gateway.service` is enabled and active;
-- Hermes reports Marmot configured through plugin `0.9.15`;
+- Hermes reports Marmot configured through plugin `0.9.17`;
 - Hermes reports the OpenAI Codex provider authenticated;
 - an exact `gpt-5.6-sol` local provider probe returned only
   `PIP_PROVIDER_OK`;
