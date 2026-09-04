@@ -53,8 +53,14 @@ trap cleanup EXIT
 
 cargo build --release --locked -p pip-control
 release_root="$temporary/root"
-install -d -m 0755 "$release_root/bin" "$release_root/share/pip" "$release_root/share/pip/docs"
+install -d -m 0755 \
+  "$release_root/bin" \
+  "$release_root/share/pip" \
+  "$release_root/share/pip/docs" \
+  "$release_root/share/pip/install"
 install -m 0555 target/release/pip-control "$release_root/bin/pip-control"
+install -m 0444 scripts/install-rust-control-plane.sh \
+  "$release_root/share/pip/install/pip-install-release"
 cp -R skills "$release_root/share/pip/skills"
 cp -R config/target "$release_root/share/pip/config"
 cp -R migration/target-v1 "$release_root/share/pip/contracts"

@@ -22,6 +22,7 @@ jobs:
       - run: uv run --locked --dev pytest -q
       - run: scripts/check-supply-chain-pins.sh
       - run: tests/test-supply-chain-pins.sh
+      - run: tests/test-release-workflow.sh
       - run: rustup show active-toolchain
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings

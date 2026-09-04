@@ -3,6 +3,10 @@ name: Signed release cohort
 on:
   workflow_dispatch:
     inputs:
+      source_commit:
+        description: Exact 40-character master commit to verify and sign
+        required: true
+        type: string
       version:
         description: Release version recorded in the signed manifest
         required: true
@@ -11,54 +15,103 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: pip-release
+  cancel-in-progress: false
+
 jobs:
+  verify-rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_commit }}
+          persist-credentials: false
+      - name: Verify exact source and Rust gates
+        env:
+          EXPECTED_SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          test "$EXPECTED_SOURCE_COMMIT" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_COMMIT"
+          scripts/check-supply-chain-pins.sh
+          tests/test-supply-chain-pins.sh
+          tests/test-release-workflow.sh
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+          cargo test --workspace --locked
+
+  verify-systemd:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_commit }}
+          persist-credentials: false
+      - name: Verify exact source
+        env:
+          EXPECTED_SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          test "$EXPECTED_SOURCE_COMMIT" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_COMMIT"
+      - run: scripts/test-systemd-lifecycle.sh
+
   build-and-sign:
+    needs: [verify-rust, verify-systemd]
     runs-on: ubuntu-latest
     environment: pip-release
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.source_commit }}
           persist-credentials: false
-      - name: Verify exact source and supply-chain pins
+      - name: Verify exact source
+        env:
+          EXPECTED_SOURCE_COMMIT: ${{ inputs.source_commit }}
         run: |
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          scripts/check-supply-chain-pins.sh
-          cargo fmt --all --check
-          cargo clippy --workspace --all-targets --all-features -- -D warnings
-          cargo test --workspace --locked
+          test "$EXPECTED_SOURCE_COMMIT" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_COMMIT"
       - name: Materialize protected signing inputs
         env:
-          SIGNING_KEY_BASE64: ${{ secrets.PIP_RELEASE_SIGNING_KEY_BASE64 }}
-          RELEASE_PUBLIC_KEY: ${{ secrets.PIP_RELEASE_PUBLIC_KEY }}
+          PIP_RELEASE_SIGNING_KEY_BASE64: ${{ secrets.PIP_RELEASE_SIGNING_KEY_BASE64 }}
+          PIP_RELEASE_PUBLIC_KEY: ${{ secrets.PIP_RELEASE_PUBLIC_KEY }}
         run: |
-          test -n "$SIGNING_KEY_BASE64"
-          test -n "$RELEASE_PUBLIC_KEY"
-          umask 077
-          printf '%s' "$SIGNING_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/release-signing.key"
-          printf '%s\n' "$RELEASE_PUBLIC_KEY" > "$RUNNER_TEMP/release-public.key"
+          scripts/materialize-release-signing-inputs.sh \
+            "$RUNNER_TEMP/release-signing.key" \
+            "$RUNNER_TEMP/release-public.key"
       - name: Build and verify signed cohort
         env:
           RELEASE_VERSION: ${{ inputs.version }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
         run: |
-          built_at=$(git show -s --format=%cI "$GITHUB_SHA")
+          built_at=$(git show -s --format=%cI "$SOURCE_COMMIT")
           scripts/build-rust-release.sh \
             --output "$RUNNER_TEMP/pip-release" \
             --version "$RELEASE_VERSION" \
             --built-at "$built_at" \
-            --builder-identity "github-actions:${GITHUB_REPOSITORY}@${GITHUB_SHA}" \
+            --builder-identity "github-actions:${GITHUB_REPOSITORY}@${SOURCE_COMMIT}" \
             --signing-key "$RUNNER_TEMP/release-signing.key" \
             --public-key "$RUNNER_TEMP/release-public.key"
-          source_date_epoch=$(git show -s --format=%ct "$GITHUB_SHA")
+          install -m 0555 \
+            "$RUNNER_TEMP/pip-release/root/share/pip/install/pip-install-release" \
+            "$RUNNER_TEMP/pip-install-release"
+          source_date_epoch=$(git show -s --format=%ct "$SOURCE_COMMIT")
           tar --sort=name --mtime="@$source_date_epoch" --owner=0 --group=0 --numeric-owner \
             -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/pip-release.tar.gz" pip-release
-          sha256sum "$RUNNER_TEMP/pip-release.tar.gz" > "$RUNNER_TEMP/SHA256SUMS"
+          (
+            cd "$RUNNER_TEMP"
+            sha256sum pip-release.tar.gz pip-install-release > SHA256SUMS
+          )
+      - name: Remove materialized signing inputs
+        if: ${{ always() }}
+        run: rm -f -- "$RUNNER_TEMP/release-signing.key" "$RUNNER_TEMP/release-public.key"
       - name: Upload immutable cohort envelope
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: pip-${{ github.sha }}
+          name: pip-${{ inputs.source_commit }}
           path: |
             ${{ runner.temp }}/pip-release.tar.gz
+            ${{ runner.temp }}/pip-install-release
             ${{ runner.temp }}/SHA256SUMS
           if-no-files-found: error
           retention-days: 30

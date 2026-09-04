@@ -50,10 +50,17 @@ operator assertion that can disagree with the artifact.
 The checked-in `.github/workflows/release.yml` is a manual, protected release
 workflow. It requires the `pip-release` environment and externally provisioned
 `PIP_RELEASE_SIGNING_KEY_BASE64` and `PIP_RELEASE_PUBLIC_KEY` secrets. It checks
-out the triggering SHA without persisted GitHub credentials, reruns the full
-Rust gates, builds and verifies the cohort, creates a deterministic tar
-envelope, and uploads it under the exact source SHA. Configuring those secrets
-or approving a run is a separate release-operator action.
+that the operator-supplied source commit is the triggering SHA, checks out that
+commit without persisted GitHub credentials, and runs the Rust and disposable
+systemd gates without access to the protected environment. Only after both
+verification jobs pass can the protected job materialize the base64-encoded
+32-byte signing seed, build and verify the cohort, and upload its deterministic
+tar envelope with the exact installer and outer checksums. The installer is
+itself an artifact in the signed manifest; the top-level executable is copied
+byte-for-byte from that verified resource. The signing-key secret is the
+canonical base64 seed itself, not a second base64 encoding.
+Configuring those secrets or approving a run is a separate release-operator
+action.
 
 ## Pre-release gates
 
