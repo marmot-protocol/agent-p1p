@@ -915,6 +915,7 @@ dependencies = [
  "pip-github",
  "pip-hermes",
  "pip-store",
+ "rusqlite",
  "rustix",
  "serde",
  "serde_json",

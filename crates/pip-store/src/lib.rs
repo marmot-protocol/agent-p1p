@@ -2481,6 +2481,27 @@ impl Store {
         Ok(())
     }
 
+    pub fn backup_supported_schema_to_new(
+        source: impl AsRef<Path>,
+        destination: impl AsRef<Path>,
+    ) -> Result<u32> {
+        let destination = destination.as_ref();
+        if destination.exists() {
+            return Err(StoreError::DestinationExists(destination.to_path_buf()));
+        }
+        let connection = Connection::open_with_flags(
+            source.as_ref(),
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        connection.busy_timeout(Duration::from_secs(5))?;
+        let version = schema_version(&connection)?;
+        if version == 0 || version > SCHEMA_VERSION {
+            return Err(StoreError::UnsupportedSchema(version));
+        }
+        connection.backup(MAIN_DB, destination, None)?;
+        Ok(version)
+    }
+
     pub fn restore_backup_to_new(
         source: impl AsRef<Path>,
         destination: impl AsRef<Path>,

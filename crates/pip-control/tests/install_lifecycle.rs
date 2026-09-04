@@ -10,6 +10,7 @@ use pip_control::{
     install_release_pinned, sign_manifest, verifying_key,
 };
 use pip_store::Store;
+use rusqlite::Connection;
 
 #[test]
 fn host_state_root_allows_worker_group_traversal_without_directory_listing() {
@@ -77,6 +78,40 @@ fn clean_install_reinstall_and_upgrade_are_content_addressed_and_paused() {
             .join("releases")
             .join(first.release_id)
             .is_dir()
+    );
+}
+
+#[test]
+fn upgrade_snapshots_schema_six_before_migrating_to_seven() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let layout = layout(sandbox.path());
+    prepare_layout(&layout);
+    let key = STANDARD.encode([43_u8; 32]);
+    let public = verifying_key(&key).unwrap();
+    let v1 = cohort(sandbox.path(), "v1", b"binary-v1\n", "a", &key);
+    let v2 = cohort(sandbox.path(), "v2", b"binary-v2\n", "b", &key);
+    install_release(&v1, &public, &layout, None).unwrap();
+
+    let ledger = layout.state_root.join("ledger.db");
+    let connection = Connection::open(&ledger).unwrap();
+    connection
+        .execute_batch(
+            "DROP TABLE review_observations;
+             DELETE FROM schema_migrations WHERE version = 7;
+             PRAGMA user_version = 6;",
+        )
+        .unwrap();
+    drop(connection);
+
+    let upgraded = install_release(&v2, &public, &layout, None).unwrap();
+    assert_eq!(upgraded.result, InstallResult::Installed);
+    assert_eq!(current_source(&layout), "b".repeat(40));
+    assert_eq!(
+        Store::open_read_only(&ledger)
+            .unwrap()
+            .schema_version()
+            .unwrap(),
+        7
     );
 }
 

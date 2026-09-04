@@ -812,12 +812,8 @@ fn snapshot_ledger(path: &Path) -> Result<Vec<u8>, InstallError> {
     let parent = path.parent().ok_or(InstallError::InvalidLayout)?;
     let backup = parent.join(format!(".pip-ledger-rollback-{}", std::process::id()));
     remove_if_file(&backup)?;
-    let store =
-        Store::open_read_only(path).map_err(|error| InstallError::Ledger(error.to_string()))?;
-    store
-        .backup_to(&backup)
+    Store::backup_supported_schema_to_new(path, &backup)
         .map_err(|error| InstallError::Ledger(error.to_string()))?;
-    drop(store);
     let bytes = read_regular(&backup, 1024 * 1024 * 1024);
     let removed = fs::remove_file(&backup).map_err(fs_error);
     match (bytes, removed) {
