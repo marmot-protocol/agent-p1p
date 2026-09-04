@@ -201,6 +201,95 @@ fn signed_label_webhook_routes_one_issue_and_replays_by_delivery_id() {
 }
 
 #[test]
+fn superseded_signed_label_webhook_is_acknowledged_from_latest_live_state() {
+    let directory = tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("cases.db")).unwrap();
+    let policy = active_policy(1, 1);
+    let source = source(&[42]);
+    {
+        let mut snapshots = source.snapshots.borrow_mut();
+        let snapshot = snapshots.get_mut(&42).unwrap();
+        snapshot.issue.labels.clear();
+        snapshot.label_events.push(LabelEvent {
+            id: 10_043,
+            labeled: false,
+            actor_id: 202_880,
+            label: "pip-ok".into(),
+            created_at: "2026-08-20T12:01:00Z".into(),
+        });
+    }
+    let payload = webhook_payload(42, "pip-ok", 1_055_628_515);
+    let signature = signature(b"webhook-secret", &payload);
+
+    let report = ingest_webhook(
+        &source,
+        &policy,
+        &mut store,
+        WebhookEnvelope {
+            delivery_id: "02234567-89ab-cdef-0123-456789abcdef",
+            event_name: "issues",
+            signature: &signature,
+            payload: &payload,
+            received_at: 100,
+        },
+        b"webhook-secret",
+        101,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(report.delivery, "APPLIED");
+    let candidate = report.candidate.unwrap();
+    assert_eq!(candidate.decision, "INELIGIBLE");
+    assert_eq!(candidate.blockers, ["REQUIRED_LABEL_MISSING"]);
+    let status = store.status(101).unwrap();
+    assert_eq!(status.webhook_deliveries, 1);
+    assert!(status.cases.is_empty());
+    assert_eq!(status.events, 0);
+    assert_eq!(status.outbox_total, 0);
+}
+
+#[test]
+fn signed_label_webhook_sender_must_exist_in_live_label_history() {
+    let directory = tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("cases.db")).unwrap();
+    let policy = active_policy(1, 1);
+    let source = source(&[42]);
+    source
+        .snapshots
+        .borrow_mut()
+        .get_mut(&42)
+        .unwrap()
+        .label_events[0]
+        .actor_id = 999;
+    let payload = webhook_payload(42, "pip-ok", 1_055_628_515);
+    let signature = signature(b"webhook-secret", &payload);
+
+    let result = ingest_webhook(
+        &source,
+        &policy,
+        &mut store,
+        WebhookEnvelope {
+            delivery_id: "03234567-89ab-cdef-0123-456789abcdef",
+            event_name: "issues",
+            signature: &signature,
+            payload: &payload,
+            received_at: 100,
+        },
+        b"webhook-secret",
+        101,
+        false,
+    );
+
+    assert!(matches!(result, Err(ActiveIntakeError::Evidence(_))));
+    let status = store.status(101).unwrap();
+    assert_eq!(status.webhook_deliveries, 1);
+    assert!(status.cases.is_empty());
+    assert_eq!(status.events, 0);
+    assert_eq!(status.outbox_total, 0);
+}
+
+#[test]
 fn webhook_fails_closed_before_recording_or_fetching_on_bad_signature_or_repository() {
     let policy = active_policy(1, 1);
     for (payload, signature) in [

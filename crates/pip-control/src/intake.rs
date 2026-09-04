@@ -224,20 +224,17 @@ pub fn ingest_webhook<S: IntakeSource>(
             payload.issue.number,
         )
         .map_err(|error| ActiveIntakeError::Evidence(ShadowError::Evidence(error.to_string())))?;
-    let latest_event = evidence
+    let webhook_event_exists = evidence
         .label_events
         .iter()
         .filter(|event| event.label == policy.intake.label)
-        .max_by_key(|event| (&event.created_at, event.id));
+        .any(|event| event.labeled && event.actor_id == payload.sender.id);
     if evidence.repository.id != policy.repository.id
         || evidence.repository.full_name != policy.repository.full_name()
         || evidence.repository.default_branch != policy.repository.default_branch
         || evidence.issue.id != payload.issue.id
         || evidence.issue.number != payload.issue.number
-        || latest_event
-            .filter(|event| event.labeled)
-            .map(|event| event.actor_id)
-            != Some(payload.sender.id)
+        || !webhook_event_exists
     {
         return Err(ActiveIntakeError::Evidence(ShadowError::DiscoveryDrift));
     }

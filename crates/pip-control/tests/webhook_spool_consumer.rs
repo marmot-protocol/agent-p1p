@@ -174,6 +174,74 @@ fn paused_intake_commits_the_delivery_without_creating_or_dispatching_a_case() {
 }
 
 #[test]
+fn superseded_label_delivery_is_processed_without_creating_a_case() {
+    let directory = tempfile::tempdir().unwrap();
+    let spool_root = directory.path().join("spool");
+    prepare_spool(&spool_root);
+    let spool = WebhookSpool::open(&spool_root).unwrap();
+    let payload = webhook_payload(42);
+    let signature = signature(b"webhook-secret", &payload);
+    let delivery_id = "04234567-89ab-cdef-0123-456789abcdef";
+    spool
+        .store(
+            WebhookSpoolInput {
+                delivery_id,
+                event_name: "issues",
+                signature: &signature,
+                payload: &payload,
+                received_at: 100,
+            },
+            b"webhook-secret",
+        )
+        .unwrap();
+    let source = source(false);
+    {
+        let mut snapshots = source.snapshots.borrow_mut();
+        let snapshot = snapshots.get_mut(&42).unwrap();
+        snapshot.issue.labels.clear();
+        snapshot.label_events.push(LabelEvent {
+            id: 92,
+            labeled: false,
+            actor_id: 202_880,
+            label: "pip-ok".into(),
+            created_at: "2026-08-20T12:01:00Z".into(),
+        });
+    }
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+
+    let result = consume_webhook_spool_once(
+        &source,
+        &active_policy(),
+        &mut store,
+        &spool,
+        b"webhook-secret",
+        101,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(result.result, "PROCESSED");
+    let candidate = result.intake.unwrap().candidate.unwrap();
+    assert_eq!(candidate.decision, "INELIGIBLE");
+    assert_eq!(candidate.blockers, ["REQUIRED_LABEL_MISSING"]);
+    let status = store.status(101).unwrap();
+    assert_eq!(status.webhook_deliveries, 1);
+    assert!(status.cases.is_empty());
+    assert_eq!(status.events, 0);
+    assert_eq!(status.outbox_total, 0);
+    assert!(
+        !spool_root
+            .join(format!("pending/{delivery_id}.json"))
+            .exists()
+    );
+    assert!(
+        spool_root
+            .join(format!("processed/{delivery_id}.json"))
+            .is_file()
+    );
+}
+
+#[test]
 fn unrelated_signed_issue_action_is_committed_without_a_live_issue_read() {
     let directory = tempfile::tempdir().unwrap();
     let spool_root = directory.path().join("spool");
