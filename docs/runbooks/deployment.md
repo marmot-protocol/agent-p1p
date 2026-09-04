@@ -47,12 +47,14 @@ The manifest binds:
 Trusted CI derives `source_commit`; the installer does not accept a free-form
 operator assertion that can disagree with the artifact.
 
-The checked-in `.github/workflows/release.yml` is a manual, protected release
-workflow. It requires the `pip-release` environment and externally provisioned
-`PIP_RELEASE_SIGNING_KEY_BASE64` and `PIP_RELEASE_PUBLIC_KEY` secrets. It checks
-that the operator-supplied source commit is the triggering SHA, checks out that
-commit without persisted GitHub credentials, and runs the Rust and disposable
-systemd gates without access to the protected environment. Only after both
+The checked-in `.github/workflows/release.yml` is a manual, protected deployment
+build. It has no operator inputs: a dispatch from `master` checks out the exact
+triggering SHA without persisted GitHub credentials and derives the deployment
+identifier as `git-<12-character commit>`. Dispatches from any other branch fail
+closed. The workflow requires the `pip-release` environment and externally
+provisioned `PIP_RELEASE_SIGNING_KEY_BASE64` and `PIP_RELEASE_PUBLIC_KEY`
+secrets. It runs the Rust and disposable systemd gates without access to the
+protected environment. Only after both
 verification jobs pass can the protected job materialize the base64-encoded
 32-byte signing seed, build and verify the cohort, and upload its deterministic
 tar envelope with the exact installer and outer checksums. The installer is

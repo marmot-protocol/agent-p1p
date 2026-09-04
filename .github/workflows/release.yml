@@ -1,22 +1,13 @@
-name: Signed release cohort
+name: Build Pip deployment
 
 on:
   workflow_dispatch:
-    inputs:
-      source_commit:
-        description: Exact 40-character master commit to verify and sign
-        required: true
-        type: string
-      version:
-        description: Release version recorded in the signed manifest
-        required: true
-        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: pip-release
+  group: pip-deployment
   cancel-in-progress: false
 
 jobs:
@@ -25,14 +16,12 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.source_commit }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Verify exact source and Rust gates
-        env:
-          EXPECTED_SOURCE_COMMIT: ${{ inputs.source_commit }}
         run: |
-          test "$EXPECTED_SOURCE_COMMIT" = "$GITHUB_SHA"
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_COMMIT"
+          test "$GITHUB_REF" = "refs/heads/master"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           scripts/check-supply-chain-pins.sh
           tests/test-supply-chain-pins.sh
           tests/test-release-workflow.sh
@@ -46,14 +35,12 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.source_commit }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Verify exact source
-        env:
-          EXPECTED_SOURCE_COMMIT: ${{ inputs.source_commit }}
         run: |
-          test "$EXPECTED_SOURCE_COMMIT" = "$GITHUB_SHA"
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_COMMIT"
+          test "$GITHUB_REF" = "refs/heads/master"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - run: scripts/test-systemd-lifecycle.sh
 
   build-and-sign:
@@ -63,14 +50,12 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.source_commit }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Verify exact source
-        env:
-          EXPECTED_SOURCE_COMMIT: ${{ inputs.source_commit }}
         run: |
-          test "$EXPECTED_SOURCE_COMMIT" = "$GITHUB_SHA"
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_COMMIT"
+          test "$GITHUB_REF" = "refs/heads/master"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - name: Materialize protected signing inputs
         env:
           PIP_RELEASE_SIGNING_KEY_BASE64: ${{ secrets.PIP_RELEASE_SIGNING_KEY_BASE64 }}
@@ -81,13 +66,13 @@ jobs:
             "$RUNNER_TEMP/release-public.key"
       - name: Build and verify signed cohort
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
-          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          SOURCE_COMMIT: ${{ github.sha }}
         run: |
           built_at=$(git show -s --format=%cI "$SOURCE_COMMIT")
+          release_version="git-${SOURCE_COMMIT:0:12}"
           scripts/build-rust-release.sh \
             --output "$RUNNER_TEMP/pip-release" \
-            --version "$RELEASE_VERSION" \
+            --version "$release_version" \
             --built-at "$built_at" \
             --builder-identity "github-actions:${GITHUB_REPOSITORY}@${SOURCE_COMMIT}" \
             --signing-key "$RUNNER_TEMP/release-signing.key" \
@@ -108,7 +93,7 @@ jobs:
       - name: Upload immutable cohort envelope
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: pip-${{ inputs.source_commit }}
+          name: pip-${{ github.sha }}
           path: |
             ${{ runner.temp }}/pip-release.tar.gz
             ${{ runner.temp }}/pip-install-release

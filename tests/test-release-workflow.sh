@@ -11,8 +11,20 @@ fail() {
     exit 1
 }
 
-grep -Fq 'source_commit:' "$workflow" || fail "release workflow lacks an exact source input"
-grep -Fq 'group: pip-release' "$workflow" || fail "release workflow lacks global concurrency"
+grep -Fq 'name: Build Pip deployment' "$workflow" || fail "deployment workflow has the wrong operator-facing name"
+if grep -Eq '^[[:space:]]+(source_commit|version):[[:space:]]*$' "$workflow"; then
+    fail "deployment workflow still requires redundant operator inputs"
+fi
+grep -Fq 'group: pip-deployment' "$workflow" || fail "deployment workflow lacks global concurrency"
+# The literal workflow shell command must not be expanded by this test.
+# shellcheck disable=SC2016
+grep -Fq 'test "$GITHUB_REF" = "refs/heads/master"' "$workflow" || fail "deployment workflow is not restricted to master"
+# The literal workflow expression must not be shell-expanded by this test.
+# shellcheck disable=SC2016
+grep -Fq 'ref: ${{ github.sha }}' "$workflow" || fail "deployment checkout is not pinned to the triggering commit"
+# The literal workflow shell command must not be expanded by this test.
+# shellcheck disable=SC2016
+grep -Fq 'release_version="git-${SOURCE_COMMIT:0:12}"' "$workflow" || fail "deployment identifier is not derived from the source commit"
 grep -Fq 'needs: [verify-rust, verify-systemd]' "$workflow" || fail "signing does not wait for every verification job"
 test "$(grep -Fc 'environment: pip-release' "$workflow")" -eq 1 || fail "only the signing job may use the protected environment"
 grep -Fq 'tests/test-release-workflow.sh' "$workflow" || fail "release verification omits its workflow contract"
