@@ -1,15 +1,16 @@
 # Pip completion audit
 
-**Snapshot date:** 2026-09-03
+**Snapshot date:** 2026-09-04
 
 **Decision:** The deterministic Rust workflow and controller are installed on
 Pirate as an inert, single-repository shadow deployment. Native reviewer-App
-authentication is implemented. The built-in webhook ingress is still an
-inert local integration: its isolated service/install boundary and
-spool-to-ledger consumer now exist and pass the disposable lifecycle, but have
-not been installed or exposed on Pirate. The system is not production-ready
-until the external gates below are satisfied, and it is not ready for Phase 10
-multi-repository expansion until the Phase 9 MDK canary is accepted.
+authentication is implemented. The isolated webhook ingress is installed and
+publicly reachable through the authenticated forwarding boundary; its consumer
+and every execution path remain disabled. Policy revision 3 and its
+policy-defined reviewer set are installed, but the system is not
+production-ready until the external gates below are satisfied, and it is not
+ready for Phase 10 multi-repository expansion until the Phase 9 MDK canary is
+accepted.
 
 This audit maps the canonical architecture and migration roadmap to executable
 evidence. `Implemented locally` means source plus tests exist. It does not mean
@@ -23,7 +24,7 @@ authorized issue.
 | Generic repository/board/case identity | Implemented locally | Strict repository policy, numeric repository/actor validation, generic case identity, and no compiled canary issue |
 | Deterministic Rust workflow | Implemented locally | `pip-core` states/events/effects and property/fixture tests |
 | Authoritative durable ledger | Implemented locally | SQLite schema v7, immutable required-run history, detached review observations, workspace-retirement evidence, webhook deliveries, outbox, projections, attempts, migrations, backup, and crash injection |
-| Signed webhook primary intake adapter | Implemented locally; Pirate deployment and TLS external | HMAC verification, delivery replay/conflict checks, exact repository/issue/actor re-read, isolated loopback receiver, atomic raw-body spool, controller-owned bounded consumption, commit-before-processed ordering, outage replay, tamper rejection, and systemd lifecycle tests |
+| Signed webhook primary intake adapter | Installed on Pirate; intake policy and consumer timer disabled | HMAC verification, delivery replay/conflict checks, exact repository/issue/actor re-read, isolated loopback receiver, atomic raw-body spool, controller-owned bounded consumption, commit-before-processed ordering, outage replay, tamper rejection, systemd lifecycle tests, and live signed delivery/replay evidence |
 | Bounded polling recovery | Implemented locally | Generic label discovery and live-evidence eligibility reconciliation |
 | Planner before builder | Implemented locally | Typed planner contract, durable plan publication gate, and dispatch ordering |
 | Assigned builder worktree and draft PR | Implemented locally | Controller-owned checkout/worktree/branch, credential-free builder, exact push, and stable draft-PR transaction |
@@ -47,59 +48,49 @@ authorized issue.
 | 1 — frozen reference behavior | Complete; retained Python fixtures remain parity inputs, not runtime authority |
 | 2 — pure Rust core | Complete locally |
 | 3 — ledger and outbox | Complete locally through schema v7 |
-| 4 — read-only adapters | Complete locally; live service-identity probes remain Phase 8 evidence |
+| 4 — read-only adapters | Complete locally with live controller and reviewer-App read probes on Pirate |
 | 5 — projections and execution | Complete locally for Hermes and direct Cursor paths |
-| 6 — controlled GitHub writes | Complete locally; live credential scope evidence remains external |
-| 7 — packaging and lifecycle | Inert local-bootstrap cohort installed on Pirate; protected signing environment and exact CI run remain external release gates |
-| 8 — parity and non-dispatching live shadow | Inert host install, persistent workspace mount, canonical checkout, and service-owned Hermes bootstrap complete; provider capability plus outage and recovery drill still required |
+| 6 — controlled GitHub writes | Complete locally; live read scopes are proven and authorized write behavior remains reserved for the canary |
+| 7 — packaging and lifecycle | Exact source `e4cbd33` installed inertly on Pirate with live schema migration; protected signing environment and exact CI run remain external release gates |
+| 8 — parity and non-dispatching live shadow | Inert host install, storage, checkout, runtime bootstrap, live GitHub reconciliation, and configured-model capability probes complete; outage and recovery drill still required |
 | 9 — one MDK shadow case | Not authorized and not run |
 | 10 — controlled expansion | Intentionally not started before Phase 9 acceptance |
 | Legacy retirement | Vault runtime retired early on 2026-09-01 by explicit JG authorization; no Python rollback data retained, while repository source and curated parity fixtures remain |
 
 ## Verified local evidence
 
-The following gates passed on 2026-09-03 after the schema v6 workspace-lifecycle
-changes:
+The following gates passed on 2026-09-04 for exact source `e4cbd33` after the
+schema 6-to-7 installation regression was added and fixed:
 
 - `cargo fmt --all --check`;
-- `cargo clippy --workspace --all-targets --all-features -- -D warnings`;
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`;
 - `cargo test --workspace --locked`;
 - `scripts/check-supply-chain-pins.sh` and its negative regression test; and
 - `scripts/test-systemd-lifecycle.sh`, reporting clean install, reinstall,
   upgrade, injected rollback, and restart recovery with active timers disabled.
 
-The workstation had Cursor `2025.09.18-7ae6800`, an authenticated personal
-GitHub CLI, and Docker `29.6.2`, but no `hermes` executable. Personal GitHub
-authentication is not service credential evidence.
-
 ## Verified Pirate installation evidence
 
-On 2026-09-03, corrected source commit
-`ff15894be798d403ea28ac668f82a15dd30575fd` was built as a signed
-local-bootstrap cohort and installed on Pirate under content-addressed release
-ID `89786823409d5d18d612d2fb10412e04c240d1d34a958ada94b6a8b4ac1a91cc`.
-It superseded the initial `9e2c9ee` cohort after a disposable live probe found
-and corrected a Hermes v0.21 profile-output compatibility mismatch. The
-installed binary, installer, public key, ownership boundary, empty schema-v6
-ledger, persistent workspace bind mount, canonical checkout, disabled/inactive
-execution units, and exact-release service-owned Hermes bootstrap were then
-checked. See
-[`evidence/2026-09-03-pirate-inert-install.md`](evidence/2026-09-03-pirate-inert-install.md).
-
-This proves an inert installation, a mechanical unmount/remount cycle, and
-correct mount recovery after a real reboot. It also proves creation and
-effective-configuration verification of the isolated `pip-mdk` board and three
-Hermes-native profiles. It does not prove a live provider API call,
-GitHub-App credentials, webhook delivery, or a canary.
+On 2026-09-04, source commit
+`e4cbd333ede4197c31349b9e7259ee670311ed1e` was built as a signed cohort and
+installed on Pirate under content-addressed release ID
+`99099430157256bfb922226afe698c2a650fdeb5e3bcff0699e29f40ac68a78b`.
+The live upgrade migrated the schema-6 ledger to schema 7 and preserved all
+eight webhook-delivery records. Policy revision 3, the exact installed source,
+ownership boundaries, service states, and Hermes profile reconciliation were
+verified. Real read-only calls under `pip-worker` succeeded for the configured
+Grok, Kimi, and Opus models, and the manual GitHub shadow reconciler found zero
+candidates and made zero mutations. See
+[`evidence/2026-09-04-pirate-policy-driven-reviewers.md`](evidence/2026-09-04-pirate-policy-driven-reviewers.md).
 
 ## Inputs required before work can continue safely
 
 These are external state or authority, not remaining opportunities for a local
 implementation guess:
 
-1. A non-dispatching live provider capability probe and outage/recovery drill,
-   plus confirmation that the separately supervised gateway uses the already
-   bootstrapped service-owned Hermes root.
+1. A controlled provider outage/recovery drill, plus confirmation that the
+   disabled Pip gateway uses the already bootstrapped service-owned Hermes root
+   when activation is explicitly authorized.
 2. A protected `pip-release` GitHub environment with approved signing trust
    material, followed by an independently verified exact-head workflow run.
 3. Explicit authorization to activate the inert services and label exactly one
@@ -107,7 +98,7 @@ implementation guess:
 4. JG acceptance of the complete shadow result before Phase 10 or legacy
    retirement begins.
 
-Installed policy revision 2, both reviewer App token-mint/read probes, and the
+Installed policy revision 3, both reviewer App token-mint/read probes, and the
 live `Safe Master` / GitHub Actions `Required CI` match are recorded in
 [`evidence/2026-09-04-pirate-reviewer-apps.md`](evidence/2026-09-04-pirate-reviewer-apps.md).
 The completed configured-label add/live-reread/remove proof is recorded in
