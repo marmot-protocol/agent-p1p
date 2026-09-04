@@ -9,9 +9,9 @@ use std::time::Duration;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-use pip_contracts::{CaseIdentity, WorkerBinding, WorkerResult, WorkerRole};
+use pip_contracts::{CaseIdentity, ReviewMode, WorkerBinding, WorkerResult, WorkerRole};
 use pip_controller::{
-    DirectTaskSpec, ExecutionKind, IngestError, IngestResult, ingest_worker_result,
+    DirectTaskSpec, ExecutionKind, IngestError, IngestResult, ingest_worker_result_with_policy,
 };
 use pip_executor::{
     CursorExecutor, CursorHealthProbe, CursorTask, ProcessRunner, ProviderProbeError,
@@ -334,7 +334,14 @@ fn process_claimed<R: DirectWorkerRuntime>(
             }
         }
     };
-    let ingested = ingest_worker_result(store, &policy.case_policy(), &binding, &result)?;
+    let workflow_policy = policy.workflow_policy()?;
+    let ingested = ingest_worker_result_with_policy(
+        store,
+        &policy.case_policy(),
+        &workflow_policy,
+        &binding,
+        &result,
+    )?;
     Ok((task.task_id, ingested))
 }
 
@@ -346,13 +353,19 @@ pub(crate) fn validate_job(
 ) -> Result<WorkerBinding, DirectWorkerError> {
     let body = task.body.as_object().ok_or(DirectWorkerError::InvalidJob)?;
     let workflow = policy.workflow_policy()?;
-    let configured = workflow
-        .roles()
-        .iter()
-        .find(|configured| configured.role == task.role)
-        .ok_or(DirectWorkerError::InvalidJob)?;
+    let reviewer_id = optional_text(body, "reviewer_id")?;
+    let configured = if let Some(reviewer_id) = reviewer_id {
+        workflow.reviewer(reviewer_id).ok()
+    } else {
+        workflow
+            .roles()
+            .iter()
+            .find(|configured| configured.role == task.role && configured.reviewer_id.is_none())
+    }
+    .ok_or(DirectWorkerError::InvalidJob)?;
     let role = role_name(task.role);
-    let expected_effect_id = format!("{}:direct:{role}", task.source_effect_id);
+    let worker_id = reviewer_id.unwrap_or(role);
+    let expected_effect_id = format!("{}:direct:{worker_id}", task.source_effect_id);
     let expected_workspace = format!(
         "{}/repo-{}-issue-{}-workflow-{}",
         policy.workspace.trim_end_matches('/'),
@@ -368,7 +381,7 @@ pub(crate) fn validate_job(
         }
     };
     let expected_task_id = format!(
-        "{}:{role}:round:{round}:revision:{}:worker",
+        "{}:{worker_id}:round:{round}:revision:{}:worker",
         case.case_key, case.state_revision
     );
     let requested_model = format!("{}/{}", configured.provider, configured.model);
@@ -376,15 +389,24 @@ pub(crate) fn validate_job(
         task.model.to_ascii_lowercase().as_str(),
         "auto" | "default" | "latest"
     );
+    let expected_effect_type = if configured
+        .review_mode
+        .is_some_and(|mode| matches!(mode, ReviewMode::Advisory | ReviewMode::Shadow))
+    {
+        "RUN_DIRECT_OBSERVER"
+    } else {
+        RUN_EFFECT
+    };
+    let expected_review_mode = configured.review_mode.map(review_mode_name);
     let valid = task.schema_version == 1
-        && claimed.effect_type == RUN_EFFECT
+        && claimed.effect_type == expected_effect_type
         && claimed.effect_id == expected_effect_id
         && claimed.case_key == case.case_key
         && claimed.state_revision == case.state_revision
         && case.repository_id == policy.repository.id
         && case.workflow_version == policy.workflow_version
         && task.task_id == expected_task_id
-        && task.title == format!("Run {role} for {}", case.case_key)
+        && task.title == format!("Run {worker_id} for {}", case.case_key)
         && task.workspace == expected_workspace
         && configured.execution == ExecutionKind::Direct
         && task.profile == configured.profile
@@ -401,6 +423,8 @@ pub(crate) fn validate_job(
         && number(body, "workflow_version")? == u64::from(case.workflow_version)
         && number(body, "state_revision")? == case.state_revision
         && text(body, "role")? == role
+        && reviewer_id == configured.reviewer_id.as_deref()
+        && optional_text(body, "review_mode")? == expected_review_mode
         && text(body, "execution")? == "direct"
         && text(body, "provider")? == configured.provider
         && text(body, "model")? == configured.model
@@ -420,6 +444,8 @@ pub(crate) fn validate_job(
         },
         task_id: task.task_id.clone(),
         role: task.role,
+        reviewer_id: configured.reviewer_id.clone(),
+        review_mode: configured.review_mode,
         requested_model,
         skills_repository_commit: text(body, "skills_repository_commit")?.into(),
         plan_version: u32::try_from(number(body, "plan_version")?)
@@ -552,6 +578,10 @@ fn task_binding(task: &DirectTaskSpec) -> Result<WorkerBinding, DirectWorkerRunt
         },
         task_id: task.task_id.clone(),
         role: task.role,
+        reviewer_id: runtime_optional_text(body, "reviewer_id")?.map(str::to_owned),
+        review_mode: runtime_optional_text(body, "review_mode")?
+            .map(parse_review_mode)
+            .transpose()?,
         requested_model: runtime_text(body, "requested_model")?.into(),
         skills_repository_commit: runtime_text(body, "skills_repository_commit")?.into(),
         plan_version,
@@ -596,6 +626,23 @@ fn runtime_optional_text<'a>(
     body.get(field)
         .map(|_| runtime_text(body, field))
         .transpose()
+}
+
+fn parse_review_mode(value: &str) -> Result<ReviewMode, DirectWorkerRuntimeError> {
+    match value {
+        "required" => Ok(ReviewMode::Required),
+        "advisory" => Ok(ReviewMode::Advisory),
+        "shadow" => Ok(ReviewMode::Shadow),
+        _ => Err(runtime_error("invalid review mode")),
+    }
+}
+
+const fn review_mode_name(mode: ReviewMode) -> &'static str {
+    match mode {
+        ReviewMode::Required => "required",
+        ReviewMode::Advisory => "advisory",
+        ReviewMode::Shadow => "shadow",
+    }
 }
 
 fn parse_runtime(value: &str) -> Result<Duration, DirectWorkerRuntimeError> {

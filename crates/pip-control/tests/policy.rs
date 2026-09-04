@@ -4,7 +4,9 @@ use pip_control::{PolicyError, load_repository_policy};
 fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
     let bytes = include_bytes!("../../../config/target/repositories/mdk.json");
     let policy = load_repository_policy(bytes).unwrap();
-    assert_eq!(policy.revision, 2);
+    assert_eq!(policy.policy_format, 2);
+    assert_eq!(policy.revision, 3);
+    assert_eq!(policy.workflow_version, 3);
     assert_eq!(policy.repository.id, 1_055_628_515);
     assert_eq!(policy.repository.full_name(), "marmot-protocol/mdk");
     assert_eq!(policy.repository.default_branch, "master");
@@ -33,7 +35,10 @@ fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
     assert_eq!(policy.required_ci_contexts, ["Required CI"]);
     assert_eq!(policy.sensitive_scope_categories.len(), 7);
     assert!(policy.intake.held_issue_numbers.is_empty());
-    assert_eq!(policy.workflow_policy().unwrap().roles().len(), 5);
+    let workflow = policy.workflow_policy().unwrap();
+    assert_eq!(workflow.roles().len(), 6);
+    assert_eq!(workflow.required_reviewers().count(), 2);
+    assert_eq!(workflow.reviewers().count(), 3);
     assert_eq!(policy.roles[0].reasoning_effort.as_deref(), Some("xhigh"));
     assert_eq!(policy.roles[1].reasoning_effort, None);
     assert_eq!(policy.intake_policy(false).trusted_actor_ids.len(), 3);

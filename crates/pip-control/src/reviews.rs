@@ -140,7 +140,7 @@ pub fn publish_reviews_once<G: ReviewWriter, S: ReviewWriter>(
         store.release_effect(&claimed.effect_id, owner)?;
         return Err(ReviewPublicationError::InvalidCase);
     }
-    let (general_review, secperf_review) = match joined_reviews(store, &case) {
+    let (general_reviews, secperf_reviews) = match joined_reviews(store, &case, policy) {
         Ok(reviews) => reviews,
         Err(error) => {
             store.release_effect(&claimed.effect_id, owner)?;
@@ -154,7 +154,7 @@ pub fn publish_reviews_once<G: ReviewWriter, S: ReviewWriter>(
         &claimed.effect_id,
         general_actor,
         "reviewer-general",
-        &general_review,
+        &general_reviews,
     );
     let general_review_id = match general {
         Ok(id) => id,
@@ -170,7 +170,7 @@ pub fn publish_reviews_once<G: ReviewWriter, S: ReviewWriter>(
         &claimed.effect_id,
         secperf_actor,
         "reviewer-secperf",
-        &secperf_review,
+        &secperf_reviews,
     );
     let secperf_review_id = match secperf {
         Ok(id) => id,
@@ -185,8 +185,22 @@ pub fn publish_reviews_once<G: ReviewWriter, S: ReviewWriter>(
         source: format!("github-pr-{}", case.pr_number.expect("validated PR")),
         payload: json!({
             "head_sha": case.head_sha,
-            "general": {"actor_id": general_actor, "review_id": general_review_id},
-            "secperf": {"actor_id": secperf_actor, "review_id": secperf_review_id},
+            "general": {
+                "actor_id": general_actor,
+                "review_id": general_review_id,
+                "reviewer_ids": general_reviews
+                    .iter()
+                    .map(|review| review.reviewer_id.as_str())
+                    .collect::<Vec<_>>(),
+            },
+            "secperf": {
+                "actor_id": secperf_actor,
+                "review_id": secperf_review_id,
+                "reviewer_ids": secperf_reviews
+                    .iter()
+                    .map(|review| review.reviewer_id.as_str())
+                    .collect::<Vec<_>>(),
+            },
         }),
     };
     if case.state == "ESCALATED" {
@@ -205,7 +219,8 @@ pub fn publish_reviews_once<G: ReviewWriter, S: ReviewWriter>(
 fn joined_reviews(
     store: &Store,
     case: &StoredCase,
-) -> Result<(ReviewResult, ReviewResult), ReviewPublicationError> {
+    policy: &RepositoryPolicy,
+) -> Result<(Vec<ReviewResult>, Vec<ReviewResult>), ReviewPublicationError> {
     let pr_number = case.pr_number.ok_or(ReviewPublicationError::InvalidCase)?;
     let head_sha = case
         .head_sha
@@ -228,8 +243,22 @@ fn joined_reviews(
         .map(|review| review.review_round)
         .max()
         .ok_or(ReviewPublicationError::InvalidReviewJoin)?;
-    let mut general = None;
-    let mut secperf = None;
+    let workflow = policy
+        .workflow_policy()
+        .map_err(|error| ReviewPublicationError::Serialization(error.to_string()))?;
+    let required = workflow
+        .required_reviewers()
+        .map(|role| {
+            (
+                role.reviewer_id
+                    .as_deref()
+                    .ok_or(ReviewPublicationError::InvalidReviewJoin),
+                role.role,
+            )
+        })
+        .map(|(id, role)| id.map(|id| (id, role)))
+        .collect::<Result<std::collections::BTreeMap<_, _>, _>>()?;
+    let mut selected = std::collections::BTreeMap::new();
     for review in candidates
         .into_iter()
         .filter(|review| review.review_round == round)
@@ -240,19 +269,33 @@ fn joined_reviews(
         ) {
             return Err(ReviewPublicationError::InvalidReviewJoin);
         }
-        let slot = match review.common.role {
-            WorkerRole::ReviewerGeneral => &mut general,
-            WorkerRole::ReviewerSecperf => &mut secperf,
-            _ => return Err(ReviewPublicationError::InvalidReviewJoin),
-        };
-        if slot.replace(review).is_some() {
+        if required.get(review.reviewer_id.as_str()) != Some(&review.common.role)
+            || selected
+                .insert(review.reviewer_id.clone(), review)
+                .is_some()
+        {
             return Err(ReviewPublicationError::InvalidReviewJoin);
         }
     }
-    Ok((
-        general.ok_or(ReviewPublicationError::InvalidReviewJoin)?,
-        secperf.ok_or(ReviewPublicationError::InvalidReviewJoin)?,
-    ))
+    if selected.len() != required.len() {
+        return Err(ReviewPublicationError::InvalidReviewJoin);
+    }
+    let mut general = Vec::new();
+    let mut secperf = Vec::new();
+    for (reviewer_id, role) in required {
+        let review = selected
+            .remove(reviewer_id)
+            .ok_or(ReviewPublicationError::InvalidReviewJoin)?;
+        match role {
+            WorkerRole::ReviewerGeneral => general.push(review),
+            WorkerRole::ReviewerSecperf => secperf.push(review),
+            _ => return Err(ReviewPublicationError::InvalidReviewJoin),
+        }
+    }
+    if general.is_empty() || secperf.is_empty() {
+        return Err(ReviewPublicationError::InvalidReviewJoin);
+    }
+    Ok((general, secperf))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -263,21 +306,57 @@ fn publish_one<W: ReviewWriter>(
     effect_id: &str,
     actor_id: u64,
     role_name: &str,
-    review: &ReviewResult,
+    reviews: &[ReviewResult],
 ) -> Result<u64, ReviewPublicationError> {
-    let event = match review.outcome {
-        ReviewOutcome::Approve => ReviewEvent::Approve,
-        ReviewOutcome::RequestChanges => ReviewEvent::RequestChanges,
-        ReviewOutcome::Blocked | ReviewOutcome::BlockedUnexpectedModel => {
-            return Err(ReviewPublicationError::InvalidReviewJoin);
-        }
+    let head = reviews
+        .first()
+        .ok_or(ReviewPublicationError::InvalidReviewJoin)?
+        .reviewed_head_sha
+        .clone();
+    if reviews
+        .iter()
+        .any(|review| review.reviewed_head_sha != head)
+    {
+        return Err(ReviewPublicationError::InvalidReviewJoin);
+    }
+    let event = if reviews
+        .iter()
+        .any(|review| review.outcome == ReviewOutcome::RequestChanges)
+    {
+        ReviewEvent::RequestChanges
+    } else if reviews
+        .iter()
+        .all(|review| review.outcome == ReviewOutcome::Approve)
+    {
+        ReviewEvent::Approve
+    } else {
+        return Err(ReviewPublicationError::InvalidReviewJoin);
     };
-    let findings = serde_json::to_string_pretty(&review.blocking_findings)
+    let findings = reviews
+        .iter()
+        .flat_map(|review| review.blocking_findings.iter())
+        .collect::<Vec<_>>();
+    let findings = serde_json::to_string_pretty(&findings)
         .map_err(|error| ReviewPublicationError::Serialization(error.to_string()))?;
+    let members = reviews
+        .iter()
+        .map(|review| {
+            format!(
+                "- `{}` using `{}`: `{}`",
+                review.reviewer_id,
+                review.common.requested_model,
+                outcome_name(review.outcome)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     let body = format!(
-        "## Pip independent review: {role_name}\n\nOutcome: `{}`\n\nReviewed head: `{}`\n\nBlocking findings:\n```json\n{findings}\n```\n\nPip reviewer role: {role_name}",
-        outcome_name(review.outcome),
-        review.reviewed_head_sha,
+        "## Pip independent review: {role_name}\n\nOutcome: `{}`\n\nReviewed head: `{head}`\n\nRequired reviewer instances:\n{members}\n\nBlocking findings:\n```json\n{findings}\n```\n\nPip reviewer role: {role_name}",
+        match event {
+            ReviewEvent::Approve => "APPROVE",
+            ReviewEvent::RequestChanges => "REQUEST_CHANGES",
+            _ => return Err(ReviewPublicationError::InvalidReviewJoin),
+        },
     );
     let result = writer.ensure_review(&ReviewMutationSpec {
         owner: policy.repository.owner.clone(),
@@ -285,7 +364,7 @@ fn publish_one<W: ReviewWriter>(
         pull_request_number: case.pr_number.ok_or(ReviewPublicationError::InvalidCase)?,
         effect_id: format!("{effect_id}:{role_name}"),
         expected_actor_id: actor_id,
-        expected_head_sha: review.reviewed_head_sha.clone(),
+        expected_head_sha: head,
         body,
         event,
     })?;

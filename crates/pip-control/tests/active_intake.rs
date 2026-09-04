@@ -55,14 +55,14 @@ fn eligible_issue_creates_one_planning_case_and_replays_without_duplicates() {
     assert_eq!(first.candidates[0].decision, "ELIGIBLE");
     assert_eq!(
         first.candidates[0].case_key.as_deref(),
-        Some("repo:1055628515#42@2")
+        Some("repo:1055628515#42@3")
     );
 
-    let stored = store.case("repo:1055628515#42@2").unwrap().unwrap();
+    let stored = store.case("repo:1055628515#42@3").unwrap().unwrap();
     assert_eq!(stored.state, "PLANNING");
     assert_eq!(stored.repository_id, 1_055_628_515);
     assert_eq!(stored.issue_number, 42);
-    assert_eq!(stored.workflow_version, 2);
+    assert_eq!(stored.workflow_version, 3);
     let status = store.status(100).unwrap();
     assert_eq!(status.cases.len(), 1);
     assert_eq!(status.events, 1);
@@ -95,8 +95,8 @@ fn capacity_is_applied_in_sorted_issue_order() {
         report.candidates[1].blockers,
         ["REPOSITORY_LIMIT_REACHED", "GLOBAL_LIMIT_REACHED"]
     );
-    assert!(store.case("repo:1055628515#42@2").unwrap().is_some());
-    assert!(store.case("repo:1055628515#99@2").unwrap().is_none());
+    assert!(store.case("repo:1055628515#42@3").unwrap().is_some());
+    assert!(store.case("repo:1055628515#99@3").unwrap().is_none());
 }
 
 #[test]
@@ -183,7 +183,7 @@ fn signed_label_webhook_routes_one_issue_and_replays_by_delivery_id() {
     .unwrap();
     assert_eq!(first.delivery, "APPLIED");
     assert_eq!(first.candidate.unwrap().decision, "ELIGIBLE");
-    assert!(store.case("repo:1055628515#42@2").unwrap().is_some());
+    assert!(store.case("repo:1055628515#42@3").unwrap().is_some());
 
     let replay = ingest_webhook(
         &source,

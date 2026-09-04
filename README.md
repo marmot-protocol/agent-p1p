@@ -62,6 +62,9 @@ The documentation distinguishes three things explicitly:
 
 Role names express responsibilities, not implementation language or provider
 marketing names. Exact provider/model bindings live in versioned policy.
+Review roles are semantic publication lanes. Policy may define multiple stable
+reviewer instances in either lane and mark each `required`, `advisory`, or
+detached `shadow`; only required instances participate in workflow decisions.
 
 | Role | Responsibility |
 |---|---|

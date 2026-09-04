@@ -22,7 +22,8 @@ Build a durable control plane that:
 2. validates the issue and its root cause before implementation;
 3. produces a versioned, human-readable and machine-consumable plan;
 4. creates or updates one Pip-owned draft PR;
-5. requires two independent reviews of the same exact PR head;
+5. requires every policy-designated reviewer across two independent semantic
+   lanes to approve the same exact PR head;
 6. repeats remediation and same-head review until convergence or escalation;
 7. performs a fresh holistic final review of the complete case;
 8. stops at a human-held recommendation in shadow mode;
@@ -118,7 +119,8 @@ the intent before any external side effect so restart recovery is idempotent.
 Every worker projection contains an `immutable_evidence_bundle` produced from
 the authoritative ledger at the outbox effect's exact case revision. Version 1
 contains deterministically ordered events, accepted worker runs, controller
-evidence, and findings, including each stored payload digest. The controller
+evidence, findings, and completed detached review observations, including each
+stored payload digest. The controller
 rejects a stale history and caps the encoded bundle at 512 KiB. Its root digest
 is SHA-256 over compact, lexicographically key-ordered JSON after removing only
 the top-level digest field. This makes the complete accepted ledger history
@@ -135,12 +137,13 @@ The ledger records:
 - current state and state revision;
 - active plan version and authorization evidence;
 - branch, worktree, PR, and exact head;
-- build, review, remediation, and final-review rounds;
+- build, required-review, detached-review, remediation, and final-review rounds;
 - active and resolved findings;
 - dependencies and human decisions;
 - provider/model and skill versions;
 - dispatch outbox entries and Hermes task projections;
-- append-only events and immutable run payloads.
+- append-only events, immutable authoritative run payloads, and immutable
+  advisory/shadow observation payloads.
 
 Hermes task status is observed evidence. It does not directly mutate case state.
 The engine validates a completed result, commits the run and transition, and
@@ -225,16 +228,26 @@ hold according to policy.
 |---|---|---|
 | `planner` | Validate issue, root cause, scope, dependencies, and test plan. | Versioned plan artifacts and a bound result contract only. |
 | `builder` | Manage the assigned worktree, implement the active plan, test, and create the exact local commit. | Assigned worktree/branch only; no GitHub credential or mutation. |
-| `reviewer-general` | Correctness, integration, errors, concurrency, tests, maintenance. | Review evidence/comments only. |
-| `reviewer-secperf` | Security, privacy, authorization, abuse, resource bounds, performance. | Review evidence/comments only. |
+| `reviewer-general` | Semantic lane for correctness, integration, errors, concurrency, tests, and maintenance. | Review evidence only. |
+| `reviewer-secperf` | Semantic lane for security, privacy, authorization, abuse, resource bounds, and performance. | Review evidence only. |
 | `final-reviewer` | Reconstruct the complete case and determine the next disposition. | Final evidence/comment only. |
 
 Write authority is exercised by deterministic controller adapters using
 role-scoped credentials; model processes return contracts and never receive
-GitHub tokens. The PR-author identity and the two reviewer identities must be
-three distinct numeric actors. This is required because GitHub forbids a pull
-request author from approving that pull request and required approval counts
-represent reviewers, not multiple personas of one account.
+GitHub tokens. The PR-author identity and the two lane-publication identities
+must be three distinct numeric actors. This is required because GitHub forbids
+a pull request author from approving that pull request. Reviewer instances are
+policy records inside a semantic lane; adding another model does not require
+another GitHub App unless its review must be separately visible on GitHub.
+
+Each reviewer instance has a stable `reviewer_id`, semantic role, exact
+provider/model binding, executor, and `review_mode`:
+
+- `required` contributes to the authoritative lane verdict and blocks the join
+  until its exact-head result exists;
+- `advisory` is retained for analysis but has no workflow authority; and
+- `shadow` is a detached comparison run whose absence, failure, or lateness
+  cannot delay or change the workflow.
 
 Exact models are policy values rather than role names. A provider adapter must:
 
@@ -348,19 +361,19 @@ head-bound review and CI evidence.
 ## 11. Review convergence
 
 After the accepted builder head has required green CI, the engine dispatches
-both mandatory reviewers independently against that same SHA. Neither review
-is a parent summary of the other.
+every configured reviewer instance independently against that same SHA. No
+review is a parent summary of another.
 
-Every blocking finding has a stable identity, origin role, reviewed head,
+Every blocking finding has a stable identity, origin reviewer instance, reviewed head,
 defect, consequence, corrective direction, and required resolution evidence.
 
-If either reviewer requests changes:
+If any required reviewer requests changes:
 
 1. the engine unions the mandatory findings;
 2. dispatches one builder remediation run;
 3. independently validates the new PR head and required CI;
-4. invalidates both earlier approvals;
-5. dispatches both reviewers again on the new exact head; and
+4. invalidates all earlier head-bound approvals;
+5. dispatches the configured reviewer set again on the new exact head; and
 6. requires the originating reviewer to confirm each applicable resolution.
 
 This is a dynamic loop, not a pre-created fixed two-round DAG. Policy bounds
@@ -372,8 +385,8 @@ The exact-head join requires:
 ```text
 current PR head = X
 builder result and CI bind to X
-general reviewer APPROVE binds to X
-security/performance reviewer APPROVE binds to X
+every required reviewer instance APPROVE binds to X
+the general and security/performance lane aggregates APPROVE on X
 all mandatory findings are resolved and origin-confirmed at X
 no blocking GitHub review or thread remains
 Pip still owns the PR and branch
@@ -381,16 +394,19 @@ issue authorization remains valid
 GitHub reports clean mergeability
 ```
 
-The controller publishes and identifies the two mandatory GitHub reviews by an
+The controller publishes and identifies the two semantic-lane GitHub reviews by an
 exact, machine-readable line in the body: `Pip reviewer role:
 reviewer-general` or `Pip reviewer role: reviewer-secperf`. The review actor
 must be the configured numeric identity for that role, the review must approve
 the current commit, and the latest same-role stamped review on that commit is
-authoritative. The two role actors must differ from each other and from the PR
-author. Worker result metadata alone cannot release final review.
+authoritative. Each body identifies the required reviewer instances whose
+results were aggregated. The two lane actors must differ from each other and
+from the PR author. Worker result metadata alone cannot release final review.
 
-Optional external review is advisory. Its concrete findings may enter the loop,
-but absence, rate limiting, or failure never substitutes for a mandatory review.
+Advisory and shadow observations are immutable comparison evidence. They never
+substitute for, block, approve, or add mandatory findings to a required lane.
+Promoting an observed reviewer into the decision loop is an explicit versioned
+policy change.
 
 ## 12. Final review and disposition
 
@@ -400,7 +416,7 @@ The final reviewer receives immutable references to:
 - every plan and the active plan;
 - dependency evidence;
 - every build and remediation run;
-- both complete review histories;
+- all required review histories and detached comparison observations;
 - finding resolutions and confirmations;
 - the current diff, exact-head CI, and mergeability evidence; and
 - authorization and ownership evidence.

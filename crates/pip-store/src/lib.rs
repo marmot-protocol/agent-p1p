@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: u32 = 6;
+const SCHEMA_VERSION: u32 = 7;
 
 const MIGRATION_1: &str = r#"
 CREATE TABLE schema_migrations (
@@ -288,6 +288,37 @@ BEFORE DELETE ON workspace_retirements BEGIN
 END;
 "#;
 
+const MIGRATION_7: &str = r#"
+CREATE TABLE review_observations (
+    observation_id TEXT PRIMARY KEY,
+    effect_id TEXT NOT NULL UNIQUE REFERENCES outbox(effect_id),
+    case_key TEXT NOT NULL REFERENCES cases(case_key),
+    task_id TEXT NOT NULL UNIQUE,
+    reviewer_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    review_mode TEXT NOT NULL CHECK (review_mode IN ('advisory', 'shadow')),
+    plan_version INTEGER NOT NULL CHECK (plan_version > 0),
+    review_round INTEGER NOT NULL CHECK (review_round > 0),
+    pr_number INTEGER NOT NULL CHECK (pr_number > 0),
+    reviewed_head_sha TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    payload_sha256 TEXT NOT NULL,
+    recorded_at INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX review_observations_case_head
+    ON review_observations(case_key, reviewed_head_sha, review_round, reviewer_id);
+
+CREATE TRIGGER review_observations_no_update
+BEFORE UPDATE ON review_observations BEGIN
+    SELECT RAISE(ABORT, 'review observations are immutable');
+END;
+CREATE TRIGGER review_observations_no_delete
+BEFORE DELETE ON review_observations BEGIN
+    SELECT RAISE(ABORT, 'review observations are immutable');
+END;
+"#;
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct WebhookDeliveryInput {
     pub delivery_id: String,
@@ -355,6 +386,38 @@ pub struct RunInput {
     pub payload: Value,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct ReviewObservationInput {
+    pub observation_id: String,
+    pub task_id: String,
+    pub reviewer_id: String,
+    pub role: String,
+    pub review_mode: String,
+    pub plan_version: u32,
+    pub review_round: u32,
+    pub pr_number: u64,
+    pub reviewed_head_sha: String,
+    pub payload: Value,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct StoredReviewObservation {
+    pub observation_id: String,
+    pub effect_id: String,
+    pub case_key: String,
+    pub task_id: String,
+    pub reviewer_id: String,
+    pub role: String,
+    pub review_mode: String,
+    pub plan_version: u32,
+    pub review_round: u32,
+    pub pr_number: u64,
+    pub reviewed_head_sha: String,
+    pub payload: Value,
+    pub payload_sha256: String,
+    pub recorded_at: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct StoredRun {
     pub run_id: String,
@@ -403,6 +466,7 @@ pub struct ImmutableCaseHistory {
     pub runs: Vec<StoredRun>,
     pub evidence: Vec<StoredEvidence>,
     pub findings: Vec<StoredFinding>,
+    pub review_observations: Vec<StoredReviewObservation>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -544,6 +608,7 @@ pub struct LedgerStatus {
     pub direct_attempts_failed: u64,
     pub webhook_deliveries: u64,
     pub workspace_retirements: u64,
+    pub review_observations: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -1105,12 +1170,22 @@ impl Store {
                  SET superseded_at = ?1, superseded_by_event_id = ?2,
                      lease_owner = NULL, lease_until = NULL
                  WHERE case_key = ?3 AND state_revision < ?4
+                   AND (
+                       effect_type <> 'RUN_DIRECT_OBSERVER'
+                       OR ?5 IN (
+                           'AUTHORIZATION_REMOVED', 'HUMAN_TOOK_OVER',
+                           'ABANDON', 'BLOCKED', 'BLOCKED_UNEXPECTED_MODEL',
+                           'OPERATIONAL_BOUND_REACHED', 'HUMAN_MERGED',
+                           'MERGE_VERIFIED'
+                       )
+                   )
                    AND delivered_at IS NULL AND superseded_at IS NULL",
                 params![
                     sql_u64(input.observed_at)?,
                     input.event.event_id,
                     input.case_key,
                     sql_u64(next_revision)?,
+                    input.event.event_type,
                 ],
             )?;
             insert_effects(
@@ -1254,6 +1329,206 @@ impl Store {
             .collect()
     }
 
+    pub fn review_observations_for_case(
+        &self,
+        case_key: &str,
+    ) -> Result<Vec<StoredReviewObservation>> {
+        if case_key.trim().is_empty() {
+            return Err(StoreError::InvalidInput("case identity is required"));
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT observation_id, effect_id, case_key, task_id, reviewer_id, role,
+                    review_mode, plan_version, review_round, pr_number,
+                    reviewed_head_sha, payload_json, payload_sha256, recorded_at
+             FROM review_observations WHERE case_key = ?1
+             ORDER BY recorded_at, observation_id",
+        )?;
+        statement
+            .query_map([case_key], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, i64>(9)?,
+                    row.get::<_, String>(10)?,
+                    row.get::<_, String>(11)?,
+                    row.get::<_, String>(12)?,
+                    row.get::<_, i64>(13)?,
+                ))
+            })?
+            .map(|row| {
+                let row = row?;
+                Ok(StoredReviewObservation {
+                    observation_id: row.0,
+                    effect_id: row.1,
+                    case_key: row.2,
+                    task_id: row.3,
+                    reviewer_id: row.4,
+                    role: row.5,
+                    review_mode: row.6,
+                    plan_version: u32::try_from(row.7).map_err(|_| StoreError::InvalidInteger)?,
+                    review_round: u32::try_from(row.8).map_err(|_| StoreError::InvalidInteger)?,
+                    pr_number: unsigned(row.9),
+                    reviewed_head_sha: row.10,
+                    payload: serde_json::from_str(&row.11)?,
+                    payload_sha256: row.12,
+                    recorded_at: unsigned(row.13),
+                })
+            })
+            .collect()
+    }
+
+    pub fn complete_review_observation_effect(
+        &mut self,
+        effect_id: &str,
+        owner: &str,
+        now: u64,
+        observation: &ReviewObservationInput,
+    ) -> Result<ApplyResult> {
+        self.ensure_writable()?;
+        if effect_id.trim().is_empty()
+            || owner.trim().is_empty()
+            || observation.observation_id.trim().is_empty()
+            || observation.task_id.trim().is_empty()
+            || !valid_identifier(&observation.reviewer_id, 128)
+            || !matches!(
+                observation.role.as_str(),
+                "reviewer-general" | "reviewer-secperf"
+            )
+            || !matches!(observation.review_mode.as_str(), "advisory" | "shadow")
+            || observation.plan_version == 0
+            || observation.review_round == 0
+            || observation.pr_number == 0
+            || observation.reviewed_head_sha.len() != 40
+            || !observation
+                .reviewed_head_sha
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            || !observation.payload.is_object()
+        {
+            return Err(StoreError::InvalidInput(
+                "valid detached review observation identity and payload are required",
+            ));
+        }
+        let (payload_json, payload_hash) = payload(&observation.payload)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (case_key, effect_type, delivered, superseded): (
+            String,
+            String,
+            Option<i64>,
+            Option<i64>,
+        ) = transaction
+            .query_row(
+                "SELECT case_key, effect_type, delivered_at, superseded_at
+                 FROM outbox WHERE effect_id = ?1",
+                [effect_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::LeaseLost(effect_id.to_owned()))?;
+        let existing: bool = transaction.query_row(
+            "SELECT EXISTS(
+                    SELECT 1 FROM review_observations WHERE observation_id = ?1
+                )",
+            [&observation.observation_id],
+            |row| row.get(0),
+        )?;
+        if delivered.is_some() {
+            let same: bool = transaction.query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM review_observations
+                    WHERE observation_id = ?1 AND effect_id = ?2 AND case_key = ?3
+                      AND task_id = ?4 AND reviewer_id = ?5 AND role = ?6
+                      AND review_mode = ?7 AND plan_version = ?8 AND review_round = ?9
+                      AND pr_number = ?10 AND reviewed_head_sha = ?11
+                      AND payload_json = ?12 AND payload_sha256 = ?13
+                )",
+                params![
+                    observation.observation_id,
+                    effect_id,
+                    case_key,
+                    observation.task_id,
+                    observation.reviewer_id,
+                    observation.role,
+                    observation.review_mode,
+                    i64::from(observation.plan_version),
+                    i64::from(observation.review_round),
+                    sql_u64(observation.pr_number)?,
+                    observation.reviewed_head_sha,
+                    payload_json,
+                    payload_hash,
+                ],
+                |row| row.get(0),
+            )?;
+            if !same {
+                return Err(StoreError::IdempotencyConflict {
+                    id: observation.observation_id.clone(),
+                });
+            }
+            transaction.commit()?;
+            return Ok(ApplyResult::Replayed);
+        }
+        if effect_type != "RUN_DIRECT_OBSERVER" || superseded.is_some() || existing {
+            return Err(StoreError::IdempotencyConflict {
+                id: observation.observation_id.clone(),
+            });
+        }
+        let lease_valid: bool = transaction.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM outbox
+                WHERE effect_id = ?1 AND delivered_at IS NULL AND superseded_at IS NULL
+                  AND lease_owner = ?2 AND lease_until >= ?3
+            )",
+            params![effect_id, owner, sql_u64(now)?],
+            |row| row.get(0),
+        )?;
+        if !lease_valid {
+            return Err(StoreError::LeaseLost(effect_id.to_owned()));
+        }
+        transaction.execute(
+            "INSERT INTO review_observations(
+                observation_id, effect_id, case_key, task_id, reviewer_id, role,
+                review_mode, plan_version, review_round, pr_number, reviewed_head_sha,
+                payload_json, payload_sha256, recorded_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                observation.observation_id,
+                effect_id,
+                case_key,
+                observation.task_id,
+                observation.reviewer_id,
+                observation.role,
+                observation.review_mode,
+                i64::from(observation.plan_version),
+                i64::from(observation.review_round),
+                sql_u64(observation.pr_number)?,
+                observation.reviewed_head_sha,
+                payload_json,
+                payload_hash,
+                sql_u64(now)?,
+            ],
+        )?;
+        let updated = transaction.execute(
+            "UPDATE outbox SET delivered_at = ?1, lease_owner = NULL, lease_until = NULL
+             WHERE effect_id = ?2 AND lease_owner = ?3 AND lease_until >= ?1
+               AND delivered_at IS NULL AND superseded_at IS NULL",
+            params![sql_u64(now)?, effect_id, owner],
+        )?;
+        if updated != 1 {
+            return Err(StoreError::LeaseLost(effect_id.to_owned()));
+        }
+        transaction.commit()?;
+        Ok(ApplyResult::Applied)
+    }
+
     pub fn immutable_history_for_case(&self, case_key: &str) -> Result<ImmutableCaseHistory> {
         if case_key.trim().is_empty() {
             return Err(StoreError::InvalidInput("case identity is required"));
@@ -1342,11 +1617,13 @@ impl Store {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        let review_observations = self.review_observations_for_case(case_key)?;
         Ok(ImmutableCaseHistory {
             events,
             runs,
             evidence,
             findings,
+            review_observations,
         })
     }
 
@@ -1360,6 +1637,10 @@ impl Store {
 
     pub fn finding_count(&self) -> Result<u64> {
         count(&self.connection, "findings")
+    }
+
+    pub fn review_observation_count(&self) -> Result<u64> {
+        count(&self.connection, "review_observations")
     }
 
     pub fn task_projection_count(&self) -> Result<u64> {
@@ -1435,6 +1716,7 @@ impl Store {
             direct_attempts_failed: unsigned(attempts_failed),
             webhook_deliveries: count(&self.connection, "webhook_deliveries")?,
             workspace_retirements: count(&self.connection, "workspace_retirements")?,
+            review_observations: self.review_observation_count()?,
         })
     }
 
@@ -1993,7 +2275,10 @@ impl Store {
             || direct_jobs.iter().any(|job| {
                 job.effect_id.trim().is_empty()
                     || job.effect_id == source_effect_id
-                    || job.effect_type != "RUN_DIRECT_WORKER"
+                    || !matches!(
+                        job.effect_type.as_str(),
+                        "RUN_DIRECT_WORKER" | "RUN_DIRECT_OBSERVER"
+                    )
                     || !job.payload.is_object()
                     || job.payload.get("source_effect_id").and_then(Value::as_str)
                         != Some(source_effect_id)
@@ -2293,6 +2578,17 @@ fn migrate(connection: &mut Connection) -> Result<()> {
         transaction.pragma_update(None, "user_version", 6)?;
         transaction.commit()?;
         version = 6;
+    }
+    if version == 6 {
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Exclusive)?;
+        transaction.execute_batch(MIGRATION_7)?;
+        transaction.execute(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (7, 0)",
+            [],
+        )?;
+        transaction.pragma_update(None, "user_version", 7)?;
+        transaction.commit()?;
+        version = 7;
     }
     if version != SCHEMA_VERSION {
         return Err(StoreError::UnsupportedSchema(version));
@@ -2666,6 +2962,7 @@ fn count(connection: &Connection, table: &str) -> Result<u64> {
         "task_projections" => "SELECT COUNT(*) FROM task_projections",
         "webhook_deliveries" => "SELECT COUNT(*) FROM webhook_deliveries",
         "workspace_retirements" => "SELECT COUNT(*) FROM workspace_retirements",
+        "review_observations" => "SELECT COUNT(*) FROM review_observations",
         _ => return Err(StoreError::InvalidInput("unknown count table")),
     };
     let value: i64 = connection.query_row(sql, [], |row| row.get(0))?;

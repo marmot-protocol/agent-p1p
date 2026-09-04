@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use pip_contracts::{WorkerBinding, WorkerResult};
+use pip_contracts::{ReviewMode, WorkerBinding, WorkerResult};
 use pip_control::{
     CiCycle, FinalPreflightCycle, FinalPreflightSource, IntakeSource, PullRequestSource,
     load_repository_policy, reconcile_ci_once, reconcile_final_preflight_once,
@@ -155,6 +155,37 @@ fn exact_published_reviews_clean_ci_and_resolved_threads_release_final_review() 
         .unwrap()
         .unwrap();
     assert_eq!(effect.state_revision, 11);
+}
+
+#[test]
+fn every_policy_required_reviewer_instance_must_approve_the_exact_head() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut value = serde_json::to_value(active_policy()).unwrap();
+    value["roles"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|role| role["reviewer_id"] == "secperf-opus")
+        .unwrap()["review_mode"] = json!("required");
+    let policy = load_repository_policy(&serde_json::to_vec(&value).unwrap()).unwrap();
+    let source = accepted_source();
+    let mut store = final_review_store(directory.path().join("ledger.db"), &policy, &source);
+
+    let result = reconcile_final_preflight_once(
+        &source,
+        &policy,
+        &mut store,
+        200,
+        "final-preflight",
+        30,
+        true,
+    )
+    .unwrap();
+    assert!(matches!(
+        result,
+        FinalPreflightCycle::Pending { blockers, .. }
+            if blockers.contains(&"MISSING_LEDGER_APPROVAL:secperf-opus".into())
+    ));
 }
 
 #[test]
@@ -658,6 +689,14 @@ fn binding(result: &WorkerResult) -> WorkerBinding {
         case: common.case.clone(),
         task_id: common.task_id.clone(),
         role: common.role,
+        reviewer_id: match result {
+            WorkerResult::Review(result) => Some(result.reviewer_id.clone()),
+            _ => None,
+        },
+        review_mode: match result {
+            WorkerResult::Review(_) => Some(ReviewMode::Required),
+            _ => None,
+        },
         requested_model: common.requested_model.clone(),
         skills_repository_commit: common.skills_repository_commit.clone(),
         plan_version,

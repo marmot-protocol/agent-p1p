@@ -6,9 +6,12 @@ use std::io::{Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-use pip_contracts::WorkerResult;
-use pip_controller::{DirectTaskSpec, IngestResult, ingest_worker_result};
-use pip_store::{ClaimedEffect, DirectAttemptStatus, Store, StoreError};
+use pip_contracts::{ReviewMode, WorkerResult};
+use pip_controller::{DirectTaskSpec, IngestResult, ingest_worker_result_with_policy};
+use pip_store::{
+    ClaimedEffect, DirectAttemptStatus, EvidenceInput, ReviewObservationInput, Store, StoreError,
+    StoredCase,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::direct_worker::{DirectWorkerRuntime, validate_job};
@@ -33,6 +36,9 @@ pub enum DirectQueueCycle {
     Ingested {
         task_id: String,
         transition_count: u32,
+    },
+    Observed {
+        task_id: String,
     },
     Cleaned {
         attempt_id: u64,
@@ -194,8 +200,12 @@ pub fn reconcile_direct_queue_once(
     if let Some(path) = queue_files(&queue.results)?.into_iter().next() {
         return ingest_result(store, policy, queue, &path, now);
     }
-    let Some(claimed) =
-        store.claim_effect_matching(owner, now, lease_seconds, &["RUN_DIRECT_WORKER"])?
+    let Some(claimed) = store.claim_effect_matching(
+        owner,
+        now,
+        lease_seconds,
+        &["RUN_DIRECT_WORKER", "RUN_DIRECT_OBSERVER"],
+    )?
     else {
         return Ok(DirectQueueCycle::Idle);
     };
@@ -204,7 +214,9 @@ pub fn reconcile_direct_queue_once(
     let case = store
         .case(&claimed.case_key)?
         .ok_or(DirectQueueError::InvalidEnvelope)?;
-    validate_job(&claimed, &case, &task, policy).map_err(|_| DirectQueueError::InvalidEnvelope)?;
+    let validation_case = validation_case(&claimed, &case, &task)?;
+    validate_job(&claimed, &validation_case, &task, policy)
+        .map_err(|_| DirectQueueError::InvalidEnvelope)?;
     let attempt_id = store.begin_direct_attempt(&claimed, &task.task_id, now)?;
     let envelope = WorkEnvelope {
         schema_version: 1,
@@ -295,17 +307,21 @@ fn ingest_result(
     {
         return Err(DirectQueueError::InvalidEnvelope);
     }
-    if store.run_by_task_id(&attempt.task_id)?.is_some() {
+    if work.claimed.effect_type == "RUN_DIRECT_WORKER"
+        && store.run_by_task_id(&attempt.task_id)?.is_some()
+    {
         queue.archive(attempt_id)?;
         return Ok(DirectQueueCycle::Cleaned { attempt_id });
     }
     let case = store
         .case(&attempt.case_key)?
         .ok_or(DirectQueueError::InvalidEnvelope)?;
-    let binding = validate_job(&work.claimed, &case, &work.task, policy)
+    let validation_case = validation_case(&work.claimed, &case, &work.task)?;
+    let binding = validate_job(&work.claimed, &validation_case, &work.task, policy)
         .map_err(|_| DirectQueueError::InvalidEnvelope)?;
     match envelope {
         ResultEnvelope::Failed { error, .. } => {
+            let detached_observer = work.claimed.effect_type == "RUN_DIRECT_OBSERVER";
             if attempt.status == DirectAttemptStatus::Running {
                 store.fail_direct_attempt(
                     attempt_id,
@@ -313,6 +329,23 @@ fn ingest_result(
                     now,
                     &bounded_error(&error),
                 )?;
+            }
+            if detached_observer {
+                if attempt.status == DirectAttemptStatus::Complete {
+                    return Err(DirectQueueError::InvalidEnvelope);
+                }
+                store.complete_effect_evidence(
+                    &attempt.effect_id,
+                    &attempt.lease_owner,
+                    now,
+                    &EvidenceInput {
+                        evidence_id: format!("evidence-observer-failed-{}", attempt.task_id),
+                        kind: "DETACHED_REVIEW_FAILURE".into(),
+                        source: attempt.task_id.clone(),
+                        payload: serde_json::json!({"error": bounded_error(&error)}),
+                    },
+                )?;
+            } else if attempt.status == DirectAttemptStatus::Running {
                 store.release_effect(&attempt.effect_id, &attempt.lease_owner)?;
             }
             queue.archive(attempt_id)?;
@@ -334,8 +367,51 @@ fn ingest_result(
                 queue.archive(attempt_id)?;
                 return Ok(DirectQueueCycle::Cleaned { attempt_id });
             };
-            let ingested = ingest_worker_result(store, &policy.case_policy(), &binding, &result)
-                .map_err(|error| DirectQueueError::Ingest(error.to_string()))?;
+            if matches!(
+                binding.review_mode,
+                Some(ReviewMode::Advisory | ReviewMode::Shadow)
+            ) {
+                result
+                    .validate_binding(&binding)
+                    .map_err(|error| DirectQueueError::Ingest(error.to_string()))?;
+                let WorkerResult::Review(review) = &result else {
+                    return Err(DirectQueueError::InvalidEnvelope);
+                };
+                store.complete_review_observation_effect(
+                    &attempt.effect_id,
+                    &attempt.lease_owner,
+                    now,
+                    &ReviewObservationInput {
+                        observation_id: format!("observation-{}", attempt.task_id),
+                        task_id: attempt.task_id.clone(),
+                        reviewer_id: review.reviewer_id.clone(),
+                        role: role_name(review.common.role).into(),
+                        review_mode: match binding.review_mode {
+                            Some(ReviewMode::Advisory) => "advisory".into(),
+                            Some(ReviewMode::Shadow) => "shadow".into(),
+                            _ => return Err(DirectQueueError::InvalidEnvelope),
+                        },
+                        plan_version: review.plan_version,
+                        review_round: review.review_round,
+                        pr_number: review.pr_number,
+                        reviewed_head_sha: review.reviewed_head_sha.clone(),
+                        payload: serde_json::to_value(&result).map_err(serialization)?,
+                    },
+                )?;
+                queue.archive(attempt_id)?;
+                return Ok(DirectQueueCycle::Observed {
+                    task_id: attempt.task_id,
+                });
+            }
+            let workflow_policy = policy.workflow_policy()?;
+            let ingested = ingest_worker_result_with_policy(
+                store,
+                &policy.case_policy(),
+                &workflow_policy,
+                &binding,
+                &result,
+            )
+            .map_err(|error| DirectQueueError::Ingest(error.to_string()))?;
             queue.archive(attempt_id)?;
             match ingested {
                 IngestResult::Applied { transition_count } => Ok(DirectQueueCycle::Ingested {
@@ -345,6 +421,73 @@ fn ingest_result(
                 IngestResult::Replayed => Ok(DirectQueueCycle::Cleaned { attempt_id }),
             }
         }
+    }
+}
+
+fn validation_case(
+    claimed: &ClaimedEffect,
+    current: &StoredCase,
+    task: &DirectTaskSpec,
+) -> Result<StoredCase, DirectQueueError> {
+    if claimed.effect_type != "RUN_DIRECT_OBSERVER" {
+        return Ok(current.clone());
+    }
+    let body = task
+        .body
+        .as_object()
+        .ok_or(DirectQueueError::InvalidEnvelope)?;
+    let u64_field = |name: &str| {
+        body.get(name)
+            .and_then(serde_json::Value::as_u64)
+            .ok_or(DirectQueueError::InvalidEnvelope)
+    };
+    let optional_u64 = |name: &str| {
+        body.get(name)
+            .map(|value| value.as_u64().ok_or(DirectQueueError::InvalidEnvelope))
+            .transpose()
+    };
+    let optional_text = |name: &str| {
+        body.get(name)
+            .map(|value| {
+                value
+                    .as_str()
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+                    .ok_or(DirectQueueError::InvalidEnvelope)
+            })
+            .transpose()
+    };
+    if claimed.case_key != current.case_key
+        || u64_field("repository_id")? != current.repository_id
+        || u64_field("issue_number")? != current.issue_number
+        || u64_field("workflow_version")? != u64::from(current.workflow_version)
+    {
+        return Err(DirectQueueError::InvalidEnvelope);
+    }
+    Ok(StoredCase {
+        case_key: current.case_key.clone(),
+        repository_id: current.repository_id,
+        issue_number: current.issue_number,
+        workflow_version: current.workflow_version,
+        state: "REVIEWING".into(),
+        state_revision: claimed.state_revision,
+        policy_revision: current.policy_revision,
+        remediation_round: u32::try_from(u64_field("remediation_round")?)
+            .map_err(|_| DirectQueueError::InvalidEnvelope)?,
+        plan_version: u32::try_from(u64_field("plan_version")?)
+            .map_err(|_| DirectQueueError::InvalidEnvelope)?,
+        pr_number: optional_u64("pr_number")?,
+        head_sha: optional_text("expected_head_sha")?,
+    })
+}
+
+fn role_name(role: pip_contracts::WorkerRole) -> &'static str {
+    match role {
+        pip_contracts::WorkerRole::Planner => "planner",
+        pip_contracts::WorkerRole::Builder => "builder",
+        pip_contracts::WorkerRole::ReviewerGeneral => "reviewer-general",
+        pip_contracts::WorkerRole::ReviewerSecperf => "reviewer-secperf",
+        pip_contracts::WorkerRole::FinalReviewer => "final-reviewer",
     }
 }
 

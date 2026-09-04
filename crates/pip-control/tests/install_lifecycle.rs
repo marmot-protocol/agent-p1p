@@ -12,6 +12,14 @@ use pip_control::{
 use pip_store::Store;
 
 #[test]
+fn host_state_root_allows_worker_group_traversal_without_directory_listing() {
+    let installer = include_str!("../../../scripts/install-rust-control-plane.sh");
+    assert!(installer.contains("chmod 0710 \"$state_root\""));
+    assert!(installer.contains("ensure_directory /var/lib/pip pip-control pip-control 710"));
+    assert!(!installer.contains("ensure_directory /var/lib/pip pip-control pip-control 700"));
+}
+
+#[test]
 fn clean_install_reinstall_and_upgrade_are_content_addressed_and_paused() {
     let sandbox = tempfile::tempdir().unwrap();
     let layout = layout(sandbox.path());
@@ -442,8 +450,8 @@ fn cohort(parent: &Path, name: &str, binary: &[u8], source: &str, key: &str) -> 
             rust_toolchain: "rustc fixture".into(),
             built_at: "2026-08-20T12:00:00Z".into(),
             builder_identity: "fixture".into(),
-            workflow_version: 2,
-            contract_version: 1,
+            workflow_version: 3,
+            contract_version: 2,
         },
     )
     .unwrap();

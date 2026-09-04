@@ -1,7 +1,7 @@
 ---
 name: reviewer-general
 description: Use for exact-head correctness review of a Pip PR.
-version: 0.4.0
+version: 0.5.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -14,7 +14,7 @@ metadata:
 
 ## Overview
 
-Independently review the exact PR head with GPT-5.6-Sol at High reasoning.
+Independently review the exact PR head with the policy-bound model and reasoning effort. The current MDK `general-sol` instance uses GPT-5.6-Sol at High reasoning, but the skill must copy rather than choose the model or reviewer identity.
 
 ## Review focus
 
@@ -33,8 +33,10 @@ Record the reviewed head SHA. Any later commit invalidates the verdict. Confirm 
 
 ## Completion
 
-Do not mutate GitHub. The controller publishes the accepted contract through
-the role-scoped reviewer identity. Include this exact line in the returned
+Do not mutate GitHub. Copy the exact `reviewer_id` from the task into the result.
+The controller aggregates all required instances in this semantic lane and
+publishes one accepted lane contract through the role-scoped GitHub identity.
+Include this exact line in the returned
 review evidence so the publication contract remains explicit:
 
 ```text

@@ -2,8 +2,9 @@ use std::path::Path;
 
 use pip_store::{
     ApplyResult, DirectAttemptStatus, EffectInput, EventInput, EvidenceInput, FaultPoint,
-    FindingInput, NewCase, PolicyInput, RunInput, Store, StoreError, TaskProjectionInput,
-    TransitionInput, WebhookDeliveryInput, WorkspaceRetirementInput, WorkspaceRetirementOutcome,
+    FindingInput, NewCase, PolicyInput, ReviewObservationInput, RunInput, Store, StoreError,
+    TaskProjectionInput, TransitionInput, WebhookDeliveryInput, WorkspaceRetirementInput,
+    WorkspaceRetirementOutcome,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -81,7 +82,7 @@ fn transition() -> TransitionInput {
 #[test]
 fn migration_creates_hardened_authoritative_schema() {
     let (_directory, store) = open();
-    assert_eq!(store.schema_version().unwrap(), 6);
+    assert_eq!(store.schema_version().unwrap(), 7);
     assert!(store.foreign_keys_enabled().unwrap());
     assert_eq!(store.journal_mode().unwrap(), "wal");
 }
@@ -372,7 +373,7 @@ fn operator_status_separates_pending_leased_and_delivered_work() {
         .unwrap();
 
     let status = store.status(110).unwrap();
-    assert_eq!(status.schema_version, 6);
+    assert_eq!(status.schema_version, 7);
     assert_eq!(status.cases.len(), 1);
     assert_eq!(status.cases[0].case_key, "repo:984321#1240@1");
     assert_eq!(status.events, 1);
@@ -427,6 +428,111 @@ fn a_new_transition_atomically_supersedes_older_undelivered_effects() {
             .effect_id,
         "effect-planner-1"
     );
+}
+
+#[test]
+fn detached_review_observers_survive_transitions_and_record_once() {
+    let (_directory, mut store) = open();
+    let mut case = new_case();
+    case.effects = vec![EffectInput {
+        effect_id: "effect-shadow-opus".into(),
+        effect_type: "RUN_DIRECT_OBSERVER".into(),
+        payload: json!({"task_id": "secperf-opus-1"}),
+    }];
+    store.create_case(&case).unwrap();
+    store.apply_transition(&transition(), None).unwrap();
+
+    let claimed = store
+        .claim_effect_matching("observer", 1_787_000_602, 30, &["RUN_DIRECT_OBSERVER"])
+        .unwrap()
+        .unwrap();
+    let observation = ReviewObservationInput {
+        observation_id: "observation-shadow-opus".into(),
+        task_id: "secperf-opus-1".into(),
+        reviewer_id: "secperf-opus".into(),
+        role: "reviewer-secperf".into(),
+        review_mode: "shadow".into(),
+        plan_version: 1,
+        review_round: 1,
+        pr_number: 77,
+        reviewed_head_sha: "b".repeat(40),
+        payload: json!({"outcome": "APPROVE", "reviewer_id": "secperf-opus"}),
+    };
+    assert_eq!(
+        store
+            .complete_review_observation_effect(
+                &claimed.effect_id,
+                "observer",
+                1_787_000_603,
+                &observation,
+            )
+            .unwrap(),
+        ApplyResult::Applied
+    );
+    assert_eq!(
+        store
+            .complete_review_observation_effect(
+                &claimed.effect_id,
+                "observer",
+                1_787_000_604,
+                &observation,
+            )
+            .unwrap(),
+        ApplyResult::Replayed
+    );
+    let observations = store.review_observations_for_case(&case.case_key).unwrap();
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0].reviewer_id, "secperf-opus");
+    assert_eq!(observations[0].review_mode, "shadow");
+    assert_eq!(store.status(1_787_000_604).unwrap().review_observations, 1);
+    let conflicting = ReviewObservationInput {
+        review_mode: "advisory".into(),
+        ..observation
+    };
+    assert!(matches!(
+        store.complete_review_observation_effect(
+            &claimed.effect_id,
+            "observer",
+            1_787_000_605,
+            &conflicting,
+        ),
+        Err(StoreError::IdempotencyConflict { .. })
+    ));
+
+    let connection = Connection::open(store.path()).unwrap();
+    assert!(
+        connection
+            .execute(
+                "UPDATE review_observations SET reviewer_id = 'tampered' WHERE observation_id = 'observation-shadow-opus'",
+                [],
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn authorization_removal_supersedes_a_detached_observer() {
+    let (_directory, mut store) = open();
+    let mut case = new_case();
+    case.effects = vec![EffectInput {
+        effect_id: "effect-shadow-opus".into(),
+        effect_type: "RUN_DIRECT_OBSERVER".into(),
+        payload: json!({"task_id": "secperf-opus-1"}),
+    }];
+    store.create_case(&case).unwrap();
+    let mut removed = transition();
+    removed.next_state = "ABANDONED".into();
+    removed.event.event_id = "event-authorization-removed".into();
+    removed.event.event_type = "AUTHORIZATION_REMOVED".into();
+    store.apply_transition(&removed, None).unwrap();
+
+    assert!(
+        store
+            .claim_effect_matching("observer", 1_787_000_602, 30, &["RUN_DIRECT_OBSERVER"])
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(store.status(1_787_000_602).unwrap().outbox_superseded, 1);
 }
 
 #[test]
@@ -773,6 +879,7 @@ fn schema_one_upgrades_forward_without_losing_existing_projections() {
     connection
         .execute_batch(
             "PRAGMA foreign_keys = OFF;
+             DROP TABLE review_observations;
              DROP TABLE webhook_deliveries;
              DROP TABLE workspace_retirements;
              DROP TABLE direct_attempts;
@@ -799,7 +906,7 @@ fn schema_one_upgrades_forward_without_losing_existing_projections() {
     drop(connection);
 
     let upgraded = Store::open(&path).unwrap();
-    assert_eq!(upgraded.schema_version().unwrap(), 6);
+    assert_eq!(upgraded.schema_version().unwrap(), 7);
     assert_eq!(
         upgraded
             .task_projection("legacy-projection")

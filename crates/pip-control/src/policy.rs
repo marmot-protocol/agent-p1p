@@ -5,7 +5,7 @@ use std::fmt;
 use std::num::{NonZeroU32, NonZeroU64};
 use std::path::{Component, Path};
 
-use pip_contracts::WorkerRole;
+use pip_contracts::{ReviewMode, WorkerRole};
 use pip_controller::{ExecutionKind, RolePolicy, WorkflowPolicy};
 use pip_core::{ActorId, CasePolicy, IntakePolicy, MergeMode, PolicyRevision};
 use serde::{Deserialize, Serialize};
@@ -80,6 +80,10 @@ enum ExecutionConfiguration {
 #[serde(deny_unknown_fields)]
 pub struct RoleConfiguration {
     pub role: WorkerRole,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reviewer_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_mode: Option<ReviewMode>,
     pub profile: String,
     execution: ExecutionConfiguration,
     pub provider: String,
@@ -161,6 +165,8 @@ impl RepositoryPolicy {
             .iter()
             .map(|role| RolePolicy {
                 role: role.role,
+                reviewer_id: role.reviewer_id.clone(),
+                review_mode: role.review_mode,
                 profile: role.profile.clone(),
                 execution: match role.execution {
                     ExecutionConfiguration::Hermes => ExecutionKind::Hermes,
@@ -272,7 +278,7 @@ fn validate_policy(policy: &RepositoryPolicy) -> Result<(), PolicyError> {
             .is_some_and(valid_reasoning_effort),
         ExecutionConfiguration::Direct => role.reasoning_effort.is_none(),
     });
-    let valid = policy.policy_format == 1
+    let valid = policy.policy_format == 2
         && policy.revision > 0
         && policy.repository.id > 0
         && valid_segment(&policy.repository.owner)

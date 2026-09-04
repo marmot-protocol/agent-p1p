@@ -22,14 +22,14 @@ authorized issue.
 |---|---|---|
 | Generic repository/board/case identity | Implemented locally | Strict repository policy, numeric repository/actor validation, generic case identity, and no compiled canary issue |
 | Deterministic Rust workflow | Implemented locally | `pip-core` states/events/effects and property/fixture tests |
-| Authoritative durable ledger | Implemented locally | SQLite schema v6, immutable history and workspace-retirement evidence, webhook deliveries, outbox, projections, attempts, migrations, backup, and crash injection |
+| Authoritative durable ledger | Implemented locally | SQLite schema v7, immutable required-run history, detached review observations, workspace-retirement evidence, webhook deliveries, outbox, projections, attempts, migrations, backup, and crash injection |
 | Signed webhook primary intake adapter | Implemented locally; Pirate deployment and TLS external | HMAC verification, delivery replay/conflict checks, exact repository/issue/actor re-read, isolated loopback receiver, atomic raw-body spool, controller-owned bounded consumption, commit-before-processed ordering, outage replay, tamper rejection, and systemd lifecycle tests |
 | Bounded polling recovery | Implemented locally | Generic label discovery and live-evidence eligibility reconciliation |
 | Planner before builder | Implemented locally | Typed planner contract, durable plan publication gate, and dispatch ordering |
 | Assigned builder worktree and draft PR | Implemented locally | Controller-owned checkout/worktree/branch, credential-free builder, exact push, and stable draft-PR transaction |
 | Bounded worktree storage | Installed, persistently mounted, and reboot-verified on Pirate | Dedicated-mount and free-space gates, 24-hour terminal retention, no-force clean retirement, running-attempt exclusion, one-per-cycle cleanup, immutable retirement evidence, and successful manual-remount and post-reboot systemd mount-unit probes |
 | Pinned Hermes compatibility | Service-owned runtime bootstrapped inertly on Pirate | Exact `v2026.8.31` commit and installer hash, slug-based board identity, task/run JSON contract, typed workspaces, external-supervisor gateway flag, and successful exact-release service-root bootstrap |
-| Exact-head CI and two independent reviews | Implemented locally | CI reconciliation, distinct review identities, role stamps, exact-head joins, and publication retries |
+| Exact-head CI and policy-defined independent reviews | Implemented locally | CI reconciliation, stable reviewer-instance identities, required/advisory/shadow modes, all-required exact-head joins, two semantic-lane review aggregates, and publication retries |
 | Dynamic remediation and convergence | Implemented locally | State-driven redispatch rather than a fixed DAG; round, elapsed-time, repeated-finding, direct-attempt, and Hermes circuit-breaker bounds |
 | Holistic final review | Implemented locally | Atomic final preflight plus full immutable evidence bundle |
 | Shadow disposition | Implemented locally and selected for MDK | `READY` becomes `SHADOW_READY`; autonomous merge is unreachable under checked-in MDK policy |
@@ -46,7 +46,7 @@ authorized issue.
 | 0 — architecture and safety boundaries | Complete in repository; documents reconciled by this audit |
 | 1 — frozen reference behavior | Complete; retained Python fixtures remain parity inputs, not runtime authority |
 | 2 — pure Rust core | Complete locally |
-| 3 — ledger and outbox | Complete locally through schema v6 |
+| 3 — ledger and outbox | Complete locally through schema v7 |
 | 4 — read-only adapters | Complete locally; live service-identity probes remain Phase 8 evidence |
 | 5 — projections and execution | Complete locally for Hermes and direct Cursor paths |
 | 6 — controlled GitHub writes | Complete locally; live credential scope evidence remains external |

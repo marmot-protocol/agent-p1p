@@ -339,7 +339,7 @@ pub(crate) fn final_gate_blockers(
         &mut blockers,
         expected_draft,
     )?;
-    validate_ledger_join(store, case, &mut blockers)?;
+    validate_ledger_join(store, case, policy, &mut blockers)?;
     let head = case
         .head_sha
         .as_deref()
@@ -359,6 +359,7 @@ pub(crate) fn final_gate_blockers(
 fn validate_ledger_join(
     store: &Store,
     case: &StoredCase,
+    policy: &RepositoryPolicy,
     blockers: &mut Vec<String>,
 ) -> Result<(), FinalPreflightError> {
     let pr_number = case.pr_number.ok_or(FinalPreflightError::InvalidCase)?;
@@ -370,7 +371,23 @@ fn validate_ledger_join(
     let mut builder = false;
     let mut resolutions = Vec::new();
     let mut reviews = Vec::new();
-    let mut mandatory_findings: BTreeMap<String, WorkerRole> = BTreeMap::new();
+    let workflow = policy
+        .workflow_policy()
+        .map_err(|error| FinalPreflightError::InvalidWorkerEvidence(error.to_string()))?;
+    let required_reviewers = workflow
+        .required_reviewers()
+        .map(|role| {
+            role.reviewer_id
+                .as_ref()
+                .map(|id| (id.clone(), role.role))
+                .ok_or_else(|| {
+                    FinalPreflightError::InvalidWorkerEvidence(
+                        "required reviewer is missing an instance id".into(),
+                    )
+                })
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    let mut mandatory_findings: BTreeMap<String, String> = BTreeMap::new();
     for stored in store.runs_for_case(&case.case_key)? {
         let result: WorkerResult = serde_json::from_value(stored.payload)
             .map_err(|error| FinalPreflightError::InvalidWorkerEvidence(error.to_string()))?;
@@ -392,11 +409,11 @@ fn validate_ledger_join(
             WorkerResult::Review(result) => {
                 for finding in &result.blocking_findings {
                     if mandatory_findings
-                        .insert(finding.id.clone(), result.common.role)
-                        .is_some_and(|origin| origin != result.common.role)
+                        .insert(finding.id.clone(), result.reviewer_id.clone())
+                        .is_some_and(|origin| origin != result.reviewer_id)
                     {
                         return Err(FinalPreflightError::InvalidWorkerEvidence(format!(
-                            "finding {} has conflicting origin roles",
+                            "finding {} has conflicting reviewer origins",
                             finding.id
                         )));
                     }
@@ -417,27 +434,35 @@ fn validate_ledger_join(
     if !builder {
         push_unique(blockers, "MISSING_EXACT_BUILDER_RESULT".into());
     }
-    let round = reviews.iter().map(|review| review.review_round).max();
-    for (role, name) in REVIEW_ROLES {
+    let round = reviews
+        .iter()
+        .filter(|review| required_reviewers.contains_key(&review.reviewer_id))
+        .map(|review| review.review_round)
+        .max();
+    for (reviewer_id, role) in &required_reviewers {
         let matching = reviews
             .iter()
-            .filter(|review| Some(review.review_round) == round && review.common.role == role)
+            .filter(|review| {
+                Some(review.review_round) == round
+                    && review.common.role == *role
+                    && review.reviewer_id == *reviewer_id
+            })
             .collect::<Vec<_>>();
         if matching.len() != 1
             || matching[0].outcome != ReviewOutcome::Approve
             || !matching[0].blocking_findings.is_empty()
         {
-            push_unique(blockers, format!("MISSING_LEDGER_APPROVAL:{name}"));
+            push_unique(blockers, format!("MISSING_LEDGER_APPROVAL:{reviewer_id}"));
         }
     }
-    for (finding_id, origin_role) in mandatory_findings {
+    for (finding_id, origin_reviewer) in mandatory_findings {
         if !resolutions.iter().any(|resolution| {
             resolution.finding_id == finding_id && resolution.resolved_head_sha == head_sha
         }) {
             push_unique(blockers, format!("MISSING_FINDING_RESOLUTION:{finding_id}"));
         }
         if !reviews.iter().any(|review| {
-            review.common.role == origin_role
+            review.reviewer_id == origin_reviewer
                 && review.finding_confirmations.iter().any(|confirmation| {
                     confirmation.finding_id == finding_id
                         && confirmation.status == ConfirmationStatus::ConfirmedResolved

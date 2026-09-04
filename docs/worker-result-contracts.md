@@ -1,6 +1,6 @@
 # Rust worker result contracts
 
-**Status:** Canonical for workflow version 2 and contract version 1
+**Status:** Canonical for workflow version 3 and contract version 2
 
 The Rust controller accepts a completed worker result only from the latest
 successful durable Hermes run for a controller-owned task projection. The
@@ -11,7 +11,8 @@ skills-commit drift before writing a run or advancing a case.
 Every controller-owned worker projection also carries
 `immutable_evidence_bundle` schema version 1. It is bound to the task's case
 and state revision and contains the deterministically ordered immutable ledger
-events, runs, controller evidence, and findings available when the dispatch
+events, runs, controller evidence, findings, and completed detached review
+observations available when the dispatch
 effect is claimed. Each record retains its stored payload digest. The top-level
 digest is SHA-256 over the compact, lexicographically key-ordered JSON bundle
 after removing only the top-level `sha256` field. Workers fail closed on a
@@ -33,10 +34,10 @@ role-specific fields below:
 
 | Field | Contract |
 |---|---|
-| `contract_version` | Integer `1`. |
+| `contract_version` | Integer `2`. |
 | `workflow_version` | Positive integer equal to `case.workflow_version`. |
 | `case` | Object containing positive `repository_id`, `issue_number`, and `workflow_version`. |
-| `task_id` | Exact Hermes task ID from the immutable task input. |
+| `task_id` | Exact controller-assigned task ID from the immutable task input. |
 | `role` | `planner`, `builder`, `reviewer-general`, `reviewer-secperf`, or `final-reviewer`. |
 | `requested_model` | Exact `provider/model` value from the task binding. |
 | `actual_model` | Model identity observed by the worker. A mismatch requires `BLOCKED_UNEXPECTED_MODEL`. |
@@ -94,6 +95,7 @@ releasing reviewers.
 
 Additional fields:
 
+- `reviewer_id`: exact stable reviewer-instance identity from the task binding;
 - `outcome`: `APPROVE`, `REQUEST_CHANGES`, `BLOCKED`, or
   `BLOCKED_UNEXPECTED_MODEL`;
 - positive `plan_version`, `review_round`, and `pr_number`;
@@ -101,8 +103,12 @@ Additional fields:
 - `blocking_findings`, `suggestions`, and `finding_confirmations`.
 
 An approval cannot contain a blocking finding or an open confirmation. The
-first independent result is retained without advancing the case. The second
-same-head, same-round result releases the deterministic aggregate verdict.
+controller-owned task binding also carries `review_mode`: `required`,
+`advisory`, or `shadow`; workers cannot select or change it. Required results
+are retained without advancing until every policy-required instance has
+returned on the same head and round. The deterministic union then releases the
+aggregate verdict. Advisory and shadow results are stored as immutable
+observations and never advance, block, approve, or remediate the case.
 
 ## Final reviewer
 

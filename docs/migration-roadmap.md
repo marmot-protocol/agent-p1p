@@ -105,7 +105,8 @@ Deliverables:
 - Controller-owned worktree and branch allocation.
 - Fresh Hermes and direct-provider executor adapters.
 - Bounded process leases, timeouts, cleanup, and artifact retention.
-- Planner, builder, parallel review, remediation, and final-review projections.
+- Planner, builder, policy-defined parallel reviewer instances, remediation,
+  and final-review projections.
 - Revision-bound, digest-addressed immutable evidence bundles on every worker
   projection, including the accepted GitHub preflight for final review.
 
@@ -115,8 +116,9 @@ Exit gate:
 - Dynamic remediation supports more than one round and respects policy bounds.
 - A worker cannot release its own child task.
 - Hermes-native and direct-provider jobs are routed to different executors
-  without model substitution, and both converge into the same bound result
-  ingestion path.
+  without model substitution. Required jobs converge into authoritative result
+  ingestion; advisory/shadow direct jobs converge into immutable detached
+  observations without workflow authority.
 - Every dispatched workspace is allocated first and encoded using the selected
   executor's exact path contract.
 

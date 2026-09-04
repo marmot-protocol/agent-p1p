@@ -7,7 +7,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-pub const CONTRACT_VERSION: u32 = 1;
+pub const CONTRACT_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ContractError {
@@ -60,6 +60,14 @@ pub enum WorkerRole {
     FinalReviewer,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReviewMode {
+    Required,
+    Advisory,
+    Shadow,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CaseIdentity {
@@ -74,6 +82,10 @@ pub struct WorkerBinding {
     pub case: CaseIdentity,
     pub task_id: String,
     pub role: WorkerRole,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reviewer_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_mode: Option<ReviewMode>,
     pub requested_model: String,
     pub skills_repository_commit: String,
     pub plan_version: u32,
@@ -225,6 +237,7 @@ pub struct FindingConfirmation {
 pub struct ReviewResult {
     #[serde(flatten)]
     pub common: CommonResult,
+    pub reviewer_id: String,
     pub outcome: ReviewOutcome,
     pub plan_version: u32,
     pub review_round: u32,
@@ -349,23 +362,27 @@ impl WorkerResult {
     pub fn validate_binding(&self, binding: &WorkerBinding) -> Result<(), ContractError> {
         self.validate()?;
         let common = self.common();
-        let (plan_version, pr_number, head_sha) = match self {
-            Self::Planner(result) => (result.plan_version, None, None),
-            Self::Builder(result) => (result.plan_version, None, result.head_sha.as_deref()),
+        let (plan_version, pr_number, head_sha, reviewer_id) = match self {
+            Self::Planner(result) => (result.plan_version, None, None, None),
+            Self::Builder(result) => (result.plan_version, None, result.head_sha.as_deref(), None),
             Self::Review(result) => (
                 result.plan_version,
                 Some(result.pr_number),
                 Some(result.reviewed_head_sha.as_str()),
+                Some(result.reviewer_id.as_str()),
             ),
             Self::Final(result) => (
                 result.plan_version,
                 Some(result.pr_number),
                 Some(result.reviewed_head_sha.as_str()),
+                None,
             ),
         };
         let matches = common.case == binding.case
             && common.task_id == binding.task_id
             && common.role == binding.role
+            && reviewer_id == binding.reviewer_id.as_deref()
+            && binding.review_mode.is_some() == reviewer_id.is_some()
             && common.requested_model == binding.requested_model
             && common.skills_repository_commit == binding.skills_repository_commit
             && plan_version == binding.plan_version
@@ -459,6 +476,7 @@ impl ReviewResult {
         if self.plan_version == 0
             || self.review_round == 0
             || self.pr_number == 0
+            || !not_blank(&self.reviewer_id)
             || !is_hex(&self.reviewed_head_sha, 40)
         {
             return Err(ContractError::InvalidIdentity);

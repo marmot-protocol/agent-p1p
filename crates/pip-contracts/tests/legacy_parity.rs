@@ -109,6 +109,14 @@ fn adapt(name: &str, source: &Value) -> Result<WorkerResult, String> {
             }
         }
         "general_review" | "secperf_review" => {
+            fields.insert(
+                "reviewer_id".into(),
+                json!(if name == "general_review" {
+                    "general-sol"
+                } else {
+                    "secperf-opus-legacy"
+                }),
+            );
             for field in [
                 "outcome",
                 "plan_version",
@@ -158,12 +166,12 @@ fn common(source: &Value, role: &str) -> Result<Value, String> {
         return Err("completion precedes start".into());
     }
     Ok(json!({
-        "contract_version": 1,
-        "workflow_version": 2,
+        "contract_version": 2,
+        "workflow_version": 3,
         "case": {
             "repository_id": REPOSITORY_ID,
             "issue_number": issue_number,
-            "workflow_version": 2
+            "workflow_version": 3
         },
         "task_id": required(source, "task_id")?,
         "role": role,

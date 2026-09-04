@@ -217,7 +217,7 @@ adopt_bootstrap_workspace_layout() {
 
   chown "$control_uid:$control_gid" "$worktree_root" "$state_root"
   chmod 0770 "$worktree_root"
-  chmod 0700 "$state_root"
+  chmod 0710 "$state_root"
   bootstrap_workspace_adopted=true
 }
 
@@ -245,7 +245,7 @@ ensure_directory /opt/pip/releases root root 755
 ensure_directory /etc/pip root root 755
 ensure_directory /etc/pip/repositories root root 755
 ensure_directory /etc/systemd/system root root 755
-ensure_directory /var/lib/pip pip-control pip-control 700
+ensure_directory /var/lib/pip pip-control pip-control 710
 ensure_directory /var/lib/pip/repositories pip-control pip-control 700
 ensure_directory /var/lib/pip/worktrees pip-control pip-control 770
 ensure_directory /var/lib/pip/artifacts pip-control pip-control 770

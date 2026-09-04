@@ -1,6 +1,6 @@
 {
-  "policy_format": 1,
-  "revision": 2,
+  "policy_format": 2,
+  "revision": 3,
   "repository": {
     "id": 1055628515,
     "owner": "marmot-protocol",
@@ -8,7 +8,7 @@
     "default_branch": "master"
   },
   "board": "pip-mdk",
-  "workflow_version": 2,
+  "workflow_version": 3,
   "checkout": "/var/lib/pip/repositories/mdk",
   "workspace": "/var/lib/pip/worktrees/mdk",
   "artifacts": "/var/lib/pip/artifacts/mdk",
@@ -70,7 +70,7 @@
       "profile": "builder-grok",
       "execution": "direct",
       "provider": "cursor",
-      "model": "composer-2.5",
+      "model": "cursor-grok-4.6-high-fast",
       "reasoning_effort": null,
       "max_runtime": "PT45M",
       "priority": 50,
@@ -78,6 +78,8 @@
     },
     {
       "role": "reviewer-general",
+      "reviewer_id": "general-sol",
+      "review_mode": "required",
       "profile": "reviewer-general",
       "execution": "hermes",
       "provider": "openai-codex",
@@ -89,13 +91,28 @@
     },
     {
       "role": "reviewer-secperf",
-      "profile": "reviewer-secperf",
+      "reviewer_id": "secperf-kimi",
+      "review_mode": "required",
+      "profile": "reviewer-secperf-kimi",
       "execution": "direct",
       "provider": "cursor",
-      "model": "claude-opus-4-8-thinking-high",
+      "model": "kimi-k3-max",
       "reasoning_effort": null,
       "max_runtime": "PT30M",
       "priority": 50,
+      "skills": ["workflow-contract", "reviewer-secperf"]
+    },
+    {
+      "role": "reviewer-secperf",
+      "reviewer_id": "secperf-opus",
+      "review_mode": "shadow",
+      "profile": "reviewer-secperf-opus",
+      "execution": "direct",
+      "provider": "cursor",
+      "model": "claude-opus-5-thinking-high",
+      "reasoning_effort": null,
+      "max_runtime": "PT30M",
+      "priority": 40,
       "skills": ["workflow-contract", "reviewer-secperf"]
     },
     {

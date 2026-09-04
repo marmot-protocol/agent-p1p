@@ -143,7 +143,7 @@ fn planner_dispatch_projects_gate_and_worker_then_atomically_acks_outbox() {
     );
     let bundle = &worker_body["immutable_evidence_bundle"];
     assert_eq!(bundle["schema_version"], 1);
-    assert_eq!(bundle["case_key"], "repo:1055628515#1240@2");
+    assert_eq!(bundle["case_key"], "repo:1055628515#1240@3");
     assert_eq!(bundle["bound_state_revision"], 1);
     assert_eq!(
         bundle["records"]["events"][0]["event_id"],
@@ -188,7 +188,7 @@ fn direct_builder_is_durably_queued_without_any_hermes_command() {
     store
         .apply_transition(
             &TransitionInput {
-                case_key: "repo:1055628515#1240@2".into(),
+                case_key: "repo:1055628515#1240@3".into(),
                 expected_revision: 1,
                 next_state: "BUILDING".into(),
                 remediation_round: 1,
@@ -233,18 +233,18 @@ fn direct_builder_is_durably_queued_without_any_hermes_command() {
         .claim_effect_matching("direct-worker-1", 101, 30, &["RUN_DIRECT_WORKER"])
         .unwrap()
         .expect("durable direct worker job");
-    assert_eq!(job.case_key, "repo:1055628515#1240@2");
+    assert_eq!(job.case_key, "repo:1055628515#1240@3");
     assert_eq!(job.state_revision, 2);
     assert_eq!(
         job.payload["task_id"],
-        "repo:1055628515#1240@2:builder:round:1:revision:2:worker"
+        "repo:1055628515#1240@3:builder:round:1:revision:2:worker"
     );
     assert_eq!(job.payload["role"], "builder");
     assert_eq!(job.payload["provider"], "cursor");
-    assert_eq!(job.payload["model"], "composer-2.5");
+    assert_eq!(job.payload["model"], "cursor-grok-4.6-high-fast");
     assert_eq!(
         job.payload["workspace"],
-        "/var/lib/pip/worktrees/mdk/repo-1055628515-issue-1240-workflow-2"
+        "/var/lib/pip/worktrees/mdk/repo-1055628515-issue-1240-workflow-3"
     );
     assert_eq!(job.payload["body"]["state_revision"], 2);
     assert_eq!(job.payload["body"]["execution"], "direct");
@@ -257,7 +257,7 @@ fn independent_review_dispatch_splits_hermes_and_direct_work_without_model_subst
     store
         .apply_transition(
             &TransitionInput {
-                case_key: "repo:1055628515#1240@2".into(),
+                case_key: "repo:1055628515#1240@3".into(),
                 expected_revision: 1,
                 next_state: "REVIEWING".into(),
                 remediation_round: 0,
@@ -295,7 +295,7 @@ fn independent_review_dispatch_splits_hermes_and_direct_work_without_model_subst
         DispatchCycleResult::Projected {
             effect_id: "effect-dispatch-reviewers".into(),
             projection_count: 2,
-            direct_job_count: 1,
+            direct_job_count: 2,
             released_gate_count: 1,
             ledger_result: "applied".into(),
         }
@@ -311,8 +311,15 @@ fn independent_review_dispatch_splits_hermes_and_direct_work_without_model_subst
         .unwrap()
         .unwrap();
     assert_eq!(job.payload["role"], "reviewer-secperf");
-    assert_eq!(job.payload["model"], "claude-opus-4-8-thinking-high");
+    assert_eq!(job.payload["body"]["reviewer_id"], "secperf-kimi");
+    assert_eq!(job.payload["model"], "kimi-k3-max");
     assert_eq!(job.payload["body"]["expected_head_sha"], "c".repeat(40));
+    let shadow = store
+        .claim_effect_matching("observer", 101, 30, &["RUN_DIRECT_OBSERVER"])
+        .unwrap()
+        .unwrap();
+    assert_eq!(shadow.payload["body"]["reviewer_id"], "secperf-opus");
+    assert_eq!(shadow.payload["model"], "claude-opus-5-thinking-high");
 }
 
 fn projected_worker_body(runner: &FakeRunner) -> Value {
@@ -431,10 +438,10 @@ fn seeded_store(root: &std::path::Path) -> Store {
         .unwrap();
     store
         .create_case(&NewCase {
-            case_key: "repo:1055628515#1240@2".into(),
+            case_key: "repo:1055628515#1240@3".into(),
             repository_id: 1_055_628_515,
             issue_number: 1240,
-            workflow_version: 2,
+            workflow_version: 3,
             policy_revision: policy.revision,
             initial_state: "PLANNING".into(),
             observed_at: 90,
@@ -446,7 +453,7 @@ fn seeded_store(root: &std::path::Path) -> Store {
             effects: vec![EffectInput {
                 effect_id: "effect-intake-planner".into(),
                 effect_type: "DISPATCH_PLANNER".into(),
-                payload: json!({"case_key": "repo:1055628515#1240@2"}),
+                payload: json!({"case_key": "repo:1055628515#1240@3"}),
             }],
         })
         .unwrap();
@@ -482,15 +489,15 @@ fn review_creation_runner() -> FakeRunner {
 fn gate(status: &str) -> TaskSnapshot {
     TaskSnapshot {
         id: "gate-1".into(),
-        title: "Activate planner for repo:1055628515#1240@2".into(),
+        title: "Activate planner for repo:1055628515#1240@3".into(),
         status: status.into(),
         assignee: None,
         created_by: Some("pip-controller".into()),
         body: json!({
-            "case_key": "repo:1055628515#1240@2",
+            "case_key": "repo:1055628515#1240@3",
             "state_revision": 1,
             "activation_gate": "planner",
-            "projection_key": "repo:1055628515#1240@2:planner:round:1:revision:1:gate"
+            "projection_key": "repo:1055628515#1240@3:planner:round:1:revision:1:gate"
         })
         .to_string(),
     }
@@ -499,22 +506,22 @@ fn gate(status: &str) -> TaskSnapshot {
 fn worker(status: &str) -> TaskSnapshot {
     TaskSnapshot {
         id: "worker-1".into(),
-        title: "Run planner for repo:1055628515#1240@2".into(),
+        title: "Run planner for repo:1055628515#1240@3".into(),
         status: status.into(),
         assignee: Some("planner".into()),
         created_by: Some("pip-controller".into()),
         body: json!({
-            "case_key": "repo:1055628515#1240@2",
+            "case_key": "repo:1055628515#1240@3",
             "repository_id": 1055628515_u64,
             "issue_number": 1240,
-            "workflow_version": 2,
+            "workflow_version": 3,
             "state_revision": 1,
             "role": "planner",
             "remediation_round": 0,
             "execution": "hermes",
             "provider": "openai-codex",
             "model": "gpt-5.6-sol",
-            "projection_key": "repo:1055628515#1240@2:planner:round:1:revision:1:worker"
+            "projection_key": "repo:1055628515#1240@3:planner:round:1:revision:1:worker"
         })
         .to_string(),
     }
@@ -523,15 +530,15 @@ fn worker(status: &str) -> TaskSnapshot {
 fn review_gate(status: &str) -> TaskSnapshot {
     TaskSnapshot {
         id: "review-gate-1".into(),
-        title: "Activate reviewer-general for repo:1055628515#1240@2".into(),
+        title: "Activate general-sol for repo:1055628515#1240@3".into(),
         status: status.into(),
         assignee: None,
         created_by: Some("pip-controller".into()),
         body: json!({
-            "case_key": "repo:1055628515#1240@2",
+            "case_key": "repo:1055628515#1240@3",
             "state_revision": 2,
-            "activation_gate": "reviewer-general",
-            "projection_key": "repo:1055628515#1240@2:reviewer-general:round:1:revision:2:gate"
+            "activation_gate": "general-sol",
+            "projection_key": "repo:1055628515#1240@3:general-sol:round:1:revision:2:gate"
         })
         .to_string(),
     }
@@ -540,24 +547,26 @@ fn review_gate(status: &str) -> TaskSnapshot {
 fn review_worker(status: &str) -> TaskSnapshot {
     TaskSnapshot {
         id: "review-worker-1".into(),
-        title: "Run reviewer-general for repo:1055628515#1240@2".into(),
+        title: "Run general-sol for repo:1055628515#1240@3".into(),
         status: status.into(),
         assignee: Some("reviewer-general".into()),
         created_by: Some("pip-controller".into()),
         body: json!({
-            "case_key": "repo:1055628515#1240@2",
+            "case_key": "repo:1055628515#1240@3",
             "repository_id": 1055628515_u64,
             "issue_number": 1240,
-            "workflow_version": 2,
+            "workflow_version": 3,
             "state_revision": 2,
             "role": "reviewer-general",
+            "reviewer_id": "general-sol",
+            "review_mode": "required",
             "remediation_round": 0,
             "review_round": 1,
             "execution": "hermes",
             "provider": "openai-codex",
             "model": "gpt-5.6-sol",
             "expected_head_sha": "c".repeat(40),
-            "projection_key": "repo:1055628515#1240@2:reviewer-general:round:1:revision:2:worker"
+            "projection_key": "repo:1055628515#1240@3:general-sol:round:1:revision:2:worker"
         })
         .to_string(),
     }

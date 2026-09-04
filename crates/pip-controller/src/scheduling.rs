@@ -5,7 +5,7 @@ use std::fmt;
 use std::num::{NonZeroU32, NonZeroU64};
 use std::str::FromStr;
 
-use pip_contracts::WorkerRole;
+use pip_contracts::{ReviewMode, WorkerRole};
 use pip_core::{
     CaseId, Effect, GitSha, IssueNumber, PlanVersion, PullRequestNumber, RepositoryId,
     StateRevision, WorkflowVersion,
@@ -27,6 +27,8 @@ pub enum ExecutionKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RolePolicy {
     pub role: WorkerRole,
+    pub reviewer_id: Option<String>,
+    pub review_mode: Option<ReviewMode>,
     pub profile: String,
     pub execution: ExecutionKind,
     pub provider: String,
@@ -56,22 +58,30 @@ impl WorkflowPolicy {
         let board = board.into();
         let workspace = workspace.into();
         let branch_prefix = branch_prefix.into();
-        let expected = [
+        let fixed = [
             WorkerRole::Planner,
             WorkerRole::Builder,
-            WorkerRole::ReviewerGeneral,
-            WorkerRole::ReviewerSecperf,
             WorkerRole::FinalReviewer,
         ];
-        let unique = roles
+        let fixed_valid = fixed
             .iter()
-            .map(|role| role_name(role.role))
+            .all(|expected| roles.iter().filter(|role| role.role == *expected).count() == 1);
+        let reviewer_ids = roles
+            .iter()
+            .filter_map(|role| role.reviewer_id.as_deref())
             .collect::<BTreeSet<_>>();
-        let valid_roles = roles.len() == expected.len()
-            && unique.len() == expected.len()
-            && expected
-                .iter()
-                .all(|expected| roles.iter().any(|role| role.role == *expected));
+        let reviewer_count = roles.iter().filter(|role| is_reviewer(role.role)).count();
+        let required_lanes = [WorkerRole::ReviewerGeneral, WorkerRole::ReviewerSecperf]
+            .into_iter()
+            .all(|expected| {
+                roles.iter().any(|role| {
+                    role.role == expected && role.review_mode == Some(ReviewMode::Required)
+                })
+            });
+        let valid_roles = fixed_valid
+            && reviewer_count >= 2
+            && reviewer_ids.len() == reviewer_count
+            && required_lanes;
         let valid_bindings = roles.iter().all(valid_role_policy);
         if !valid_id(&board)
             || !workspace.starts_with('/')
@@ -126,7 +136,22 @@ impl WorkflowPolicy {
     fn role(&self, role: WorkerRole) -> Result<&RolePolicy, DispatchError> {
         self.roles
             .iter()
-            .find(|binding| binding.role == role)
+            .find(|binding| binding.role == role && binding.reviewer_id.is_none())
+            .ok_or(DispatchError::InvalidPolicy)
+    }
+
+    pub fn reviewers(&self) -> impl Iterator<Item = &RolePolicy> {
+        self.roles.iter().filter(|role| is_reviewer(role.role))
+    }
+
+    pub fn required_reviewers(&self) -> impl Iterator<Item = &RolePolicy> {
+        self.reviewers()
+            .filter(|role| role.review_mode == Some(ReviewMode::Required))
+    }
+
+    pub fn reviewer(&self, reviewer_id: &str) -> Result<&RolePolicy, DispatchError> {
+        self.reviewers()
+            .find(|binding| binding.reviewer_id.as_deref() == Some(reviewer_id))
             .ok_or(DispatchError::InvalidPolicy)
     }
 }
@@ -371,7 +396,7 @@ pub fn schedule_effect(
         Effect::DispatchPlanner => Ok(vec![dispatch(
             effect_id,
             effect_id,
-            WorkerRole::Planner,
+            policy.role(WorkerRole::Planner)?,
             context,
             policy,
         )?]),
@@ -380,36 +405,36 @@ pub fn schedule_effect(
             Ok(vec![dispatch(
                 effect_id,
                 effect_id,
-                WorkerRole::Builder,
+                policy.role(WorkerRole::Builder)?,
                 context,
                 policy,
             )?])
         }
         Effect::DispatchReviewers => {
             require_review_binding(context)?;
-            Ok(vec![
-                dispatch(
-                    &format!("{effect_id}:general"),
-                    effect_id,
-                    WorkerRole::ReviewerGeneral,
-                    context,
-                    policy,
-                )?,
-                dispatch(
-                    &format!("{effect_id}:secperf"),
-                    effect_id,
-                    WorkerRole::ReviewerSecperf,
-                    context,
-                    policy,
-                )?,
-            ])
+            policy
+                .reviewers()
+                .map(|binding| {
+                    let reviewer_id = binding
+                        .reviewer_id
+                        .as_deref()
+                        .ok_or(DispatchError::InvalidPolicy)?;
+                    dispatch(
+                        &format!("{effect_id}:{reviewer_id}"),
+                        effect_id,
+                        binding,
+                        context,
+                        policy,
+                    )
+                })
+                .collect()
         }
         Effect::DispatchFinalReviewer => {
             require_review_binding(context)?;
             Ok(vec![dispatch(
                 effect_id,
                 effect_id,
-                WorkerRole::FinalReviewer,
+                policy.role(WorkerRole::FinalReviewer)?,
                 context,
                 policy,
             )?])
@@ -428,11 +453,11 @@ fn require_review_binding(context: &DispatchContext) -> Result<(), DispatchError
 fn dispatch(
     effect_id: &str,
     source_effect_id: &str,
-    role: WorkerRole,
+    binding: &RolePolicy,
     context: &DispatchContext,
     policy: &WorkflowPolicy,
 ) -> Result<WorkflowDispatch, DispatchError> {
-    let binding = policy.role(role)?;
+    let role = binding.role;
     if !context.immutable_evidence_bundle.is_object() {
         return Err(DispatchError::InvalidEvidenceBundle);
     }
@@ -445,8 +470,9 @@ fn dispatch(
             review_round
         }
     };
+    let worker_id = binding.reviewer_id.as_deref().unwrap_or(role_name);
     let projection_base = format!(
-        "{}:{role_name}:round:{round}:revision:{}",
+        "{}:{worker_id}:round:{round}:revision:{}",
         context.case_id,
         context.state_revision.get()
     );
@@ -489,6 +515,16 @@ fn dispatch(
         WorkerRole::ReviewerGeneral | WorkerRole::ReviewerSecperf
     ) {
         body.insert("review_round".into(), json!(review_round));
+        body.insert("reviewer_id".into(), json!(worker_id));
+        body.insert(
+            "review_mode".into(),
+            json!(match binding.review_mode {
+                Some(ReviewMode::Required) => "required",
+                Some(ReviewMode::Advisory) => "advisory",
+                Some(ReviewMode::Shadow) => "shadow",
+                None => return Err(DispatchError::InvalidPolicy),
+            }),
+        );
     }
     if role == WorkerRole::FinalReviewer {
         body.insert("final_review_round".into(), json!(review_round));
@@ -549,18 +585,18 @@ fn dispatch(
             board: policy.board.clone(),
             effect_id: format!("{effect_id}:gate"),
             projection_key: gate_projection_key,
-            title: format!("Activate {role_name} for {}", context.case_id),
+            title: format!("Activate {worker_id} for {}", context.case_id),
             body: json!({
                 "case_key": context.case_id.to_string(),
                 "state_revision": context.state_revision.get(),
-                "activation_gate": role_name,
+                "activation_gate": worker_id,
             }),
             parent_task_ids: Vec::new(),
         },
         worker_projection_key,
         worker_body: Value::Object(body),
         worker_effect_id: format!("{effect_id}:worker"),
-        worker_title: format!("Run {role_name} for {}", context.case_id),
+        worker_title: format!("Run {worker_id} for {}", context.case_id),
         source_effect_id: source_effect_id.into(),
         profile: binding.profile.clone(),
         workspace: format!(
@@ -590,15 +626,26 @@ fn dispatch(
 
 fn valid_role_policy(role: &RolePolicy) -> bool {
     let execution_valid = match role.role {
-        WorkerRole::Builder | WorkerRole::ReviewerSecperf => {
-            role.execution == ExecutionKind::Direct && role.provider == "cursor"
-        }
-        WorkerRole::Planner | WorkerRole::ReviewerGeneral | WorkerRole::FinalReviewer => {
+        WorkerRole::Builder => role.execution == ExecutionKind::Direct && role.provider == "cursor",
+        WorkerRole::Planner | WorkerRole::FinalReviewer => {
             role.execution == ExecutionKind::Hermes && role.provider != "cursor"
         }
+        WorkerRole::ReviewerGeneral | WorkerRole::ReviewerSecperf => match role.execution {
+            ExecutionKind::Direct => role.provider == "cursor",
+            ExecutionKind::Hermes => role.provider != "cursor",
+        },
+    };
+    let review_binding_valid = if is_reviewer(role.role) {
+        role.reviewer_id.as_deref().is_some_and(valid_id)
+            && role.review_mode.is_some()
+            && (role.review_mode == Some(ReviewMode::Required)
+                || role.execution == ExecutionKind::Direct)
+    } else {
+        role.reviewer_id.is_none() && role.review_mode.is_none()
     };
     let model = role.model.to_ascii_lowercase();
     execution_valid
+        && review_binding_valid
         && valid_id(&role.profile)
         && valid_id(&role.provider)
         && valid_id(&role.model)
@@ -607,7 +654,27 @@ fn valid_role_policy(role: &RolePolicy) -> bool {
         && role.skills.len() == 2
         && role.skills.iter().all(|skill| valid_id(skill))
         && role.skills.iter().any(|skill| skill == "workflow-contract")
-        && role.skills.iter().any(|skill| skill == &role.profile)
+        && role
+            .skills
+            .iter()
+            .any(|skill| skill == role_skill_name(role.role))
+}
+
+const fn is_reviewer(role: WorkerRole) -> bool {
+    matches!(
+        role,
+        WorkerRole::ReviewerGeneral | WorkerRole::ReviewerSecperf
+    )
+}
+
+const fn role_skill_name(role: WorkerRole) -> &'static str {
+    match role {
+        WorkerRole::Planner => "planner",
+        WorkerRole::Builder => "builder-grok",
+        WorkerRole::ReviewerGeneral => "reviewer-general",
+        WorkerRole::ReviewerSecperf => "reviewer-secperf",
+        WorkerRole::FinalReviewer => "final-reviewer",
+    }
 }
 
 fn role_name(role: WorkerRole) -> &'static str {

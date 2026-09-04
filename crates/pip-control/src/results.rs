@@ -3,8 +3,8 @@
 use std::fmt;
 use std::time::Duration;
 
-use pip_contracts::{CaseIdentity, WorkerBinding, WorkerResult, WorkerRole};
-use pip_controller::{IngestError, IngestResult, ingest_worker_result};
+use pip_contracts::{CaseIdentity, ReviewMode, WorkerBinding, WorkerResult, WorkerRole};
+use pip_controller::{IngestError, IngestResult, ingest_worker_result_with_policy};
 use pip_hermes::{CommandRunner, HermesError, HermesReader, ProcessRunner, TaskCreateSpec};
 use pip_store::{Store, StoreError};
 use serde::Serialize;
@@ -174,7 +174,16 @@ pub fn ingest_completed_once_with<R: CommandRunner>(
         let binding = binding(&projection.task_id, &desired)?;
         let result: WorkerResult = serde_json::from_value(completed.metadata)
             .map_err(|error| ResultCycleError::MalformedResult(error.to_string()))?;
-        let ingested = ingest_worker_result(store, &policy.case_policy(), &binding, &result)?;
+        let workflow_policy = policy
+            .workflow_policy()
+            .map_err(|error| ResultCycleError::MalformedResult(error.to_string()))?;
+        let ingested = ingest_worker_result_with_policy(
+            store,
+            &policy.case_policy(),
+            &workflow_policy,
+            &binding,
+            &result,
+        )?;
         return Ok(match ingested {
             IngestResult::Applied { transition_count } => ResultCycle::Ingested {
                 task_id: projection.task_id,
@@ -199,11 +208,18 @@ fn validate_projection(
     let workflow = policy
         .workflow_policy()
         .map_err(|_| ResultCycleError::InvalidProjection)?;
-    let configured = workflow
-        .roles()
-        .iter()
-        .find(|configured| configured.role == role)
-        .ok_or(ResultCycleError::InvalidProjection)?;
+    let reviewer_id = body.get("reviewer_id").and_then(|value| value.as_str());
+    let configured = if let Some(reviewer_id) = reviewer_id {
+        workflow
+            .reviewer(reviewer_id)
+            .map_err(|_| ResultCycleError::InvalidProjection)?
+    } else {
+        workflow
+            .roles()
+            .iter()
+            .find(|configured| configured.role == role && configured.reviewer_id.is_none())
+            .ok_or(ResultCycleError::InvalidProjection)?
+    };
     if task_id.trim().is_empty()
         || desired.board != policy.board
         || number(body, "repository_id")? != policy.repository.id
@@ -212,6 +228,13 @@ fn validate_projection(
         || desired.provider != configured.provider
         || desired.model != configured.model
         || desired.skills != configured.skills
+        || reviewer_id != configured.reviewer_id.as_deref()
+        || body.get("review_mode").and_then(|value| value.as_str())
+            != configured.review_mode.map(|mode| match mode {
+                ReviewMode::Required => "required",
+                ReviewMode::Advisory => "advisory",
+                ReviewMode::Shadow => "shadow",
+            })
         || desired
             .body
             .get("requested_model")
@@ -237,6 +260,14 @@ fn binding(task_id: &str, desired: &TaskCreateSpec) -> Result<WorkerBinding, Res
         },
         task_id: task_id.into(),
         role: role(body.get("role").and_then(|value| value.as_str()))?,
+        reviewer_id: body
+            .get("reviewer_id")
+            .map(|_| text(body, "reviewer_id").map(str::to_owned))
+            .transpose()?,
+        review_mode: body
+            .get("review_mode")
+            .map(|_| review_mode(text(body, "review_mode")?))
+            .transpose()?,
         requested_model: text(body, "requested_model")?.into(),
         skills_repository_commit: text(body, "skills_repository_commit")?.into(),
         plan_version: u32::try_from(number(body, "plan_version")?)
@@ -247,6 +278,15 @@ fn binding(task_id: &str, desired: &TaskCreateSpec) -> Result<WorkerBinding, Res
             .map(|_| text(body, "expected_head_sha").map(str::to_owned))
             .transpose()?,
     })
+}
+
+fn review_mode(value: &str) -> Result<ReviewMode, ResultCycleError> {
+    match value {
+        "required" => Ok(ReviewMode::Required),
+        "advisory" => Ok(ReviewMode::Advisory),
+        "shadow" => Ok(ReviewMode::Shadow),
+        _ => Err(ResultCycleError::InvalidProjection),
+    }
 }
 
 fn role(value: Option<&str>) -> Result<WorkerRole, ResultCycleError> {

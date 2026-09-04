@@ -110,7 +110,8 @@ directly to building.
 6. If CI is pending, enter `WAITING_CI` without redispatching the builder.
 7. If CI fails because of the change, create a builder remediation event.
 8. If CI is green and acceptable on the exact head, enter `REVIEWING` and
-   publish two independent review effects in the same ledger transaction.
+   publish one independent effect per configured reviewer instance in the same
+   ledger transaction.
 
 Infrastructure retry policy is separate from code-remediation policy. A rerun
 does not erase historical evidence; repository policy determines which check
@@ -120,10 +121,13 @@ history is acceptable.
 
 For review round `R` at head `X`:
 
-1. Dispatch both reviewers with the same immutable context and `X`.
+1. Dispatch every configured reviewer instance with the same immutable context
+   and `X`.
 2. Accept each result only after independent task/profile/model/head validation.
-3. Wait until both results exist; never let one reviewer release remediation.
-4. If both approve and the join passes, enter `FINAL_REVIEW`.
+3. Wait until every `required` result exists; `advisory` and detached `shadow`
+   observations never delay the join.
+4. If every required instance approves and both semantic lane aggregates pass,
+   enter `FINAL_REVIEW`.
 5. Otherwise create the canonical union of mandatory findings and enter
    `REMEDIATING`.
 6. Dispatch one builder remediation run with that exact finding set.
@@ -131,9 +135,9 @@ For review round `R` at head `X`:
 8. Invalidate all review evidence for `X`.
 9. Increment the round and return to `REVIEWING` at `Y`.
 
-The originating reviewer confirms each of its prior findings. Both reviewers
-still review the entire current diff independently; confirmation alone is not
-approval.
+The originating reviewer instance confirms each of its prior findings. Every
+required reviewer still reviews the entire current diff independently;
+confirmation alone is not approval.
 
 Policy checks before another round include maximum rounds, elapsed time,
 repeated finding fingerprints, and repeated provider failures. Exceeding a
@@ -142,7 +146,8 @@ bound enters `ESCALATED`.
 ## Final review sequence
 
 1. Rebuild the complete case bundle from immutable ledger events, runs,
-   controller evidence, and findings; bind and hash it at the current revision.
+   controller evidence, findings, and detached review observations; bind and
+   hash it at the current revision.
 2. Re-fetch and record the original issue and bounded clarification history,
    current GitHub authorization, PR head, CI, reviews, threads, ownership, and
    mergeability.
@@ -157,7 +162,7 @@ bound enters `ESCALATED`.
    - human wait -> `WAITING_HUMAN`;
    - abandon -> `ABANDONED`.
 
-Any code change after final review invalidates the final run, both reviews, and
+Any code change after final review invalidates the final run, all head-bound reviews, and
 CI evidence for the prior head.
 
 ## Merge sequence

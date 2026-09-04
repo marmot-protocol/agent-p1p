@@ -1,4 +1,4 @@
-use pip_contracts::{ContractError, WorkerBinding, WorkerResult, WorkerRole};
+use pip_contracts::{ContractError, ReviewMode, WorkerBinding, WorkerResult, WorkerRole};
 use serde_json::{Value, json};
 
 fn fixture() -> Value {
@@ -75,7 +75,9 @@ fn immutable_worker_binding_covers_case_task_role_plan_model_pr_and_head() {
         },
         task_id: "review-secperf-1".into(),
         role: WorkerRole::ReviewerSecperf,
-        requested_model: "cursor/claude-opus-4-8-thinking-high".into(),
+        reviewer_id: Some("secperf-kimi".into()),
+        review_mode: Some(ReviewMode::Required),
+        requested_model: "cursor/kimi-k3-max".into(),
         skills_repository_commit: "a".repeat(40),
         plan_version: 1,
         pr_number: Some(77),

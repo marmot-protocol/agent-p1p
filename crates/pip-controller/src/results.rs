@@ -5,8 +5,8 @@ use std::num::{NonZeroU32, NonZeroU64};
 use std::str::FromStr;
 
 use pip_contracts::{
-    BuilderOutcome, ContractError, FinalOutcome, PlannerOutcome, ReviewOutcome, ReviewResult,
-    WorkerBinding, WorkerResult, WorkerRole,
+    BuilderOutcome, ContractError, FinalOutcome, PlannerOutcome, ReviewMode, ReviewOutcome,
+    ReviewResult, WorkerBinding, WorkerResult, WorkerRole,
 };
 use pip_core::{
     CaseId, CasePolicy, CaseState, Event, EventId, GitSha, IssueNumber, ObservedAt, PlanVersion,
@@ -16,7 +16,7 @@ use pip_store::{EvidenceInput, FindingInput, RunInput, Store, StoreError, Stored
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::{ControllerError, LedgerController, WorkflowCommand};
+use crate::{ControllerError, LedgerController, WorkflowCommand, WorkflowPolicy};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IngestResult {
@@ -81,7 +81,30 @@ pub fn ingest_worker_result(
     binding: &WorkerBinding,
     result: &WorkerResult,
 ) -> Result<IngestResult, IngestError> {
+    ingest_worker_result_inner(store, policy, None, binding, result)
+}
+
+pub fn ingest_worker_result_with_policy(
+    store: &mut Store,
+    policy: &CasePolicy,
+    workflow_policy: &WorkflowPolicy,
+    binding: &WorkerBinding,
+    result: &WorkerResult,
+) -> Result<IngestResult, IngestError> {
+    ingest_worker_result_inner(store, policy, Some(workflow_policy), binding, result)
+}
+
+fn ingest_worker_result_inner(
+    store: &mut Store,
+    policy: &CasePolicy,
+    workflow_policy: Option<&WorkflowPolicy>,
+    binding: &WorkerBinding,
+    result: &WorkerResult,
+) -> Result<IngestResult, IngestError> {
     result.validate_binding(binding)?;
+    if let Some(workflow_policy) = workflow_policy {
+        validate_review_policy_binding(workflow_policy, binding)?;
+    }
     let payload = serde_json::to_value(result)
         .map_err(|error| IngestError::Serialization(error.to_string()))?;
     if let Some(existing) = store.run_by_task_id(&binding.task_id)? {
@@ -118,14 +141,30 @@ pub fn ingest_worker_result(
             .state_revision
             .checked_add(1)
             .ok_or(IngestError::InvalidState)?;
-        let result_command = result_workflow(store, &building, case_id, binding, result, payload)?;
+        let result_command = result_workflow(
+            store,
+            &building,
+            case_id,
+            workflow_policy,
+            binding,
+            result,
+            payload,
+        )?;
         LedgerController::apply_batch(store, policy, &[synthetic, result_command])?;
         return Ok(IngestResult::Applied {
             transition_count: 2,
         });
     }
 
-    let command = result_workflow(store, &stored, case_id, binding, result, payload)?;
+    let command = result_workflow(
+        store,
+        &stored,
+        case_id,
+        workflow_policy,
+        binding,
+        result,
+        payload,
+    )?;
     LedgerController::apply(store, policy, &command)?;
     Ok(IngestResult::Applied {
         transition_count: 1,
@@ -136,11 +175,12 @@ fn result_workflow(
     store: &Store,
     stored: &StoredCase,
     case_id: CaseId,
+    workflow_policy: Option<&WorkflowPolicy>,
     binding: &WorkerBinding,
     result: &WorkerResult,
     payload: Value,
 ) -> Result<WorkflowCommand, IngestError> {
-    let mapped = map_event(store, stored, result)?;
+    let mapped = map_event(store, stored, workflow_policy, result)?;
     let findings = findings(result)?;
     let run = RunInput {
         run_id: format!("run-{}", binding.task_id),
@@ -196,6 +236,7 @@ fn mapped(
 fn map_event(
     store: &Store,
     case: &StoredCase,
+    workflow_policy: Option<&WorkflowPolicy>,
     result: &WorkerResult,
 ) -> Result<MappedEvent, IngestError> {
     match result {
@@ -230,7 +271,7 @@ fn map_event(
                 ReviewOutcome::Blocked => Event::Blocked,
                 ReviewOutcome::BlockedUnexpectedModel => Event::BlockedUnexpectedModel,
                 ReviewOutcome::Approve | ReviewOutcome::RequestChanges => {
-                    join_review(store, case, result)?
+                    join_review(store, case, workflow_policy, result)?
                 }
             };
             Ok(mapped(event, None, None, None))
@@ -263,6 +304,7 @@ fn map_event(
 fn join_review(
     store: &Store,
     case: &StoredCase,
+    workflow_policy: Option<&WorkflowPolicy>,
     current: &ReviewResult,
 ) -> Result<Event, IngestError> {
     let mut matching = Vec::new();
@@ -280,22 +322,56 @@ fn join_review(
     }
     if matching
         .iter()
-        .any(|prior| prior.common.role == current.common.role)
-        || matching.len() > 1
+        .any(|prior| prior.reviewer_id == current.reviewer_id)
     {
         return Err(IngestError::ConflictingReviews);
     }
-    let Some(previous) = matching.first() else {
-        return Ok(Event::ReviewRecorded);
+    matching.push(current.clone());
+    let required = if let Some(workflow_policy) = workflow_policy {
+        workflow_policy
+            .required_reviewers()
+            .map(|role| {
+                role.reviewer_id
+                    .as_deref()
+                    .ok_or(IngestError::InvalidBinding)
+            })
+            .collect::<Result<std::collections::BTreeSet<_>, _>>()?
+    } else {
+        let general = matching
+            .iter()
+            .find(|review| review.common.role == WorkerRole::ReviewerGeneral);
+        let secperf = matching
+            .iter()
+            .find(|review| review.common.role == WorkerRole::ReviewerSecperf);
+        let (Some(general), Some(secperf)) = (general, secperf) else {
+            return Ok(Event::ReviewRecorded);
+        };
+        [general.reviewer_id.as_str(), secperf.reviewer_id.as_str()]
+            .into_iter()
+            .collect()
     };
-    if !matches!(
-        previous.outcome,
-        ReviewOutcome::Approve | ReviewOutcome::RequestChanges
-    ) {
+    let observed = matching
+        .iter()
+        .map(|review| review.reviewer_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    if !required.is_subset(&observed) {
+        return Ok(Event::ReviewRecorded);
+    }
+    if observed
+        .iter()
+        .any(|reviewer_id| !required.contains(reviewer_id))
+        || matching.iter().any(|review| {
+            !matches!(
+                review.outcome,
+                ReviewOutcome::Approve | ReviewOutcome::RequestChanges
+            )
+        })
+    {
         return Err(IngestError::ConflictingReviews);
     }
-    if previous.outcome == ReviewOutcome::RequestChanges
-        || current.outcome == ReviewOutcome::RequestChanges
+    if matching
+        .iter()
+        .any(|review| review.outcome == ReviewOutcome::RequestChanges)
     {
         Ok(Event::RequestChanges)
     } else {
@@ -313,13 +389,43 @@ fn findings(result: &WorkerResult) -> Result<Vec<FindingInput>, IngestError> {
         .map(|finding| {
             Ok(FindingInput {
                 finding_id: finding.id.clone(),
-                origin_role: role_name(result.common.role).into(),
+                origin_role: result.reviewer_id.clone(),
                 reviewed_head_sha: result.reviewed_head_sha.clone(),
                 payload: serde_json::to_value(finding)
                     .map_err(|error| IngestError::Serialization(error.to_string()))?,
             })
         })
         .collect()
+}
+
+fn validate_review_policy_binding(
+    workflow_policy: &WorkflowPolicy,
+    binding: &WorkerBinding,
+) -> Result<(), IngestError> {
+    if !matches!(
+        binding.role,
+        WorkerRole::ReviewerGeneral | WorkerRole::ReviewerSecperf
+    ) {
+        return Ok(());
+    }
+    if binding.review_mode != Some(ReviewMode::Required) {
+        return Err(IngestError::InvalidBinding);
+    }
+    let configured = workflow_policy
+        .reviewer(
+            binding
+                .reviewer_id
+                .as_deref()
+                .ok_or(IngestError::InvalidBinding)?,
+        )
+        .map_err(|_| IngestError::InvalidBinding)?;
+    if configured.role != binding.role
+        || configured.review_mode != binding.review_mode
+        || format!("{}/{}", configured.provider, configured.model) != binding.requested_model
+    {
+        return Err(IngestError::InvalidBinding);
+    }
+    Ok(())
 }
 
 fn validate_case_binding(

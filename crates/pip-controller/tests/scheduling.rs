@@ -1,7 +1,7 @@
 use std::num::{NonZeroU32, NonZeroU64};
 use std::str::FromStr;
 
-use pip_contracts::WorkerRole;
+use pip_contracts::{ReviewMode, WorkerRole};
 use pip_controller::{
     DispatchContext, DispatchError, ExecutionKind, RolePolicy, WorkflowPolicy,
     schedule_claimed_dispatch, schedule_effect,
@@ -23,6 +23,8 @@ fn role(
 ) -> RolePolicy {
     RolePolicy {
         role,
+        reviewer_id: None,
+        review_mode: None,
         profile: profile.into(),
         execution,
         provider: provider.into(),
@@ -30,6 +32,32 @@ fn role(
         max_runtime: max_runtime.into(),
         priority: 10,
         skills: vec!["workflow-contract".into(), profile.into()],
+    }
+}
+
+fn reviewer(
+    reviewer_id: &str,
+    worker_role: WorkerRole,
+    profile: &str,
+    execution: ExecutionKind,
+    provider: &str,
+    model: &str,
+    mode: ReviewMode,
+) -> RolePolicy {
+    let mut configured = role(worker_role, profile, execution, provider, model, "30m");
+    configured.skills = vec![
+        "workflow-contract".into(),
+        match worker_role {
+            WorkerRole::ReviewerGeneral => "reviewer-general",
+            WorkerRole::ReviewerSecperf => "reviewer-secperf",
+            _ => panic!("reviewer role required"),
+        }
+        .into(),
+    ];
+    RolePolicy {
+        reviewer_id: Some(reviewer_id.into()),
+        review_mode: Some(mode),
+        ..configured
     }
 }
 
@@ -52,24 +80,35 @@ fn policy() -> WorkflowPolicy {
                 "builder-grok",
                 ExecutionKind::Direct,
                 "cursor",
-                "composer-2.5",
+                "cursor-grok-4.6-high-fast",
                 "60m",
             ),
-            role(
+            reviewer(
+                "general-sol",
                 WorkerRole::ReviewerGeneral,
                 "reviewer-general",
                 ExecutionKind::Hermes,
                 "openai-codex",
                 "gpt-5.6-sol",
-                "30m",
+                ReviewMode::Required,
             ),
-            role(
+            reviewer(
+                "secperf-kimi",
                 WorkerRole::ReviewerSecperf,
                 "reviewer-secperf",
                 ExecutionKind::Direct,
                 "cursor",
-                "claude-opus-4-8-thinking-high",
-                "30m",
+                "kimi-k3-max",
+                ReviewMode::Required,
+            ),
+            reviewer(
+                "secperf-opus",
+                WorkerRole::ReviewerSecperf,
+                "reviewer-secperf-opus",
+                ExecutionKind::Direct,
+                "cursor",
+                "claude-opus-5-thinking-high",
+                ReviewMode::Shadow,
             ),
             role(
                 WorkerRole::FinalReviewer,
@@ -153,7 +192,7 @@ fn planner_and_builder_dispatches_are_blocked_behind_controller_gates() {
     assert_eq!(direct.role, WorkerRole::Builder);
     assert_eq!(direct.task_id, builder[0].worker_projection_key);
     assert_eq!(direct.provider, "cursor");
-    assert_eq!(direct.model, "composer-2.5");
+    assert_eq!(direct.model, "cursor-grok-4.6-high-fast");
     assert_eq!(
         direct.workspace,
         "/var/lib/pip/worktrees/mdk/repo-984321-issue-1240-workflow-1"
@@ -169,13 +208,13 @@ fn planner_and_builder_dispatches_are_blocked_behind_controller_gates() {
     );
     assert_eq!(
         builder[0].worker_body["requested_model"],
-        "cursor/composer-2.5"
+        "cursor/cursor-grok-4.6-high-fast"
     );
     assert!(builder[0].worker_projection_key.contains("round:2"));
 }
 
 #[test]
-fn review_effect_expands_to_two_independent_same_head_dispatches() {
+fn review_effect_expands_policy_defined_instances_against_one_exact_head() {
     let dispatches = schedule_effect(
         "effect-reviews-r3",
         Effect::DispatchReviewers,
@@ -183,10 +222,23 @@ fn review_effect_expands_to_two_independent_same_head_dispatches() {
         &policy(),
     )
     .unwrap();
-    assert_eq!(dispatches.len(), 2);
+    assert_eq!(dispatches.len(), 3);
     assert_eq!(dispatches[0].role, WorkerRole::ReviewerGeneral);
     assert_eq!(dispatches[1].role, WorkerRole::ReviewerSecperf);
-    assert_ne!(dispatches[0].gate.effect_id, dispatches[1].gate.effect_id);
+    assert_eq!(dispatches[0].worker_body["reviewer_id"], "general-sol");
+    assert_eq!(dispatches[0].worker_body["review_mode"], "required");
+    assert_eq!(dispatches[1].worker_body["reviewer_id"], "secperf-kimi");
+    assert_eq!(dispatches[1].worker_body["review_mode"], "required");
+    assert_eq!(dispatches[2].worker_body["reviewer_id"], "secperf-opus");
+    assert_eq!(dispatches[2].worker_body["review_mode"], "shadow");
+    assert!(
+        dispatches
+            .iter()
+            .map(|dispatch| &dispatch.gate.effect_id)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            == 3
+    );
     for dispatch in dispatches {
         assert_eq!(dispatch.worker_body["pr_number"], 77);
         assert_eq!(dispatch.worker_body["expected_head_sha"], "b".repeat(40));
@@ -196,10 +248,9 @@ fn review_effect_expands_to_two_independent_same_head_dispatches() {
                 assert!(dispatch.bind_gate("gate-1").unwrap().parent_task_ids == ["gate-1"]);
             }
             ExecutionKind::Direct => {
-                assert_eq!(
-                    dispatch.direct_task().unwrap().role,
-                    WorkerRole::ReviewerSecperf
-                );
+                let direct = dispatch.direct_task().unwrap();
+                assert_eq!(direct.role, WorkerRole::ReviewerSecperf);
+                assert!(direct.task_id.contains("secperf-"));
             }
         }
     }
@@ -259,6 +310,27 @@ fn role_policy_rejects_duplicates_missing_skills_and_model_fallbacks() {
 
     let mut roles = policy().roles().to_vec();
     roles.push(roles[0].clone());
+    assert!(matches!(
+        WorkflowPolicy::new("pip-mdk", "/var/lib/pip/worktrees/mdk", "pip/", roles),
+        Err(DispatchError::InvalidPolicy)
+    ));
+
+    let mut roles = policy().roles().to_vec();
+    roles[4].reviewer_id = Some("secperf-kimi".into());
+    assert!(matches!(
+        WorkflowPolicy::new("pip-mdk", "/var/lib/pip/worktrees/mdk", "pip/", roles),
+        Err(DispatchError::InvalidPolicy)
+    ));
+
+    let roles = policy()
+        .roles()
+        .iter()
+        .filter(|role| {
+            role.role != WorkerRole::ReviewerGeneral
+                || role.review_mode != Some(ReviewMode::Required)
+        })
+        .cloned()
+        .collect();
     assert!(matches!(
         WorkflowPolicy::new("pip-mdk", "/var/lib/pip/worktrees/mdk", "pip/", roles),
         Err(DispatchError::InvalidPolicy)
@@ -368,9 +440,10 @@ fn claimed_outbox_dispatch_is_bound_to_the_current_case_revision() {
     let dispatches =
         schedule_claimed_dispatch(&claimed, &stored_case, &store, &policy(), skills_commit)
             .unwrap();
-    assert_eq!(dispatches.len(), 2);
+    assert_eq!(dispatches.len(), 3);
     assert_eq!(dispatches[0].role, WorkerRole::ReviewerGeneral);
     assert_eq!(dispatches[1].role, WorkerRole::ReviewerSecperf);
+    assert_eq!(dispatches[2].role, WorkerRole::ReviewerSecperf);
 
     let mut invented_case = stored_case.clone();
     invented_case.state_revision = 3;

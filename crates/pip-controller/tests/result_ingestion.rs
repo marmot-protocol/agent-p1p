@@ -1,9 +1,10 @@
 use std::num::{NonZeroU32, NonZeroU64};
 use std::str::FromStr;
 
-use pip_contracts::{WorkerBinding, WorkerResult};
+use pip_contracts::{ReviewMode, WorkerBinding, WorkerResult};
 use pip_controller::{
-    IngestError, IngestResult, LedgerController, WorkflowCommand, ingest_worker_result,
+    ExecutionKind, IngestError, IngestResult, LedgerController, RolePolicy, WorkflowCommand,
+    WorkflowPolicy, ingest_worker_result, ingest_worker_result_with_policy,
 };
 use pip_core::{
     CaseId, CasePolicy, CaseState, Event, EventId, GitSha, IssueNumber, MergeMode, ObservedAt,
@@ -86,6 +87,43 @@ fn binding_mismatch_fails_without_ledger_mutation() {
     assert_eq!(store.run_count().unwrap(), 0);
     assert_eq!(store.event_count().unwrap(), 1);
     assert_eq!(case(&store).state, "PLANNING");
+}
+
+#[test]
+fn policy_defined_required_reviewers_all_join_by_instance_id() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    create_case(&mut store);
+    let results = results();
+    ingest_worker_result(&mut store, &policy(), &binding(&results[0]), &results[0]).unwrap();
+    publish_plan(&mut store, &results[0]);
+    ingest_worker_result(&mut store, &policy(), &binding(&results[1]), &results[1]).unwrap();
+    publish_build(&mut store, &results[1]);
+    accept_ci(&mut store);
+
+    let mut opus = serde_json::to_value(&results[3]).unwrap();
+    opus["task_id"] = json!("review-secperf-opus-1");
+    opus["reviewer_id"] = json!("secperf-opus");
+    opus["requested_model"] = json!("cursor/claude-opus-5-thinking-high");
+    opus["actual_model"] = json!("cursor/claude-opus-5-thinking-high");
+    let opus: WorkerResult = serde_json::from_value(opus).unwrap();
+    let workflow = three_required_reviewer_policy();
+
+    for result in [&results[2], &results[3]] {
+        ingest_worker_result_with_policy(
+            &mut store,
+            &policy(),
+            &workflow,
+            &binding(result),
+            result,
+        )
+        .unwrap();
+        assert_eq!(case(&store).state, "REVIEWING");
+    }
+    ingest_worker_result_with_policy(&mut store, &policy(), &workflow, &binding(&opus), &opus)
+        .unwrap();
+    assert_eq!(case(&store).state, "FINAL_REVIEW");
+    assert_eq!(store.run_count().unwrap(), 5);
 }
 
 #[test]
@@ -184,6 +222,14 @@ fn binding(result: &WorkerResult) -> WorkerBinding {
         case: common.case.clone(),
         task_id: common.task_id.clone(),
         role: common.role,
+        reviewer_id: match result {
+            WorkerResult::Review(result) => Some(result.reviewer_id.clone()),
+            _ => None,
+        },
+        review_mode: match result {
+            WorkerResult::Review(_) => Some(ReviewMode::Required),
+            _ => None,
+        },
         requested_model: common.requested_model.clone(),
         skills_repository_commit: common.skills_repository_commit.clone(),
         plan_version,
@@ -392,4 +438,94 @@ fn policy() -> CasePolicy {
         merge_mode: MergeMode::Shadow,
         max_remediation_rounds: NonZeroU32::new(3).unwrap(),
     }
+}
+
+fn three_required_reviewer_policy() -> WorkflowPolicy {
+    let role = |role, profile: &str, execution, provider: &str, model: &str| RolePolicy {
+        role,
+        reviewer_id: None,
+        review_mode: None,
+        profile: profile.into(),
+        execution,
+        provider: provider.into(),
+        model: model.into(),
+        max_runtime: "30m".into(),
+        priority: 1,
+        skills: vec![
+            match role {
+                pip_contracts::WorkerRole::Planner => "planner",
+                pip_contracts::WorkerRole::Builder => "builder-grok",
+                pip_contracts::WorkerRole::ReviewerGeneral => "reviewer-general",
+                pip_contracts::WorkerRole::ReviewerSecperf => "reviewer-secperf",
+                pip_contracts::WorkerRole::FinalReviewer => "final-reviewer",
+            }
+            .into(),
+            "workflow-contract".into(),
+        ],
+    };
+    let reviewer = |semantic_role,
+                    reviewer_id: &str,
+                    profile: &str,
+                    execution,
+                    provider: &str,
+                    model: &str| {
+        RolePolicy {
+            reviewer_id: Some(reviewer_id.into()),
+            review_mode: Some(ReviewMode::Required),
+            ..role(semantic_role, profile, execution, provider, model)
+        }
+    };
+    WorkflowPolicy::new(
+        "pip-mdk",
+        "/var/lib/pip/worktrees",
+        "pip/",
+        vec![
+            role(
+                pip_contracts::WorkerRole::Planner,
+                "planner",
+                ExecutionKind::Hermes,
+                "openai-codex",
+                "gpt-5.6-sol",
+            ),
+            role(
+                pip_contracts::WorkerRole::Builder,
+                "builder-grok",
+                ExecutionKind::Direct,
+                "cursor",
+                "cursor-grok-4.6-high-fast",
+            ),
+            reviewer(
+                pip_contracts::WorkerRole::ReviewerGeneral,
+                "general-sol",
+                "reviewer-general",
+                ExecutionKind::Hermes,
+                "openai-codex",
+                "gpt-5.6-sol",
+            ),
+            reviewer(
+                pip_contracts::WorkerRole::ReviewerSecperf,
+                "secperf-kimi",
+                "reviewer-secperf-kimi",
+                ExecutionKind::Direct,
+                "cursor",
+                "kimi-k3-max",
+            ),
+            reviewer(
+                pip_contracts::WorkerRole::ReviewerSecperf,
+                "secperf-opus",
+                "reviewer-secperf-opus",
+                ExecutionKind::Direct,
+                "cursor",
+                "claude-opus-5-thinking-high",
+            ),
+            role(
+                pip_contracts::WorkerRole::FinalReviewer,
+                "final-reviewer",
+                ExecutionKind::Hermes,
+                "openai-codex",
+                "gpt-5.6-sol",
+            ),
+        ],
+    )
+    .unwrap()
 }

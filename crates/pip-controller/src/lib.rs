@@ -7,7 +7,9 @@ mod results;
 mod scheduling;
 
 pub use ledger::{ControllerError, LedgerController, WorkflowCommand};
-pub use results::{IngestError, IngestResult, ingest_worker_result};
+pub use results::{
+    IngestError, IngestResult, ingest_worker_result, ingest_worker_result_with_policy,
+};
 
 pub use scheduling::{
     DirectTaskSpec, DispatchContext, DispatchError, ExecutionKind, RolePolicy, WorkflowDispatch,

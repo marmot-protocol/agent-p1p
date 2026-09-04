@@ -37,8 +37,8 @@ The manifest binds:
   "rust_toolchain": "...",
   "binary_sha256": "64 lowercase hex",
   "resources_sha256": "64 lowercase hex",
-  "workflow_version": 2,
-  "contract_version": 1,
+  "workflow_version": 3,
+  "contract_version": 2,
   "built_at": "RFC3339 timestamp",
   "builder_identity": "..."
 }

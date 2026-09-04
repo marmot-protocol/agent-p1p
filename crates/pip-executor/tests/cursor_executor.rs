@@ -7,7 +7,7 @@ use std::time::Duration;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-use pip_contracts::{CaseIdentity, WorkerBinding, WorkerResult, WorkerRole};
+use pip_contracts::{CaseIdentity, ReviewMode, WorkerBinding, WorkerResult, WorkerRole};
 use pip_executor::{
     CursorExecutionError, CursorExecutor, CursorTask, HealthAssurance, ProcessError, ProcessOutput,
     ProcessRunner, ProcessSpec, ProviderHealth,
@@ -79,6 +79,14 @@ fn task(role: WorkerRole, model: &str, index: usize) -> CursorTask {
             },
             task_id: value["task_id"].as_str().unwrap().into(),
             role,
+            reviewer_id: value
+                .get("reviewer_id")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            review_mode: value
+                .get("reviewer_id")
+                .is_some()
+                .then_some(ReviewMode::Required),
             requested_model: format!("cursor/{model}"),
             skills_repository_commit: "a".repeat(40),
             plan_version: 1,

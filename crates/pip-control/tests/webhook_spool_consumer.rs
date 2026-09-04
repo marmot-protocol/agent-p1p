@@ -87,7 +87,7 @@ fn signed_spool_item_is_committed_before_it_is_marked_processed() {
         Some("01234567-89ab-cdef-0123-456789abcdef")
     );
     assert_eq!(result.intake.unwrap().delivery, "APPLIED");
-    assert!(store.case("repo:1055628515#42@2").unwrap().is_some());
+    assert!(store.case("repo:1055628515#42@3").unwrap().is_some());
     assert_eq!(store.status(101).unwrap().webhook_deliveries, 1);
     assert!(
         !spool_root

@@ -862,8 +862,8 @@ fn seal(arguments: &[String]) -> Result<Value, CliError> {
             rust_toolchain: required(&options, "--rust-toolchain")?.into(),
             built_at: required(&options, "--built-at")?.into(),
             builder_identity: required(&options, "--builder-identity")?.into(),
-            workflow_version: 2,
-            contract_version: 1,
+            workflow_version: 3,
+            contract_version: 2,
         },
     )?;
     let manifest_bytes =

@@ -288,6 +288,8 @@ fn binding(result: &WorkerResult) -> WorkerBinding {
         case: common.case.clone(),
         task_id: common.task_id.clone(),
         role: common.role,
+        reviewer_id: None,
+        review_mode: None,
         requested_model: common.requested_model.clone(),
         skills_repository_commit: common.skills_repository_commit.clone(),
         plan_version,

@@ -227,9 +227,23 @@ fn dispatch_once_inner<R: CommandRunner + Clone>(
                 })?;
             let payload = serde_json::to_value(&task)
                 .map_err(|error| DispatchCycleError::Serialization(error.to_string()))?;
+            let worker_id = task
+                .body
+                .get("reviewer_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(role);
+            let observer = task
+                .body
+                .get("review_mode")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|mode| matches!(mode, "advisory" | "shadow"));
             direct_jobs.push(EffectInput {
-                effect_id: format!("{}:direct:{role}", claimed.effect_id),
-                effect_type: "RUN_DIRECT_WORKER".into(),
+                effect_id: format!("{}:direct:{worker_id}", claimed.effect_id),
+                effect_type: if observer {
+                    "RUN_DIRECT_OBSERVER".into()
+                } else {
+                    "RUN_DIRECT_WORKER".into()
+                },
                 payload,
             });
             continue;

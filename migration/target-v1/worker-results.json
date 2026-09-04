@@ -2,7 +2,7 @@
   "fixture_format": 1,
   "results": [
     {
-      "contract_version": 1,
+      "contract_version": 2,
       "workflow_version": 1,
       "case": {"repository_id": 984321, "issue_number": 1240, "workflow_version": 1},
       "task_id": "planner-1",
@@ -24,7 +24,7 @@
       "plan_artifact": "artifacts/plan-1.json"
     },
     {
-      "contract_version": 1,
+      "contract_version": 2,
       "workflow_version": 1,
       "case": {"repository_id": 984321, "issue_number": 1240, "workflow_version": 1},
       "task_id": "builder-1",
@@ -43,10 +43,11 @@
       "finding_resolutions": []
     },
     {
-      "contract_version": 1,
+      "contract_version": 2,
       "workflow_version": 1,
       "case": {"repository_id": 984321, "issue_number": 1240, "workflow_version": 1},
       "task_id": "review-general-1",
+      "reviewer_id": "general-sol",
       "role": "reviewer-general",
       "outcome": "APPROVE",
       "requested_model": "openai-codex/gpt-5.6-sol",
@@ -64,14 +65,15 @@
       "finding_confirmations": []
     },
     {
-      "contract_version": 1,
+      "contract_version": 2,
       "workflow_version": 1,
       "case": {"repository_id": 984321, "issue_number": 1240, "workflow_version": 1},
       "task_id": "review-secperf-1",
+      "reviewer_id": "secperf-kimi",
       "role": "reviewer-secperf",
       "outcome": "APPROVE",
-      "requested_model": "cursor/claude-opus-4-8-thinking-high",
-      "actual_model": "cursor/claude-opus-4-8-thinking-high",
+      "requested_model": "cursor/kimi-k3-max",
+      "actual_model": "cursor/kimi-k3-max",
       "skills_repository_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "started_at_unix": 1787001201,
       "completed_at_unix": 1787001800,
@@ -85,7 +87,7 @@
       "finding_confirmations": []
     },
     {
-      "contract_version": 1,
+      "contract_version": 2,
       "workflow_version": 1,
       "case": {"repository_id": 984321, "issue_number": 1240, "workflow_version": 1},
       "task_id": "final-1",

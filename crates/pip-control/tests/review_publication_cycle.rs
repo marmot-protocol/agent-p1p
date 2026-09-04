@@ -140,6 +140,45 @@ fn reviewer_credential_outage_releases_the_effect_without_partial_ledger_evidenc
     assert_eq!(store.evidence_count().unwrap(), 0);
 }
 
+#[test]
+fn multiple_required_instances_in_one_lane_publish_one_aggregate_lane_verdict() {
+    let directory = tempfile::tempdir().unwrap();
+    let policy = policy_with_required_opus();
+    let mut store = review_store_with_policy(directory.path().join("ledger.db"), &policy);
+    let general = FixtureWriter::default();
+    let secperf = FixtureWriter::default();
+
+    publish_reviews_once(
+        &general,
+        &secperf,
+        &policy,
+        &mut store,
+        100,
+        "review-publisher",
+        30,
+        true,
+    )
+    .unwrap();
+    assert_eq!(general.reviews.borrow().len(), 1);
+    assert_eq!(secperf.reviews.borrow().len(), 1);
+    let published = &secperf.reviews.borrow()[0];
+    assert_eq!(published.event, ReviewEvent::Approve);
+    assert!(published.body.contains("secperf-kimi"));
+    assert!(published.body.contains("secperf-opus"));
+    let history = store
+        .immutable_history_for_case("repo:984321#1240@1")
+        .unwrap();
+    let publication = history
+        .evidence
+        .iter()
+        .find(|evidence| evidence.kind == "GITHUB_REVIEW_PUBLICATION")
+        .unwrap();
+    assert_eq!(
+        publication.payload["secperf"]["reviewer_ids"],
+        json!(["secperf-kimi", "secperf-opus"])
+    );
+}
+
 fn review_store(path: std::path::PathBuf, request_changes: bool) -> Store {
     let mut store = Store::open(path).unwrap();
     store
@@ -238,6 +277,54 @@ fn fixture_reviews() -> Vec<Value> {
     ))
     .unwrap();
     fixture["results"].as_array().unwrap()[2..4].to_vec()
+}
+
+fn policy_with_required_opus() -> pip_control::RepositoryPolicy {
+    let mut value = serde_json::to_value(active_policy()).unwrap();
+    value["roles"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|role| role["reviewer_id"] == "secperf-opus")
+        .unwrap()["review_mode"] = json!("required");
+    load_repository_policy(&serde_json::to_vec(&value).unwrap()).unwrap()
+}
+
+fn review_store_with_policy(
+    path: std::path::PathBuf,
+    policy: &pip_control::RepositoryPolicy,
+) -> Store {
+    let mut store = review_store(path, false);
+    let mut opus = fixture_reviews()[1].clone();
+    opus["task_id"] = json!("review-secperf-opus-1");
+    opus["reviewer_id"] = json!("secperf-opus");
+    opus["requested_model"] = json!("cursor/claude-opus-5-thinking-high");
+    opus["actual_model"] = json!("cursor/claude-opus-5-thinking-high");
+    let current = store.case("repo:984321#1240@1").unwrap().unwrap();
+    store
+        .apply_transition(
+            &review_transition(
+                current.state_revision,
+                "FINAL_REVIEW",
+                &opus,
+                vec![EffectInput {
+                    effect_id: "effect-publish-reviews-required-opus".into(),
+                    effect_type: "PUBLISH_REVIEWS".into(),
+                    payload: json!({"case_key":"repo:984321#1240@1"}),
+                }],
+            ),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        store
+            .case("repo:984321#1240@1")
+            .unwrap()
+            .unwrap()
+            .policy_revision,
+        policy.revision
+    );
+    store
 }
 
 fn active_policy() -> pip_control::RepositoryPolicy {
