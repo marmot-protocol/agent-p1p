@@ -8,6 +8,7 @@ use crate::{ActorId, PolicyRevision};
 pub struct IntakePolicy {
     pub revision: PolicyRevision,
     pub intake_enabled: bool,
+    pub dispatch_enabled: bool,
     pub global_paused: bool,
     pub repository_paused: bool,
     pub required_label: String,
@@ -34,6 +35,7 @@ pub enum IntakeBlocker {
     IntakeDisabled,
     GlobalPaused,
     RepositoryPaused,
+    DispatchDisabled,
     IssueClosed,
     PullRequest,
     RequiredLabelMissing,
@@ -46,10 +48,11 @@ pub enum IntakeBlocker {
 }
 
 impl IntakeBlocker {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::IntakeDisabled,
         Self::GlobalPaused,
         Self::RepositoryPaused,
+        Self::DispatchDisabled,
         Self::IssueClosed,
         Self::PullRequest,
         Self::RequiredLabelMissing,
@@ -68,6 +71,7 @@ impl fmt::Display for IntakeBlocker {
             Self::IntakeDisabled => "INTAKE_DISABLED",
             Self::GlobalPaused => "GLOBAL_PAUSED",
             Self::RepositoryPaused => "REPOSITORY_PAUSED",
+            Self::DispatchDisabled => "DISPATCH_DISABLED",
             Self::IssueClosed => "ISSUE_CLOSED",
             Self::PullRequest => "PULL_REQUEST",
             Self::RequiredLabelMissing => "REQUIRED_LABEL_MISSING",
@@ -99,6 +103,7 @@ pub fn evaluate_intake(policy: &IntakePolicy, observation: &IssueObservation) ->
     block_if(!policy.intake_enabled, IntakeBlocker::IntakeDisabled);
     block_if(policy.global_paused, IntakeBlocker::GlobalPaused);
     block_if(policy.repository_paused, IntakeBlocker::RepositoryPaused);
+    block_if(!policy.dispatch_enabled, IntakeBlocker::DispatchDisabled);
     block_if(!observation.open, IntakeBlocker::IssueClosed);
     block_if(observation.is_pull_request, IntakeBlocker::PullRequest);
     let label_present = observation.labels.contains(&policy.required_label);

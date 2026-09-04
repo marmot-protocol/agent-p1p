@@ -115,6 +115,128 @@ fn signed_spool_item_is_committed_before_it_is_marked_processed() {
 }
 
 #[test]
+fn paused_intake_commits_the_delivery_without_creating_or_dispatching_a_case() {
+    let directory = tempfile::tempdir().unwrap();
+    let spool_root = directory.path().join("spool");
+    prepare_spool(&spool_root);
+    let spool = WebhookSpool::open(&spool_root).unwrap();
+    let payload = webhook_payload(42);
+    let signature = signature(b"webhook-secret", &payload);
+    let delivery_id = "02234567-89ab-cdef-0123-456789abcdef";
+    spool
+        .store(
+            WebhookSpoolInput {
+                delivery_id,
+                event_name: "issues",
+                signature: &signature,
+                payload: &payload,
+                received_at: 100,
+            },
+            b"webhook-secret",
+        )
+        .unwrap();
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+
+    let result = consume_webhook_spool_once(
+        &source(false),
+        &inactive_policy(),
+        &mut store,
+        &spool,
+        b"webhook-secret",
+        101,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(result.result, "PROCESSED");
+    let intake = result.intake.unwrap();
+    assert_eq!(intake.delivery, "APPLIED");
+    let candidate = intake.candidate.unwrap();
+    assert_eq!(candidate.decision, "INELIGIBLE");
+    assert_eq!(
+        candidate.blockers,
+        ["INTAKE_DISABLED", "REPOSITORY_PAUSED", "DISPATCH_DISABLED"]
+    );
+    let status = store.status(101).unwrap();
+    assert_eq!(status.webhook_deliveries, 1);
+    assert!(status.cases.is_empty());
+    assert_eq!(status.outbox_total, 0);
+    assert!(
+        !spool_root
+            .join(format!("pending/{delivery_id}.json"))
+            .exists()
+    );
+    assert!(
+        spool_root
+            .join(format!("processed/{delivery_id}.json"))
+            .is_file()
+    );
+}
+
+#[test]
+fn unrelated_signed_issue_action_is_committed_without_a_live_issue_read() {
+    let directory = tempfile::tempdir().unwrap();
+    let spool_root = directory.path().join("spool");
+    prepare_spool(&spool_root);
+    let spool = WebhookSpool::open(&spool_root).unwrap();
+    let payload = serde_json::to_vec(&serde_json::json!({
+        "action": "closed",
+        "repository": {
+            "id": 1055628515_u64,
+            "full_name": "marmot-protocol/mdk"
+        },
+        "issue": {"id": 542, "number": 42},
+        "sender": {"id": 202880}
+    }))
+    .unwrap();
+    let signature = signature(b"webhook-secret", &payload);
+    let delivery_id = "03234567-89ab-cdef-0123-456789abcdef";
+    spool
+        .store(
+            WebhookSpoolInput {
+                delivery_id,
+                event_name: "issues",
+                signature: &signature,
+                payload: &payload,
+                received_at: 100,
+            },
+            b"webhook-secret",
+        )
+        .unwrap();
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+
+    let result = consume_webhook_spool_once(
+        &source(true),
+        &inactive_policy(),
+        &mut store,
+        &spool,
+        b"webhook-secret",
+        101,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(result.result, "PROCESSED");
+    let intake = result.intake.unwrap();
+    assert_eq!(intake.delivery, "APPLIED");
+    assert!(intake.candidate.is_none());
+    let status = store.status(101).unwrap();
+    assert_eq!(status.webhook_deliveries, 1);
+    assert!(status.cases.is_empty());
+    assert_eq!(status.outbox_total, 0);
+    assert!(
+        !spool_root
+            .join(format!("pending/{delivery_id}.json"))
+            .exists()
+    );
+    assert!(
+        spool_root
+            .join(format!("processed/{delivery_id}.json"))
+            .is_file()
+    );
+}
+
+#[test]
 fn live_github_failure_leaves_the_item_pending_for_a_replay_safe_retry() {
     let directory = tempfile::tempdir().unwrap();
     let spool_root = directory.path().join("spool");
@@ -232,6 +354,17 @@ fn active_policy() -> RepositoryPolicy {
     policy.intake.enabled = true;
     policy.intake.paused = false;
     policy.dispatch_enabled = true;
+    policy.github.automation_actor_id = Some(202_880);
+    policy.intake.trusted_actor_ids = vec![202_880];
+    policy.intake.excluded_issue_numbers.clear();
+    policy
+}
+
+fn inactive_policy() -> RepositoryPolicy {
+    let mut policy = load_repository_policy(include_bytes!(
+        "../../../config/target/repositories/mdk.json"
+    ))
+    .unwrap();
     policy.github.automation_actor_id = Some(202_880);
     policy.intake.trusted_actor_ids = vec![202_880];
     policy.intake.excluded_issue_numbers.clear();

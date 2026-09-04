@@ -32,6 +32,7 @@ struct Input {
 struct PolicyDto {
     revision: u64,
     intake_enabled: bool,
+    dispatch_enabled: bool,
     global_paused: bool,
     repository_paused: bool,
     required_label: String,
@@ -63,6 +64,7 @@ fn evaluate(value: Value) -> IntakeDecision {
     let policy = IntakePolicy {
         revision: PolicyRevision::new(NonZeroU64::new(input.policy.revision).unwrap()),
         intake_enabled: input.policy.intake_enabled,
+        dispatch_enabled: input.policy.dispatch_enabled,
         global_paused: input.policy.global_paused,
         repository_paused: input.policy.repository_paused,
         required_label: input.policy.required_label,

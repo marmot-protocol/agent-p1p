@@ -175,22 +175,35 @@ recovers missed deliveries. Delivery IDs and canonical event fingerprints are
 idempotency keys.
 
 The Rust `webhook-intake` boundary accepts the raw payload plus the three GitHub
-delivery headers, verifies HMAC before ledger mutation, records the immutable
-delivery identity and payload digest, and re-reads the named issue from GitHub
-before applying eligibility. The public TLS endpoint or trusted webhook relay
-is host infrastructure and must preserve those values byte-for-byte.
+delivery headers, verifies HMAC and repository identity before ledger mutation,
+and records the immutable delivery identity and payload digest. A configured
+label event then causes an exact re-read of the named issue from GitHub before
+eligibility is applied. Authenticated `issues` actions unrelated to the
+configured intake label are recorded and terminally ignored without a live
+issue read, so normal issue activity cannot poison the head of the bounded
+spool. The public TLS endpoint or trusted webhook relay is host infrastructure
+and must preserve the body and headers byte-for-byte.
 
 The host boundary uses two identities. A dedicated `pip-ingress` service has
 the webhook secret but no GitHub token, ledger, repository, Hermes, provider,
 or worker access. It binds only to loopback, validates the request, and writes a
 delivery-ID-addressed durable spool. A separate `pip-control` cycle reads one
 pending envelope at a time, revalidates its canonical encoding, payload digest,
-HMAC, and live GitHub evidence, commits the ledger transaction, and only then
-marks the spool item processed. A crash or GitHub outage before completion
-leaves the item pending; replay is resolved by the immutable delivery record.
+and HMAC, and revalidates live GitHub evidence for a configured label event. It
+commits the ledger transaction and only then marks the spool item processed. A
+crash or GitHub outage before completion leaves the item pending; replay is
+resolved by the immutable delivery record.
 GitHub's signed `ping` lifecycle event is authenticated at the same HTTP
 boundary and answered without creating a receipt or workflow input. All other
 non-`issues` events fail closed.
+
+A relevant label delivery may be verified and committed while intake or
+dispatch is paused, but its eligibility result must contain the applicable
+`INTAKE_DISABLED`, `GLOBAL_PAUSED`, `REPOSITORY_PAUSED`, or
+`DISPATCH_DISABLED` blockers and must not create a case or outbox effect. The
+polling reconciler remains read- and write-inert until all activation controls
+permit intake. This distinction allows operators to prove the webhook boundary
+without granting workflow activation authority.
 
 An issue becomes eligible only when:
 
@@ -198,7 +211,8 @@ An issue becomes eligible only when:
 - the configured label is currently present;
 - the latest relevant label event came from a trusted numeric GitHub actor;
 - it is not excluded, held, duplicated, or already owned by another workflow;
-- repository intake is enabled and global/repository pause is clear; and
+- repository intake is enabled and global/repository pause is clear;
+- dispatch is enabled;
 - repository and global active-case limits allow it.
 
 The controller creates the case before it dispatches a planner. Losing

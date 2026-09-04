@@ -138,6 +138,7 @@ impl RepositoryPolicy {
                 NonZeroU64::new(self.revision).expect("validated policy"),
             ),
             intake_enabled: self.intake.enabled,
+            dispatch_enabled: self.dispatch_enabled,
             global_paused,
             repository_paused: self.intake.paused,
             required_label: self.intake.label.clone(),

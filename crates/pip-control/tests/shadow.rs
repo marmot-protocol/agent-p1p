@@ -70,7 +70,7 @@ fn paused_shadow_reconciliation_is_deterministic_and_never_mutates() {
     assert_eq!(first.candidates[0].decision, "INELIGIBLE");
     assert_eq!(
         first.candidates[0].blockers,
-        ["INTAKE_DISABLED", "REPOSITORY_PAUSED"]
+        ["INTAKE_DISABLED", "REPOSITORY_PAUSED", "DISPATCH_DISABLED"]
     );
 }
 

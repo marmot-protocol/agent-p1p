@@ -213,6 +213,20 @@ fn webhook_fails_closed_before_recording_or_fetching_on_bad_signature_or_reposit
             let signature = signature(b"webhook-secret", &payload);
             (payload, signature)
         },
+        {
+            let payload = serde_json::to_vec(&serde_json::json!({
+                "action": "labeled",
+                "repository": {
+                    "id": 1_055_628_515_u64,
+                    "full_name": "marmot-protocol/mdk"
+                },
+                "issue": {"id": 542, "number": 42},
+                "sender": {"id": 202_880}
+            }))
+            .unwrap();
+            let signature = signature(b"webhook-secret", &payload);
+            (payload, signature)
+        },
     ] {
         let directory = tempdir().unwrap();
         let mut store = Store::open(directory.path().join("cases.db")).unwrap();

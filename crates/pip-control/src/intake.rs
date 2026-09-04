@@ -149,9 +149,6 @@ pub fn ingest_webhook<S: IntakeSource>(
     observed_at: u64,
     global_paused: bool,
 ) -> Result<WebhookIntakeReport, ActiveIntakeError> {
-    if !policy.intake.enabled || policy.intake.paused || !policy.dispatch_enabled || global_paused {
-        return Err(ActiveIntakeError::ActivationDisabled);
-    }
     if secret.is_empty() || secret.len() > 1024 {
         return Err(ActiveIntakeError::InvalidWebhook("invalid secret"));
     }
@@ -174,14 +171,24 @@ pub fn ingest_webhook<S: IntakeSource>(
         || payload.repository.full_name != policy.repository.full_name()
         || payload.issue.id == 0
         || payload.issue.number == 0
-        || payload.action != "labeled"
-        || payload.label.name != policy.intake.label
+        || payload.action.is_empty()
         || payload.sender.id == 0
     {
         return Err(ActiveIntakeError::InvalidWebhook(
             "event is not an eligible repository label event",
         ));
     }
+    let relevant_label = if payload.action == "labeled" {
+        let label = payload
+            .label
+            .as_ref()
+            .ok_or(ActiveIntakeError::InvalidWebhook(
+                "labeled event is missing its label",
+            ))?;
+        label.name == policy.intake.label
+    } else {
+        false
+    };
     let digest = Sha256::digest(envelope.payload)
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -194,6 +201,22 @@ pub fn ingest_webhook<S: IntakeSource>(
         received_at: envelope.received_at,
         payload_sha256: digest,
     })?;
+    if !relevant_label {
+        return Ok(WebhookIntakeReport {
+            report_format: 1,
+            observed_at,
+            repository_id: policy.repository.id,
+            repository: policy.repository.full_name(),
+            delivery_id: envelope.delivery_id.into(),
+            delivery: match delivery {
+                ApplyResult::Applied => "APPLIED",
+                ApplyResult::Replayed => "REPLAYED",
+            }
+            .into(),
+            mutation_count: u64::from(delivery == ApplyResult::Applied),
+            candidate: None,
+        });
+    }
     let evidence = source
         .intake(
             &policy.repository.owner,
@@ -241,7 +264,7 @@ struct IssuesWebhook {
     action: String,
     repository: WebhookRepository,
     issue: WebhookIssue,
-    label: WebhookLabel,
+    label: Option<WebhookLabel>,
     sender: WebhookSender,
 }
 
