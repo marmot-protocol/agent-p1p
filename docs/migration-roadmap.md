@@ -187,13 +187,14 @@ Exit gate:
 
 ## Phase 8: Parity and non-dispatching live shadow
 
-**Implementation status:** Frozen transition and worker-contract parity is
-exhaustive, repeated live GitHub reconciliation is stable with zero mutations,
-and local adapter tests cover Hermes outage/recovery plus direct and Hermes
-circuit breakers. Pirate now has the pinned Hermes installation, service-owned
-root, canonical MDK checkout, and successful inert runtime bootstrap.
-Separately supervised gateway observation and live provider capability plus
-outage/recovery evidence remain open exit-gate items.
+**Implementation status:** Complete. Frozen transition and worker-contract
+parity is exhaustive, repeated live GitHub reconciliation is stable with zero
+mutations, and local adapter tests cover Hermes outage/recovery plus direct and
+Hermes circuit breakers. Pirate has the pinned Hermes installation,
+service-owned root, canonical MDK checkout, successful inert runtime bootstrap,
+live exact-model capability evidence, a process-scoped direct-provider
+outage/recovery drill, and an empty-board separately supervised gateway
+observation. Phase 9 activation remains separately authorized.
 
 Deliverables:
 

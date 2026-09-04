@@ -37,7 +37,7 @@ a completed canary.
 | Runtime isolation | Hermes workers see Hermes state plus read-only worktrees but not the ledger, direct artifacts, or provider home; direct workers use `pip-worker`, see immutable inbox/worktrees/artifacts/provider state, and cannot open the ledger, Hermes state, repository cache, or credentials | Unit-file contracts, queue convergence tests, and disposable-systemd identity/directory lifecycle |
 | Guarded merge | An explicitly guarded/autonomous policy selects the merge method; the controller revalidates the complete final gate, marks the draft ready, revalidates, emits a separate merge effect, merges with expected-head protection, and verifies the recorded merge commit | Restart-convergence, shadow-disablement, state-machine, GraphQL, and mutation tests |
 | Human disposition | `HOLD_FOR_HUMAN`, `ESCALATE`, and shadow-ready effects publish idempotent provenance-marked issue or draft-PR comments; local completion, block, abandonment, and takeover effects commit evidence without writing after lost authorization | Mutation fixtures and transactional effect/evidence tests |
-| Provider retry control | Direct-provider failures are immutable attempts counted by Pip; Hermes tasks receive the policy retry limit and a terminal `gave_up` circuit breaker is converted to a Pip operational-bound escalation | Direct queue, Hermes projection, terminal-run, and escalation tests; live Cursor calls proved current Grok, Kimi, and Opus availability under `pip-worker`, while the outage/recovery drill remains required |
+| Provider retry control | Direct-provider failures are immutable attempts counted by Pip; Hermes tasks receive the policy retry limit and a terminal `gave_up` circuit breaker is converted to a Pip operational-bound escalation | Direct queue, Hermes projection, terminal-run, and escalation tests; live Cursor calls proved current Grok, Kimi, and Opus availability under `pip-worker`, and an isolated Kimi connection-refusal/fresh-success drill proved live direct-provider recovery without changing the production ledger |
 
 ## What is deliberately inert
 
@@ -59,17 +59,16 @@ a completed canary.
 The remaining gates require host-specific configuration or explicit authority;
 they are not claims that local adapter tests already proved production:
 
-1. Run the controlled provider outage/recovery drill and confirm the disabled
-   Pip gateway observes the successfully bootstrapped service-owned Hermes root
-   when it is explicitly activated. The canonical checkout, service-owned
-   Hermes auth, exact-release `bootstrap-runtime`, dedicated Pirate workspace
-   mount, non-dispatching GitHub reconciliation, conversational Sol probe, and
-   direct Grok/Kimi/Opus capability probes have passed their inert real-host
-   gates.
-2. Configure the protected `pip-release` GitHub environment and its signing
+The canonical checkout, service-owned Hermes auth, exact-release
+`bootstrap-runtime`, dedicated Pirate workspace mount, non-dispatching GitHub
+reconciliation, conversational Sol probe, direct Grok/Kimi/Opus capability
+probes, isolated direct-provider outage/recovery drill, and supervised
+empty-board Pip gateway probe have passed their inert real-host gates.
+
+1. Configure the protected `pip-release` GitHub environment and its signing
    trust material, then run and independently verify the exact-head signed
    release workflow. No signing secret belongs in this repository.
-3. Obtain explicit authorization to enable the inert gateway/controller/direct
+2. Obtain explicit authorization to enable the inert gateway/controller/direct
    timers and run exactly one deliberately labeled MDK shadow case.
 
 The installed webhook boundary, controller credential, configured-label live
@@ -103,8 +102,9 @@ Hermes gateway claims only Hermes-native tasks. Direct Cursor work is leased by
 the controller, written to `/var/lib/pip/direct-queue/inbox`, executed by
 the separate `pip-worker` identity, and returned through `results`; it is
 never represented as a Hermes provider override. The controller alone records
-the attempt and ingests the result. Real-host compatibility and recovery
-evidence is still required before activation.
+the attempt and ingests the result. Real-host compatibility, process-scoped
+provider recovery, and empty-board gateway supervision have passed; full task
+execution remains reserved for the authorized canary.
 
 The first exact-version compatibility review on 2026-09-03 targets Hermes
 `v2026.8.31` at commit
@@ -113,8 +113,8 @@ the immutable board `slug` instead of its display name and corrected the custom
 systemd gateway invocation to declare `--external-supervisor`. That pinned code
 is installed root-owned on Pirate. Pip's service-owned Hermes runtime bootstrap
 has now passed against that installation; the separately supervised gateway and
-live capability probes have passed; gateway activation and provider recovery
-remain external evidence.
+live capability, process-scoped outage/recovery, and empty-board supervised
+gateway probes have passed. Actual task execution remains the Phase 9 canary.
 
 The inert Pirate installation and service-root bootstrap are recorded in
 [`evidence/2026-09-03-pirate-inert-install.md`](evidence/2026-09-03-pirate-inert-install.md).

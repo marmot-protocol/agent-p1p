@@ -52,7 +52,7 @@ authorized issue.
 | 5 — projections and execution | Complete locally for Hermes and direct Cursor paths |
 | 6 — controlled GitHub writes | Complete locally; live read scopes are proven and authorized write behavior remains reserved for the canary |
 | 7 — packaging and lifecycle | Exact source `e4cbd33` installed inertly on Pirate with live schema migration; protected signing environment and exact CI run remain external release gates |
-| 8 — parity and non-dispatching live shadow | Inert host install, storage, checkout, runtime bootstrap, live GitHub reconciliation, and configured-model capability probes complete; outage and recovery drill still required |
+| 8 — parity and non-dispatching live shadow | Complete: inert host install, storage, checkout, runtime bootstrap, live GitHub reconciliation, configured-model capability probes, process-scoped provider outage/recovery, and empty-board supervised gateway observation passed |
 | 9 — one MDK shadow case | Not authorized and not run |
 | 10 — controlled expansion | Intentionally not started before Phase 9 acceptance |
 | Legacy retirement | Vault runtime retired early on 2026-09-01 by explicit JG authorization; no Python rollback data retained, while repository source and curated parity fixtures remain |
@@ -80,7 +80,11 @@ eight webhook-delivery records. Policy revision 3, the exact installed source,
 ownership boundaries, service states, and Hermes profile reconciliation were
 verified. Real read-only calls under `pip-worker` succeeded for the configured
 Grok, Kimi, and Opus models, and the manual GitHub shadow reconciler found zero
-candidates and made zero mutations. See
+candidates and made zero mutations. A forced loopback connection refusal then
+recovered through a fresh exact Kimi request without changing the production
+ledger. The disabled Pip gateway was also observed briefly under its exact
+service identity and service-owned Hermes root while its board remained empty.
+See
 [`evidence/2026-09-04-pirate-policy-driven-reviewers.md`](evidence/2026-09-04-pirate-policy-driven-reviewers.md).
 
 ## Inputs required before work can continue safely
@@ -88,14 +92,11 @@ candidates and made zero mutations. See
 These are external state or authority, not remaining opportunities for a local
 implementation guess:
 
-1. A controlled provider outage/recovery drill, plus confirmation that the
-   disabled Pip gateway uses the already bootstrapped service-owned Hermes root
-   when activation is explicitly authorized.
-2. A protected `pip-release` GitHub environment with approved signing trust
+1. A protected `pip-release` GitHub environment with approved signing trust
    material, followed by an independently verified exact-head workflow run.
-3. Explicit authorization to activate the inert services and label exactly one
+2. Explicit authorization to activate the inert services and label exactly one
    suitable MDK issue. Installation alone grants no activation authority.
-4. JG acceptance of the complete shadow result before Phase 10 or legacy
+3. JG acceptance of the complete shadow result before Phase 10 or legacy
    retirement begins.
 
 Installed policy revision 3, both reviewer App token-mint/read probes, and the

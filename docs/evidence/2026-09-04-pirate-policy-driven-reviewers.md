@@ -62,7 +62,41 @@ Cursor Agent `2026.09.02-c22c1a3` advertised all three configured direct
 models. Separate read-only `ask` invocations under `pip-worker`, with sandboxing
 enabled in a temporary empty workspace, returned only `PIP_PROVIDER_OK` for
 Grok, Kimi, and Opus. This proves current model availability and provider
-authentication, not task-contract execution or retry recovery.
+authentication, not task-contract execution.
+
+## Provider outage and recovery
+
+A process-scoped outage drill directed an exact `kimi-k3-max` request to the
+unreachable loopback endpoint `127.0.0.1:9`. It failed nonzero immediately with
+`ECONNREFUSED`; a 45-second outer timeout bounded any unexpected provider retry.
+A new request through the normal configured endpoint then returned only
+`PIP_PROVIDER_RECOVERED` in under five seconds.
+
+The drill did not alter global networking, Cursor authentication, production
+policy, the direct queue, or systemd state. The production ledger SHA-256 was
+identical before and after the failure and recovery. Its temporary empty
+workspace and diagnostic output were removed. Offline controller tests remain
+the evidence that a failed direct attempt releases its durable effect and that
+the operational failure counter eventually escalates rather than retrying
+without bound.
+
+## Pip gateway supervision
+
+The `pip-mdk` board was empty before the gateway check. The disabled
+`pip-hermes-gateway.service` was started manually without enabling it. After
+the launcher completed its exec transition, systemd reported one active main
+process with:
+
+- UID and EUID 997, the installed `pip-control` identity;
+- cgroup `/system.slice/pip-hermes-gateway.service`;
+- command `hermes gateway run --external-supervisor`;
+- `HOME=/var/lib/pip/hermes/home`; and
+- both `HERMES_HOME` and `HERMES_KANBAN_HOME` set to
+  `/var/lib/pip/hermes`.
+
+The board remained empty while the gateway was running. The service was then
+stopped and returned to disabled/inactive; the board was still empty. Pirate's
+separate user-facing Hermes gateway and WN Agent remained active throughout.
 
 ## Non-dispatching live reconciliation
 
@@ -91,6 +125,5 @@ above because it is not a policy input.
 - autonomous merge: disabled
 
 No issue, task, branch, comment, pull request, review, or merge was created by
-this installation or its probes. A controlled provider outage/recovery drill,
-protected release-workflow evidence, and explicit single-issue canary
-authorization remain separate gates.
+this installation or its probes. Protected release-workflow evidence and
+explicit single-issue canary authorization remain separate gates.
