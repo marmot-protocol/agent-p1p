@@ -37,9 +37,9 @@ Nine legacy Pip cron jobs were paused before the identity cutover:
 
 Hermes then reported zero scheduled jobs. The Vault user units
 `hermes-gateway.service`, `wn-agent-hermes.service`, and
-`hermes-dashboard.service` were stopped and disabled. The old source trees
-remain on Vault for rollback until an end-to-end inbound and outbound Marmot
-message succeeds on Pirate.
+`hermes-dashboard.service` were stopped and disabled. The old source trees were
+retained on Vault for rollback until an end-to-end inbound and outbound Marmot
+message succeeded on Pirate.
 
 ## Identity transfer
 
@@ -133,6 +133,27 @@ On Pirate:
 - the release-build cache is empty of `pip-release-build-*` directories and
   `pip-*.bundle` files.
 
-The remaining acceptance check is a reply from the approved White Noise account
-that receives a model-generated response from the Pirate gateway. Do not delete
-the preserved Vault Hermes or Marmot data until that succeeds.
+## Round-trip acceptance and Vault retirement
+
+The approved White Noise account replied to the `0.9.17` test message and
+received the model-generated response from Pirate. The Pirate journal recorded
+the Marmot group session and final send, and both Pirate user services remained
+active with zero restarts.
+
+After that acceptance gate, the following retired Vault state was deleted:
+
+- the 44 GiB `/home/jeff/.hermes` runtime;
+- the old `/home/jeff/.marmot-agents/hermes` identity copy;
+- disabled Hermes gateway, dashboard, and `wn-agent` user-unit definitions;
+- the old Hermes wrappers and `wn-agent` binary;
+- Hermes, Pip, and Pip-audit caches plus Hermes local state;
+- the old `pip-kanban` scripts;
+- the clean stale `agent-p1p` checkout at
+  `2607004f65ce2cbff75ec2fbda4d407b6eb22f6f`;
+- the old Pip v2 artifacts and architecture-plan copy.
+
+Vault's `/home/jeff/code/worktrees` was deliberately preserved. Its 178
+historical entries total about 11 GiB; 25 report uncommitted changes and 47 no
+longer have usable Git metadata. Those development artifacts require a separate
+salvage or discard decision and were not treated as disposable control-plane
+runtime data.
