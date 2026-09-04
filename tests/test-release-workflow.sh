@@ -5,6 +5,7 @@ repo_root=$(cd -- "$(dirname -- "$0")/.." && pwd -P)
 workflow="$repo_root/.github/workflows/release.yml"
 materializer="$repo_root/scripts/materialize-release-signing-inputs.sh"
 release_builder="$repo_root/scripts/build-rust-release.sh"
+repository_public_key="$repo_root/config/release-public.key"
 
 fail() {
     printf '%s\n' "$1" >&2
@@ -27,6 +28,10 @@ grep -Fq 'ref: ${{ github.sha }}' "$workflow" || fail "deployment checkout is no
 grep -Fq 'release_version="git-${SOURCE_COMMIT:0:12}"' "$workflow" || fail "deployment identifier is not derived from the source commit"
 grep -Fq 'needs: [verify-rust, verify-systemd]' "$workflow" || fail "signing does not wait for every verification job"
 test "$(grep -Fc 'environment: pip-release' "$workflow")" -eq 1 || fail "only the signing job may use the protected environment"
+if grep -Fq 'secrets.PIP_RELEASE_PUBLIC_KEY' "$workflow"; then
+    fail "public release key must not be stored as a secret"
+fi
+grep -Fq 'config/release-public.key' "$workflow" || fail "workflow does not use the repository trust anchor"
 grep -Fq 'tests/test-release-workflow.sh' "$workflow" || fail "release verification omits its workflow contract"
 grep -Fq 'scripts/test-systemd-lifecycle.sh' "$workflow" || fail "release verification omits the lifecycle gate"
 grep -Fq 'root/share/pip/install/pip-install-release' "$workflow" || fail "workflow does not export the signed installer"
@@ -38,6 +43,9 @@ if grep -Fq 'base64 --decode > "$RUNNER_TEMP/release-signing.key"' "$workflow"; 
 fi
 
 test -x "$materializer" || fail "release signing-input materializer is missing"
+test -f "$repository_public_key" || fail "repository release public key is missing"
+test "$(wc -l <"$repository_public_key" | tr -d ' ')" -eq 1 || fail "repository release public key must contain exactly one line"
+test "$(tr -d '\n' <"$repository_public_key" | wc -c | tr -d ' ')" -eq 44 || fail "repository release public key is not canonical base64"
 fixture=$(mktemp -d)
 cleanup() {
     rm -rf -- "$fixture"
@@ -45,7 +53,7 @@ cleanup() {
 trap cleanup EXIT
 
 signing_key='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
-public_key='AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE='
+public_key=$(tr -d '\n' <"$repository_public_key")
 PIP_RELEASE_SIGNING_KEY_BASE64="$signing_key" \
 PIP_RELEASE_PUBLIC_KEY="$public_key" \
     "$materializer" "$fixture/signing.key" "$fixture/public.key"

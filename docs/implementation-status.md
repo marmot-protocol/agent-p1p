@@ -65,9 +65,10 @@ reconciliation, conversational Sol probe, direct Grok/Kimi/Opus capability
 probes, isolated direct-provider outage/recovery drill, and supervised
 empty-board Pip gateway probe have passed their inert real-host gates.
 
-1. Configure the protected `pip-release` GitHub environment and its signing
-   trust material, then run and independently verify the exact-head signed
-   release workflow. No signing secret belongs in this repository.
+1. Run and independently verify the exact-head protected deployment workflow.
+   The `pip-release` environment, master-only branch policy, required reviewer,
+   private signing seed, and reviewable public trust anchor are configured. No
+   signing secret belongs in this repository.
 2. Obtain explicit authorization to enable the inert gateway/controller/direct
    timers and run exactly one deliberately labeled MDK shadow case.
 

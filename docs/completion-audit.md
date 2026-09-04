@@ -92,8 +92,8 @@ See
 These are external state or authority, not remaining opportunities for a local
 implementation guess:
 
-1. A protected `pip-release` GitHub environment with approved signing trust
-   material, followed by an independently verified exact-head workflow run.
+1. An independently verified exact-head run of the configured protected
+   `pip-release` deployment workflow.
 2. Explicit authorization to activate the inert services and label exactly one
    suitable MDK issue. Installation alone grants no activation authority.
 3. JG acceptance of the complete shadow result before Phase 10 or legacy

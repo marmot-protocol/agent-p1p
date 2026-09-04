@@ -52,16 +52,17 @@ build. It has no operator inputs: a dispatch from `master` checks out the exact
 triggering SHA without persisted GitHub credentials and derives the deployment
 identifier as `git-<12-character commit>`. Dispatches from any other branch fail
 closed. The workflow requires the `pip-release` environment and externally
-provisioned `PIP_RELEASE_SIGNING_KEY_BASE64` and `PIP_RELEASE_PUBLIC_KEY`
-secrets. It runs the Rust and disposable systemd gates without access to the
-protected environment. Only after both
-verification jobs pass can the protected job materialize the base64-encoded
+provisioned `PIP_RELEASE_SIGNING_KEY_BASE64` secret. The corresponding public
+trust anchor is the reviewable `config/release-public.key` file; it is not a
+secret. The workflow runs the Rust and disposable systemd gates without access
+to the protected environment. Only after both verification jobs pass can the
+protected job materialize the base64-encoded
 32-byte signing seed, build and verify the cohort, and upload its deterministic
 tar envelope with the exact installer and outer checksums. The installer is
 itself an artifact in the signed manifest; the top-level executable is copied
 byte-for-byte from that verified resource. The signing-key secret is the
 canonical base64 seed itself, not a second base64 encoding.
-Configuring those secrets or approving a run is a separate release-operator
+Configuring the secret or approving a run is a separate release-operator
 action.
 
 ## Pre-release gates

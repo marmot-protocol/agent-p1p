@@ -59,8 +59,9 @@ jobs:
       - name: Materialize protected signing inputs
         env:
           PIP_RELEASE_SIGNING_KEY_BASE64: ${{ secrets.PIP_RELEASE_SIGNING_KEY_BASE64 }}
-          PIP_RELEASE_PUBLIC_KEY: ${{ secrets.PIP_RELEASE_PUBLIC_KEY }}
         run: |
+          export PIP_RELEASE_PUBLIC_KEY
+          PIP_RELEASE_PUBLIC_KEY="$(tr -d '\n' < config/release-public.key)"
           scripts/materialize-release-signing-inputs.sh \
             "$RUNNER_TEMP/release-signing.key" \
             "$RUNNER_TEMP/release-public.key"
