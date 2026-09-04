@@ -205,14 +205,15 @@ def test_mdk_is_configured_as_shadow_merge_pilot() -> None:
 
     assert config["repository"] == "marmot-protocol/mdk"
     assert config["board"] == "pip-mdk"
-    assert config["workflow_version"] == 2
+    assert config["workflow_version"] == 3
     assert config["merge_mode"] == "shadow"
     assert config["legacy_existing_work_stays_on_legacy_board"] is True
     assert config["models"] == {
         "planner": "openai-codex/gpt-5.6-sol",
-        "builder-grok": "cursor/composer-2.5",
-        "reviewer-general": "openai-codex/gpt-5.6-sol",
-        "reviewer-secperf": "cursor/claude-opus-4-8-thinking-high",
+        "builder-grok": "cursor/cursor-grok-4.6-high-fast",
+        "general-sol": "openai-codex/gpt-5.6-sol",
+        "secperf-kimi": "cursor/kimi-k3-max",
+        "secperf-opus": "cursor/claude-opus-5-thinking-high",
         "final-reviewer": "openai-codex/gpt-5.6-sol",
     }
 

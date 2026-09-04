@@ -75,7 +75,8 @@ copied. Only `MARMOT_*` environment entries were migrated; Telegram and its bot
 token were deliberately not copied.
 
 The old persona and memory documents were curated during migration. Stale
-Vault host references, Pip v2 naming, old auto-merge policy, legacy model lanes,
+Vault host references, obsolete versioned Pip naming, old auto-merge policy,
+legacy model lanes,
 and multi-repository scheduler state were removed. The new documents state that
 the Rust ledger is authoritative and that the conversational gateway must not
 recreate or bypass control-plane automation.
@@ -150,7 +151,7 @@ After that acceptance gate, the following retired Vault state was deleted:
 - the old `pip-kanban` scripts;
 - the clean stale `agent-p1p` checkout at
   `2607004f65ce2cbff75ec2fbda4d407b6eb22f6f`;
-- the old Pip v2 artifacts and architecture-plan copy.
+- the old versioned Pip artifacts and architecture-plan copy.
 
 Vault's `/home/jeff/code/worktrees` was deliberately preserved. Its 178
 historical entries total about 11 GiB; 25 report uncommitted changes and 47 no
