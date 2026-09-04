@@ -188,10 +188,10 @@ Exit gate:
 **Implementation status:** Frozen transition and worker-contract parity is
 exhaustive, repeated live GitHub reconciliation is stable with zero mutations,
 and local adapter tests cover Hermes outage/recovery plus direct and Hermes
-circuit breakers. On 2026-08-20 the development workstation had Cursor and an
-authenticated personal `gh`, but no `hermes` executable. Service-identity,
-live-Hermes, and live-provider recovery evidence therefore remains an open
-exit-gate item.
+circuit breakers. Pirate now has the pinned Hermes installation, service-owned
+root, canonical MDK checkout, and successful inert runtime bootstrap.
+Separately supervised gateway observation and live provider capability plus
+outage/recovery evidence remain open exit-gate items.
 
 Deliverables:
 
@@ -210,11 +210,12 @@ Exit gate:
 
 **Implementation status:** No live case has started. The generic Rust path,
 signed-webhook adapter, polling recovery, runtime templates, and operational
-bounds exist locally. The isolated loopback ingress and durable spool consumer
-also pass local and disposable-systemd lifecycle tests, but are not installed
-or exposed on Pirate. Activation remains unauthorized and the host-specific
-gaps listed in [`implementation-status.md`](implementation-status.md) must close
-first.
+bounds exist locally. Pirate now exposes the isolated loopback ingress through
+Tailscale Funnel, and the installed durable spool consumer has passed an
+empty-spool production-credential cycle while its timer remains disabled. A
+controlled pending-delivery probe and the other host-specific gaps listed in
+[`implementation-status.md`](implementation-status.md) must close before
+activation, which remains unauthorized.
 
 Deliverables:
 

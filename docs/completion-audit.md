@@ -100,11 +100,14 @@ implementation guess:
 1. A non-dispatching live provider capability probe and outage/recovery drill,
    plus confirmation that the separately supervised gateway uses the already
    bootstrapped service-owned Hermes root.
-2. A trusted webhook TLS ingress or relay, its GitHub webhook secret, and
-   installation/verification of the completed isolated receiver and
-   spool-to-ledger units on Pirate. The local path is not activated.
-3. Three distinct numeric GitHub actors and separately scoped controller,
-   general-reviewer, and security/performance-reviewer credentials.
+2. One controlled pending delivery through the installed Funnel, isolated
+   receiver, and spool-to-ledger consumer. The live path has passed signed
+   ping, replay, reachability, and empty-spool service probes without enabling
+   the consumer timer.
+3. Populate the installed policy with the three verified numeric GitHub actors
+   and complete an installed-key token-mint/read probe for each reviewer App.
+   The narrowly scoped controller credential and both root-owned reviewer
+   credential sets are installed.
 4. The actual required MDK CI contexts and confirmation that the configured
    branch policy matches the canonical checkout.
 5. A protected `pip-release` GitHub environment with approved signing trust
@@ -116,4 +119,5 @@ implementation guess:
 
 Until those inputs exist, the correct state is the checked-in one: intake
 disabled, repository paused, dispatch disabled, shadow merge mode, autonomous
-merge false, and no live Rust services enabled.
+merge false, public ingress enabled, and all execution timers and gateways
+disabled.

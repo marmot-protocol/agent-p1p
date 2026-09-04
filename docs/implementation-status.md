@@ -1,8 +1,9 @@
 # Rust implementation status
 
-**Snapshot date:** 2026-09-03
+**Snapshot date:** 2026-09-04
 **Activation state:** public webhook receipt boundary enabled on Pirate;
-consumer, controller, workers, Hermes gateway, and dispatch remain disabled
+controller credential provisioned; consumer timer, controller, workers, Hermes
+gateway, and dispatch remain disabled
 
 This file is the implementation inventory. The target behavior remains defined
 by [`pip-architecture-plan.md`](pip-architecture-plan.md); the migration
@@ -17,12 +18,12 @@ a completed canary.
 |---|---|---|
 | Deterministic workflow | Exhaustive Rust states, events, effects, exact-head joins, remediation/elapsed-time/repeated-finding/provider-failure bounds, durable escalation, and shadow-only MDK disposition | Workspace tests and frozen fixtures |
 | Authoritative storage | SQLite schema v6, immutable webhook deliveries/events/evidence/runs/findings/workspace retirements, current-case projection, durable outbox, leases, immutable direct attempts, transactional effect supersession, backup, migration, and crash injection | Workspace and disposable lifecycle tests |
-| Intake reads | Signed `issues/labeled` webhook ingestion with delivery-ID/payload-digest replay protection and a live exact-issue re-read, plus bounded polling recovery using numeric repository/actor identity, exclusions, explicit holds, policy validation, and concurrency limits. A loopback-only `pip-ingress` service has only the webhook secret and atomically spools raw issue-event bodies; authenticated GitHub `ping` events are acknowledged without durable input. A separate bounded `pip-control` cycle revalidates and commits one pending delivery before marking it processed. | Adversarial HTTP/spool/consumer, outage/replay, tamper, systemd-isolation, install/rollback, and disposable lifecycle tests; on Pirate, the isolated service, root-owned secret, Tailscale Funnel TLS path, public signed-request/replay probes, and repository webhook reachability are live while the consumer remains disabled |
+| Intake reads | Signed `issues/labeled` webhook ingestion with delivery-ID/payload-digest replay protection and a live exact-issue re-read, plus bounded polling recovery using numeric repository/actor identity, exclusions, explicit holds, policy validation, and concurrency limits. A loopback-only `pip-ingress` service has only the webhook secret and atomically spools raw issue-event bodies; authenticated GitHub `ping` events are acknowledged without durable input. A separate bounded `pip-control` cycle revalidates and commits one pending delivery before marking it processed. | Adversarial HTTP/spool/consumer, outage/replay, tamper, systemd-isolation, install/rollback, and disposable lifecycle tests; on Pirate, the isolated service, root-owned secret, Tailscale Funnel TLS path, public signed-request/replay probes, repository webhook reachability, production controller credential, and one empty-spool consumer service cycle are live while the consumer timer remains disabled |
 | Worker dispatch routing | Hermes-native roles receive controller-gated, idempotent board projections; direct roles become leased `RUN_DIRECT_WORKER` jobs and cross an immutable filesystem bridge to a separate worker identity; mixed reviews split one role to each path; both paths converge through the same result contract | Fake-runner, restart/recovery, mixed-review, systemd-boundary, and offline integration tests |
 | Worker contracts | Versioned planner, builder, two reviewer, and final-reviewer results bound to case, task, role, model, skills commit, plan, PR, and exact head | Contract fixtures and ingestion tests |
 | Worker evidence bundles | Every projected worker receives the complete ordered ledger history at the claimed state revision, including record digests and a reproducible root digest; final review includes the atomically committed GitHub preflight | Ledger, scheduling, dispatch-command, and exact-final-preflight tests |
 | CI reconciliation | Independent current and historical check/status evaluation on the ledger-bound PR head | Fixture and controller-cycle tests |
-| GitHub reads/writes | Bounded REST reads plus bounded GraphQL review-thread pagination; idempotent issue comments, controller-owned draft PRs, exact-head reviews, ready-for-review mutation, and guarded merge. Reviewer Apps use RS256 JWTs to mint repository-scoped, short-lived installation tokens each active controller cycle. | Adapter, App-auth, and controller-cycle tests; live App installation/permission evidence remains external and MDK policy cannot enable the guarded path |
+| GitHub reads/writes | Bounded REST reads plus bounded GraphQL review-thread pagination; idempotent issue comments, controller-owned draft PRs, exact-head reviews, ready-for-review mutation, and guarded merge. Reviewer Apps use RS256 JWTs to mint repository-scoped, short-lived installation tokens each active controller cycle. | Adapter, App-auth, and controller-cycle tests; Pirate has root-owned controller and reviewer credentials, verified controller identity/repository/read access, and external reviewer installation metadata, while MDK policy cannot enable the guarded path |
 | Release/install | Signed source-bound release cohort, protected manual CI build/sign/upload workflow, exact action/image pins, artifact verification, content-addressed install, rollback, schema migration, isolated identities, hardened shadow timer, and inert active-runtime templates | Local tests, passing disposable-systemd lifecycle gate, and a verified inert local-bootstrap cohort installed on Pirate; protected CI environment has not been provisioned or run |
 | Active controller | One `controller-cycle` command that ingests Hermes and isolated direct-worker results, reconciles CI and authorization, performs polling recovery intake, enforces all operational bounds, handles takeover, publishes branches/plans/PRs/reviews/dispositions, verifies final preflight, and routes only freshly authorized effects | Local fixture and restart tests; live activation remains unauthorized |
 | Final-review preflight | A durable observation effect joins the accepted plan/build/reviewer ledger, fresh issue/clarification and authorization evidence, exact numeric GitHub actor and role-stamped approvals, current head CI, clean draft-PR ownership/mergeability, and resolved review threads before final-review dispatch | State-machine, adapter, fixture, drift, and restart-safe lease tests |
@@ -59,11 +60,14 @@ they are not claims that local adapter tests already proved production:
    provider capability and outage/recovery probe. The canonical checkout,
    service-owned Hermes auth, exact-release `bootstrap-runtime`, and dedicated
    Pirate workspace mount have passed their inert real-host gates.
-2. Provision the narrowly scoped controller GitHub credential, verify the
-   installed spool consumer against one controlled pending delivery, and keep
-   it disabled until canary activation. The isolated ingress service,
-   root-owned webhook secret, public Funnel TLS path, and MDK repository hook
-   are installed; polling remains recovery, not the intended primary path.
+2. Verify the installed spool consumer against one controlled pending delivery
+   and keep its timer disabled until canary activation. The narrowly scoped,
+   root-owned controller credential passed identity, repository, issue, pull
+   request, check, and status reads plus an empty-spool installed-service cycle.
+   The isolated ingress service, root-owned webhook secret, public Funnel TLS
+   path, and MDK repository hook are installed; polling remains recovery, not
+   the intended primary path. See
+   [`evidence/2026-09-04-pirate-controller-token.md`](evidence/2026-09-04-pirate-controller-token.md).
 3. Populate and verify the three numeric GitHub actor identities and separately
    scoped credentials. Configure the actual required MDK CI contexts; the
    checked-in paused policy intentionally has none.

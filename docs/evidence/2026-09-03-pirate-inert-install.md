@@ -133,10 +133,12 @@ remains the ledger evidence.
 
 ## Gates still open
 
-- Provision and validate the controller and two reviewer GitHub App identities
-  and credentials.
+- Populate the policy with the verified controller and reviewer actor IDs, and
+  complete installed-key token-mint/read probes for both reviewer Apps. The
+  controller credential has passed its live read and empty-consumer probes.
 - Configure exact required MDK CI contexts.
-- Complete and deploy isolated webhook spool consumption behind trusted TLS.
+- Process one controlled pending delivery through the deployed Funnel,
+  isolated ingress, and installed consumer while its timer remains disabled.
 - Replace local-bootstrap signing trust with protected CI signing evidence.
 - Record a non-dispatching live provider capability and outage/recovery probe,
   and confirm the separately supervised gateway observes the same Hermes root.
