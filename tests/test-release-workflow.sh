@@ -26,6 +26,12 @@ grep -Fq 'ref: ${{ github.sha }}' "$workflow" || fail "deployment checkout is no
 # The literal workflow shell command must not be expanded by this test.
 # shellcheck disable=SC2016
 grep -Fq 'release_version="git-${SOURCE_COMMIT:0:12}"' "$workflow" || fail "deployment identifier is not derived from the source commit"
+# The obsolete workflow shell command must not be expanded by this test.
+# shellcheck disable=SC2016
+if grep -Fq 'built_at=$(git show -s --format=%cI "$SOURCE_COMMIT")' "$workflow"; then
+    fail "deployment timestamp retains a non-canonical commit timezone"
+fi
+grep -Fq "date --utc" "$workflow" || fail "deployment timestamp is not normalized to UTC"
 grep -Fq 'needs: [verify-rust, verify-systemd]' "$workflow" || fail "signing does not wait for every verification job"
 test "$(grep -Fc 'environment: pip-release' "$workflow")" -eq 1 || fail "only the signing job may use the protected environment"
 if grep -Fq 'secrets.PIP_RELEASE_PUBLIC_KEY' "$workflow"; then

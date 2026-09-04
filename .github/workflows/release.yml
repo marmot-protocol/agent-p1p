@@ -69,7 +69,8 @@ jobs:
         env:
           SOURCE_COMMIT: ${{ github.sha }}
         run: |
-          built_at=$(git show -s --format=%cI "$SOURCE_COMMIT")
+          commit_epoch=$(git show -s --format=%ct "$SOURCE_COMMIT")
+          built_at=$(date --utc --date="@$commit_epoch" '+%Y-%m-%dT%H:%M:%SZ')
           release_version="git-${SOURCE_COMMIT:0:12}"
           scripts/build-rust-release.sh \
             --output "$RUNNER_TEMP/pip-release" \
@@ -81,8 +82,7 @@ jobs:
           install -m 0555 \
             "$RUNNER_TEMP/pip-release/root/share/pip/install/pip-install-release" \
             "$RUNNER_TEMP/pip-install-release"
-          source_date_epoch=$(git show -s --format=%ct "$SOURCE_COMMIT")
-          tar --sort=name --mtime="@$source_date_epoch" --owner=0 --group=0 --numeric-owner \
+          tar --sort=name --mtime="@$commit_epoch" --owner=0 --group=0 --numeric-owner \
             -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/pip-release.tar.gz" pip-release
           (
             cd "$RUNNER_TEMP"
