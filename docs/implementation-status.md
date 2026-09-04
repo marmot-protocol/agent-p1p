@@ -24,7 +24,7 @@ a completed canary.
 | Worker evidence bundles | Every projected worker receives the complete ordered ledger history at the claimed state revision, including record digests and a reproducible root digest; final review includes the atomically committed GitHub preflight | Ledger, scheduling, dispatch-command, and exact-final-preflight tests |
 | CI reconciliation | Independent current and historical check/status evaluation on the ledger-bound PR head | Fixture and controller-cycle tests |
 | GitHub reads/writes | Bounded REST reads plus bounded GraphQL review-thread pagination; idempotent issue comments, controller-owned draft PRs, exact-head reviews, ready-for-review mutation, and guarded merge. Reviewer Apps use RS256 JWTs to mint repository-scoped, short-lived installation tokens each active controller cycle. | Adapter, App-auth, and controller-cycle tests; Pirate has root-owned controller and reviewer credentials, verified controller identity/repository/read access, and successful installed-key token mint plus repository/issue/PR read probes for each distinct reviewer App, while MDK policy cannot enable the guarded path |
-| Release/install | Signed source-bound release cohort, protected manual CI build/sign/upload workflow, exact action/image pins, artifact verification, content-addressed install, rollback, schema migration, isolated identities, hardened shadow timer, and inert active-runtime templates | Local tests, passing disposable-systemd lifecycle gate, and exact source `e4cbd33` installed inertly on Pirate with a successful live schema 6-to-7 migration; protected CI environment has not been provisioned or run |
+| Release/install | Signed source-bound release cohort, protected manual CI build/sign/upload workflow, exact action/image pins, artifact verification, content-addressed install, rollback, schema migration, isolated identities, hardened shadow timer, and inert active-runtime templates | Exact source `48ac1e2` passed ordinary and protected CI, independent signature and digest verification, live injected-failure rollback, protected-CI trust rotation, Pirate upgrade, idempotent reinstall, inert Hermes reconciliation, and ingress restart recovery |
 | Active controller | One `controller-cycle` command that ingests Hermes and isolated direct-worker results, reconciles CI and authorization, performs polling recovery intake, enforces all operational bounds, handles takeover, publishes branches/plans/PRs/reviews/dispositions, verifies final preflight, and routes only freshly authorized effects | Local fixture and restart tests; live activation remains unauthorized |
 | Final-review preflight | A durable observation effect joins the accepted plan/build and every policy-required reviewer instance, fresh issue/clarification and authorization evidence, exact numeric GitHub actor and role-stamped lane approvals, current head CI, clean draft-PR ownership/mergeability, and resolved review threads before final-review dispatch | State-machine, adapter, multi-instance fixture, drift, and restart-safe lease tests |
 | Review publication | Two distinct controller-held lane credentials publish one aggregate general and one aggregate security/performance verdict on the exact head; each body names its required reviewer instances, while detached observations have no publication authority | Policy, state-machine, multi-instance aggregation, mutation, outage/retry, and exact-role fixture tests |
@@ -65,11 +65,7 @@ reconciliation, conversational Sol probe, direct Grok/Kimi/Opus capability
 probes, isolated direct-provider outage/recovery drill, and supervised
 empty-board Pip gateway probe have passed their inert real-host gates.
 
-1. Run and independently verify the exact-head protected deployment workflow.
-   The `pip-release` environment, master-only branch policy, required reviewer,
-   private signing seed, and reviewable public trust anchor are configured. No
-   signing secret belongs in this repository.
-2. Obtain explicit authorization to enable the inert gateway/controller/direct
+1. Obtain explicit authorization to enable the inert gateway/controller/direct
    timers and run exactly one deliberately labeled MDK shadow case.
 
 The installed webhook boundary, controller credential, configured-label live
@@ -77,8 +73,10 @@ reread, and policy-driven reviewer release evidence are recorded in
 [`evidence/2026-09-04-pirate-controller-token.md`](evidence/2026-09-04-pirate-controller-token.md)
 and
 [`evidence/2026-09-04-pirate-webhook-consumer.md`](evidence/2026-09-04-pirate-webhook-consumer.md),
-with the current release in
-[`evidence/2026-09-04-pirate-policy-driven-reviewers.md`](evidence/2026-09-04-pirate-policy-driven-reviewers.md).
+with the prior local-bootstrap release in
+[`evidence/2026-09-04-pirate-policy-driven-reviewers.md`](evidence/2026-09-04-pirate-policy-driven-reviewers.md)
+and the current protected-CI release in
+[`evidence/2026-09-04-protected-release-install-recovery.md`](evidence/2026-09-04-protected-release-install-recovery.md).
 
 The installed policy revision must remain frozen while the Phase 9 case is
 active. A revision mismatch fails closed. Explicit restrictive overlays and

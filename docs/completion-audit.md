@@ -7,8 +7,9 @@ Pirate as an inert, single-repository shadow deployment. Native reviewer-App
 authentication is implemented. The isolated webhook ingress is installed and
 publicly reachable through the authenticated forwarding boundary; its consumer
 and every execution path remain disabled. Policy revision 3 and its
-policy-defined reviewer set are installed, but the system is not
-production-ready until the external gates below are satisfied, and it is not
+policy-defined reviewer set and protected-CI release are installed, but the
+system is not ready for active work until the authorization gate below is
+satisfied, and it is not
 ready for Phase 10 multi-repository expansion until the Phase 9 MDK canary is
 accepted.
 
@@ -36,7 +37,7 @@ authorized issue.
 | Shadow disposition | Implemented locally and selected for MDK | `READY` becomes `SHADOW_READY`; autonomous merge is unreachable under checked-in MDK policy |
 | Guarded merge | Implemented locally, disabled for MDK | Separate ready-for-review, revalidation, expected-head merge, and restart-convergence transaction |
 | Runtime isolation | Implemented locally | Separate control/worker identities, service-owned Hermes root, credential-free worker surfaces, and systemd contract tests |
-| Release provenance and rollback | Implemented locally; trusted CI run external | Signed source-bound cohort, pinned actions/image, protected release workflow, installer verification, and passing disposable-systemd lifecycle |
+| Release provenance and rollback | Verified in protected CI and live on Pirate | Signed source-bound cohort, pinned actions/image, protected release workflow, independent verification, permanent trust rotation, injected live rollback, idempotent reinstall, and ingress restart recovery |
 | In-flight policy revision changes | Safe for the frozen canary; Phase 10 expansion | Policy revisions are immutable and mismatches fail closed; explicit restrictive overlays and nonrestrictive hot migration are deferred until after Phase 9 acceptance |
 | Global provider/registry/reporting layer | Sequenced after canary | Shared ledger and global active-case limit exist; registry operations, health aggregation, dependency routing, and multi-board reporting remain Phase 10 |
 
@@ -51,7 +52,7 @@ authorized issue.
 | 4 — read-only adapters | Complete locally with live controller and reviewer-App read probes on Pirate |
 | 5 — projections and execution | Complete locally for Hermes and direct Cursor paths |
 | 6 — controlled GitHub writes | Complete locally; live read scopes are proven and authorized write behavior remains reserved for the canary |
-| 7 — packaging and lifecycle | Exact source `e4cbd33` installed inertly on Pirate with live schema migration; protected signing environment and exact CI run remain external release gates |
+| 7 — packaging and lifecycle | Complete: exact source `48ac1e2` passed protected CI and was independently verified, rollback-tested, and installed inertly on Pirate under the permanent trust anchor |
 | 8 — parity and non-dispatching live shadow | Complete: inert host install, storage, checkout, runtime bootstrap, live GitHub reconciliation, configured-model capability probes, process-scoped provider outage/recovery, and empty-board supervised gateway observation passed |
 | 9 — one MDK shadow case | Not authorized and not run |
 | 10 — controlled expansion | Intentionally not started before Phase 9 acceptance |
@@ -87,16 +88,25 @@ service identity and service-owned Hermes root while its board remained empty.
 See
 [`evidence/2026-09-04-pirate-policy-driven-reviewers.md`](evidence/2026-09-04-pirate-policy-driven-reviewers.md).
 
+The successor commit
+`48ac1e2b190118ba99b11a46ee7b4ba7029a44cb` passed ordinary and protected CI,
+independent consumer verification on the operator host and Pirate, a live
+injected `daemon-reload` rollback, successful content-addressed upgrade,
+permanent trust-anchor rotation, idempotent reinstall, inert Hermes
+reconciliation, and webhook-ingress restart. The schema-7 ledger retained the
+same semantic state and all eight webhook deliveries. The current release ID is
+`2591b7c24e4d05cc80b62933208fe59ca1d9ad31123df56515dd76d982d684d9`.
+See
+[`evidence/2026-09-04-protected-release-install-recovery.md`](evidence/2026-09-04-protected-release-install-recovery.md).
+
 ## Inputs required before work can continue safely
 
 These are external state or authority, not remaining opportunities for a local
 implementation guess:
 
-1. An independently verified exact-head run of the configured protected
-   `pip-release` deployment workflow.
-2. Explicit authorization to activate the inert services and label exactly one
+1. Explicit authorization to activate the inert services and label exactly one
    suitable MDK issue. Installation alone grants no activation authority.
-3. JG acceptance of the complete shadow result before Phase 10 or legacy
+2. JG acceptance of the complete shadow result before Phase 10 or legacy
    retirement begins.
 
 Installed policy revision 3, both reviewer App token-mint/read probes, and the

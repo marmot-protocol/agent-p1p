@@ -163,11 +163,12 @@ Exit gate:
 **Implementation status:** The signed cohort, protected manual CI release
 workflow, exact action/container pins, installer, isolated control and
 direct-worker identities, shadow unit, inert active-runtime templates, and
-disposable lifecycle are complete locally.
-Fresh install, reinstall, upgrade, rollback, and restart all preserve disabled
-active and shadow timers. The protected signing environment is not provisioned,
-so the workflow has not produced an authorized release. CI and live-host
-evidence are separate gates.
+disposable lifecycle are complete. Exact source `48ac1e2` passed the protected
+workflow, independent consumer verification, live injected-failure rollback,
+content-addressed Pirate upgrade, permanent trust rotation, idempotent
+reinstall, inert Hermes reconciliation, and ingress restart recovery. Intake,
+dispatch, controller, worker, consumer, reconciliation, and gateway activation
+remain separately unauthorized.
 
 Deliverables:
 
