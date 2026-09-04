@@ -270,7 +270,7 @@ fn build_store(path: std::path::PathBuf) -> Store {
             repository_id: 984_321,
             issue_number: 1240,
             workflow_version: 1,
-            policy_revision: 1,
+            policy_revision: active_policy().revision,
             initial_state: "BUILDING".into(),
             observed_at: 1,
             event: EventInput {
@@ -329,7 +329,7 @@ fn remediation_store(path: std::path::PathBuf) -> Store {
             repository_id: 984_321,
             issue_number: 1240,
             workflow_version: 1,
-            policy_revision: 1,
+            policy_revision: active_policy().revision,
             initial_state: "REMEDIATING".into(),
             observed_at: 1,
             event: EventInput {

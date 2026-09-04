@@ -420,10 +420,11 @@ fn active_policy() -> pip_control::RepositoryPolicy {
 
 fn seeded_store(root: &std::path::Path) -> Store {
     let mut store = Store::open(root.join("ledger.db")).unwrap();
+    let policy = active_policy();
     store
         .record_policy(&PolicyInput {
             repository_id: 1_055_628_515,
-            revision: 1,
+            revision: policy.revision,
             accepted_at: 90,
             payload: json!({"fixture": true}),
         })
@@ -434,7 +435,7 @@ fn seeded_store(root: &std::path::Path) -> Store {
             repository_id: 1_055_628_515,
             issue_number: 1240,
             workflow_version: 2,
-            policy_revision: 1,
+            policy_revision: policy.revision,
             initial_state: "PLANNING".into(),
             observed_at: 90,
             event: EventInput {

@@ -124,7 +124,7 @@ fn seed_bound_case(store: &mut Store, state: &str) {
             repository_id: 1_055_628_515,
             issue_number: 1240,
             workflow_version: 2,
-            policy_revision: 1,
+            policy_revision: active_policy().revision,
             initial_state: "PLANNING".into(),
             observed_at: 1,
             event: EventInput {

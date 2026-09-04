@@ -138,7 +138,7 @@ fn project_planner(store: &mut Store) {
             repository_id: 984_321,
             issue_number: 1240,
             workflow_version: 1,
-            policy_revision: 1,
+            policy_revision: active_policy().revision,
             initial_state: "PLANNING".into(),
             observed_at: 1,
             event: EventInput {

@@ -1,6 +1,6 @@
 {
   "policy_format": 1,
-  "revision": 1,
+  "revision": 2,
   "repository": {
     "id": 1055628515,
     "owner": "marmot-protocol",
@@ -19,9 +19,9 @@
   },
   "branch_prefix": "pip/",
   "github": {
-    "automation_actor_id": null,
-    "reviewer_general_actor_id": null,
-    "reviewer_secperf_actor_id": null
+    "automation_actor_id": 292420120,
+    "reviewer_general_actor_id": 323997422,
+    "reviewer_secperf_actor_id": 323998100
   },
   "intake": {
     "enabled": false,
@@ -52,7 +52,7 @@
     "ADMIN_AUTHORIZATION",
     "PUSH_PAYLOAD_CONTEXT"
   ],
-  "required_ci_contexts": [],
+  "required_ci_contexts": ["Required CI"],
   "roles": [
     {
       "role": "planner",

@@ -45,8 +45,8 @@ impl IntakeSource for FakeSource {
 fn active_cases_require_a_current_trusted_authorization_event() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
-    seed_case(&mut store, 1240, 1);
     let policy = active_policy();
+    seed_case(&mut store, 1240, policy.revision);
     let source = FakeSource::default();
     source
         .snapshots
@@ -84,9 +84,9 @@ fn active_cases_require_a_current_trusted_authorization_event() {
 fn repository_policy_issue_and_actor_drift_fail_closed_for_every_active_case() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
-    seed_case(&mut store, 1240, 1);
-    seed_case(&mut store, 1241, 2);
     let policy = active_policy();
+    seed_case(&mut store, 1240, policy.revision);
+    seed_case(&mut store, 1241, policy.revision + 1);
     let source = FakeSource::default();
     let mut first = authorized_snapshot(1240);
     first.repository.id = 99;
@@ -116,8 +116,8 @@ fn repository_policy_issue_and_actor_drift_fail_closed_for_every_active_case() {
 fn removed_authorization_is_committed_and_supersedes_pending_dispatch_atomically() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
-    seed_case_with_dispatch(&mut store, 1240);
     let policy = active_policy();
+    seed_case_with_dispatch(&mut store, 1240, policy.revision);
     let source = FakeSource::default();
     let mut removed = authorized_snapshot(1240);
     removed.issue.labels.clear();
@@ -192,13 +192,13 @@ fn seed_case(store: &mut Store, issue_number: u64, policy_revision: u64) {
         .unwrap();
 }
 
-fn seed_case_with_dispatch(store: &mut Store, issue_number: u64) {
+fn seed_case_with_dispatch(store: &mut Store, issue_number: u64, policy_revision: u64) {
     let mut case = NewCase {
         case_key: format!("repo:1055628515#{issue_number}@2"),
         repository_id: 1_055_628_515,
         issue_number,
         workflow_version: 2,
-        policy_revision: 1,
+        policy_revision,
         initial_state: "PLANNING".into(),
         observed_at: 1,
         event: EventInput {

@@ -155,13 +155,14 @@ fn takeover_record_is_consumed_locally_without_a_github_write() {
 
 fn disposition_store(path: std::path::PathBuf, state: &str, effect_type: &str) -> Store {
     let mut store = Store::open(path).unwrap();
+    let policy = active_policy();
     store
         .create_case(&NewCase {
             case_key: "repo:984321#1240@1".into(),
             repository_id: 984_321,
             issue_number: 1240,
             workflow_version: 1,
-            policy_revision: 1,
+            policy_revision: policy.revision,
             initial_state: "PLANNING".into(),
             observed_at: 1,
             event: EventInput {

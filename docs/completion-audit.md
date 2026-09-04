@@ -104,12 +104,12 @@ implementation guess:
    receiver, and spool-to-ledger consumer. The live path has passed signed
    ping, replay, reachability, and empty-spool service probes without enabling
    the consumer timer.
-3. Populate the installed policy with the three verified numeric GitHub actors
-   and complete an installed-key token-mint/read probe for each reviewer App.
-   The narrowly scoped controller credential and both root-owned reviewer
+3. Install policy revision 2 with the three verified numeric GitHub actors and
+   complete an installed-key token-mint/read probe for each reviewer App. The
+   narrowly scoped controller credential and both root-owned reviewer
    credential sets are installed.
-4. The actual required MDK CI contexts and confirmation that the configured
-   branch policy matches the canonical checkout.
+4. Install policy revision 2's `Required CI` context and reverify it against the
+   live active `Safe Master` rule sourced from GitHub Actions.
 5. A protected `pip-release` GitHub environment with approved signing trust
    material, followed by an independently verified exact-head workflow run.
 6. Explicit authorization to activate the inert services and label exactly one

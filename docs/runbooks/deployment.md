@@ -346,9 +346,9 @@ intake:
   global_active_limit: 1
 dispatch_enabled: false
 github:
-  automation_actor_id: null
-  reviewer_general_actor_id: null
-  reviewer_secperf_actor_id: null
+  automation_actor_id: 292420120
+  reviewer_general_actor_id: 323997422
+  reviewer_secperf_actor_id: 323998100
 merge:
   mode: shadow
   autonomous: false
@@ -357,6 +357,8 @@ max_remediation_rounds: 3
 max_case_elapsed_seconds: 86400
 max_provider_failures: 3
 max_repeated_finding_fingerprint: 2
+required_ci_contexts:
+  - Required CI
 workspace_storage:
   require_distinct_filesystem: true
   minimum_free_bytes: 536870912000
@@ -405,8 +407,10 @@ After reviewed release installation, but before enabling any timer:
 
 4. Retain the JSON capability/bootstrap output and verify every effective
    profile binding plus board visibility from the service-owned root.
-5. Configure all three numeric GitHub actor IDs and the actual required MDK CI
-   contexts. Empty required contexts are not acceptable canary policy.
+5. Verify all three numeric GitHub actor IDs against live account/App evidence,
+   and verify `Required CI` is still the active GitHub Actions-sourced status
+   check in the MDK default-branch ruleset. Empty or drifted required contexts
+   are not acceptable canary policy.
 6. Provision `/etc/pip/github-webhook.secret` as a root-owned `0600` file.
    The installer creates a no-login `pip-ingress` identity and this spool
    boundary:

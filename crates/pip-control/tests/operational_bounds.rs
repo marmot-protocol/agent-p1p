@@ -123,7 +123,7 @@ fn create_case(store: &mut Store, observed_at: u64) {
             repository_id: 1_055_628_515,
             issue_number: 42,
             workflow_version: 2,
-            policy_revision: 1,
+            policy_revision: policy().revision,
             initial_state: "PLANNING".into(),
             observed_at,
             event: EventInput {

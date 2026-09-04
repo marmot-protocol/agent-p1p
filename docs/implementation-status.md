@@ -42,7 +42,9 @@ a completed canary.
 ## What is deliberately inert
 
 - `config/target/repositories/mdk.json` has intake disabled, repository paused,
-  dispatch disabled, merge mode `shadow`, and autonomous merge false.
+  dispatch disabled, merge mode `shadow`, and autonomous merge false. Revision
+  2 binds the three verified numeric GitHub actors and the live `Required CI`
+  ruleset context without granting activation authority.
 - The production installer does not enable or start any reconciliation,
   gateway, controller, or direct-worker path.
 - Controller and direct-worker instance templates plus the dedicated Hermes
@@ -68,9 +70,9 @@ they are not claims that local adapter tests already proved production:
    path, and MDK repository hook are installed; polling remains recovery, not
    the intended primary path. See
    [`evidence/2026-09-04-pirate-controller-token.md`](evidence/2026-09-04-pirate-controller-token.md).
-3. Populate and verify the three numeric GitHub actor identities and separately
-   scoped credentials. Configure the actual required MDK CI contexts; the
-   checked-in paused policy intentionally has none.
+3. Install and reverify policy revision 2, which binds the three numeric GitHub
+   actor identities and the live MDK `Required CI` context. Complete an
+   installed-key token-mint/read probe for each separately scoped reviewer App.
 4. Configure the protected `pip-release` GitHub environment and its signing
    trust material, then run and independently verify the exact-head signed
    release workflow. No signing secret belongs in this repository.

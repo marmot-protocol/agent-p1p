@@ -102,13 +102,14 @@ fn pending_ci_is_read_only_and_historical_failure_enters_remediation() {
 
 fn waiting_ci_store(path: std::path::PathBuf) -> Store {
     let mut store = Store::open(path).unwrap();
+    let policy = active_policy();
     store
         .create_case(&NewCase {
             case_key: "repo:984321#1240@1".into(),
             repository_id: 984_321,
             issue_number: 1240,
             workflow_version: 1,
-            policy_revision: 1,
+            policy_revision: policy.revision,
             initial_state: "PLANNING".into(),
             observed_at: 1,
             event: EventInput {
@@ -126,7 +127,7 @@ fn waiting_ci_store(path: std::path::PathBuf) -> Store {
     let results = results();
     ingest_worker_result(
         &mut store,
-        &active_policy().case_policy(),
+        &policy.case_policy(),
         &binding(&results[0]),
         &results[0],
     )
@@ -134,7 +135,7 @@ fn waiting_ci_store(path: std::path::PathBuf) -> Store {
     accept_plan(&mut store, &results[0]);
     ingest_worker_result(
         &mut store,
-        &active_policy().case_policy(),
+        &policy.case_policy(),
         &binding(&results[1]),
         &results[1],
     )

@@ -57,13 +57,13 @@ fn policy(directory: &tempfile::TempDir, minimum_free_bytes: u64) -> RepositoryP
     load_repository_policy(&serde_json::to_vec(&value).unwrap()).unwrap()
 }
 
-fn terminal_case() -> NewCase {
+fn terminal_case(policy_revision: u64) -> NewCase {
     NewCase {
         case_key: "repo:1055628515#1240@2".into(),
         repository_id: 1_055_628_515,
         issue_number: 1240,
         workflow_version: 2,
-        policy_revision: 1,
+        policy_revision,
         initial_state: "COMPLETED".into(),
         observed_at: 100,
         event: EventInput {
@@ -81,7 +81,7 @@ fn lifecycle_retires_one_retained_terminal_worktree_and_rechecks_capacity() {
     let policy = policy(&directory, 500);
     let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
     assert_eq!(
-        store.create_case(&terminal_case()).unwrap(),
+        store.create_case(&terminal_case(policy.revision)).unwrap(),
         ApplyResult::Applied
     );
     let probe = SequenceProbe {
@@ -116,7 +116,7 @@ fn lifecycle_fails_closed_on_the_wrong_filesystem_before_retirement() {
     let directory = tempfile::tempdir().unwrap();
     let policy = policy(&directory, 500);
     let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
-    store.create_case(&terminal_case()).unwrap();
+    store.create_case(&terminal_case(policy.revision)).unwrap();
     let probe = SequenceProbe {
         snapshots: RefCell::new(vec![WorkspaceStorageSnapshot {
             free_bytes: 1_000,
@@ -138,7 +138,7 @@ fn lifecycle_reports_low_capacity_without_retiring_recent_cases() {
     let directory = tempfile::tempdir().unwrap();
     let policy = policy(&directory, 500);
     let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
-    store.create_case(&terminal_case()).unwrap();
+    store.create_case(&terminal_case(policy.revision)).unwrap();
     let probe = SequenceProbe {
         snapshots: RefCell::new(vec![WorkspaceStorageSnapshot {
             free_bytes: 100,

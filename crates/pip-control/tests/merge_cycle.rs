@@ -194,7 +194,7 @@ fn ready_store(path: std::path::PathBuf) -> Store {
             repository_id: 984_321,
             issue_number: 1240,
             workflow_version: 1,
-            policy_revision: 1,
+            policy_revision: guarded_policy().revision,
             initial_state: "READY_TO_MERGE".into(),
             observed_at: 1,
             event: EventInput {
@@ -328,6 +328,7 @@ fn policy(mode: &str, autonomous: bool) -> pip_control::RepositoryPolicy {
     value["github"]["automation_actor_id"] = json!(202880);
     value["github"]["reviewer_general_actor_id"] = json!(202881);
     value["github"]["reviewer_secperf_actor_id"] = json!(202882);
+    value["required_ci_contexts"] = json!(["test"]);
     value["merge"]["mode"] = json!(mode);
     value["merge"]["autonomous"] = json!(autonomous);
     load_repository_policy(&serde_json::to_vec(&value).unwrap()).unwrap()

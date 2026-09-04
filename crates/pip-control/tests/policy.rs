@@ -4,6 +4,7 @@ use pip_control::{PolicyError, load_repository_policy};
 fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
     let bytes = include_bytes!("../../../config/target/repositories/mdk.json");
     let policy = load_repository_policy(bytes).unwrap();
+    assert_eq!(policy.revision, 2);
     assert_eq!(policy.repository.id, 1_055_628_515);
     assert_eq!(policy.repository.full_name(), "marmot-protocol/mdk");
     assert_eq!(policy.repository.default_branch, "master");
@@ -16,9 +17,9 @@ fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
     assert!(!policy.intake.enabled);
     assert!(policy.intake.paused);
     assert!(!policy.dispatch_enabled);
-    assert_eq!(policy.github.automation_actor_id, None);
-    assert_eq!(policy.github.reviewer_general_actor_id, None);
-    assert_eq!(policy.github.reviewer_secperf_actor_id, None);
+    assert_eq!(policy.github.automation_actor_id, Some(292_420_120));
+    assert_eq!(policy.github.reviewer_general_actor_id, Some(323_997_422));
+    assert_eq!(policy.github.reviewer_secperf_actor_id, Some(323_998_100));
     assert_eq!(
         policy.intake.trusted_actor_ids,
         [202880, 258432291, 292420120]
@@ -29,6 +30,7 @@ fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
     assert_eq!(policy.max_case_elapsed_seconds, 86_400);
     assert_eq!(policy.max_provider_failures, 3);
     assert_eq!(policy.max_repeated_finding_fingerprint, 2);
+    assert_eq!(policy.required_ci_contexts, ["Required CI"]);
     assert_eq!(policy.sensitive_scope_categories.len(), 7);
     assert!(policy.intake.held_issue_numbers.is_empty());
     assert_eq!(policy.workflow_policy().unwrap().roles().len(), 5);
@@ -46,16 +48,20 @@ fn policy_rejects_unknown_fields_model_fallback_and_shadow_merge_authority() {
     value["intake"]["enabled"] = serde_json::json!(true);
     value["intake"]["paused"] = serde_json::json!(false);
     value["dispatch_enabled"] = serde_json::json!(true);
+    assert!(load_repository_policy(&serde_json::to_vec(&value).unwrap()).is_ok());
+
+    value["github"]["reviewer_secperf_actor_id"] =
+        value["github"]["reviewer_general_actor_id"].clone();
     assert!(matches!(
         load_repository_policy(&serde_json::to_vec(&value).unwrap()),
         Err(PolicyError::Invalid)
     ));
-    value["github"]["automation_actor_id"] = serde_json::json!(202880);
-    value["github"]["reviewer_general_actor_id"] = serde_json::json!(202881);
-    value["github"]["reviewer_secperf_actor_id"] = serde_json::json!(202882);
-    assert!(load_repository_policy(&serde_json::to_vec(&value).unwrap()).is_ok());
 
-    value["github"]["reviewer_secperf_actor_id"] = serde_json::json!(202881);
+    let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+    value["intake"]["enabled"] = serde_json::json!(true);
+    value["intake"]["paused"] = serde_json::json!(false);
+    value["dispatch_enabled"] = serde_json::json!(true);
+    value["github"]["automation_actor_id"] = serde_json::Value::Null;
     assert!(matches!(
         load_repository_policy(&serde_json::to_vec(&value).unwrap()),
         Err(PolicyError::Invalid)
