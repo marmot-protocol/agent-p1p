@@ -74,7 +74,7 @@ install_version /work/releases/v0
 first_target=$(readlink -f /opt/pip/current)
 test -x /opt/pip/current/bin/pip-control
 test "$(stat -c '%U:%G:%a' /var/lib/pip/ledger.db)" = pip-control:pip-control:600
-test "$(stat -c '%U:%G:%a' /var/lib/pip)" = pip-control:pip-control:700
+test "$(stat -c '%U:%G:%a' /var/lib/pip)" = pip-control:pip-control:710
 test "$(stat -c '%U:%G:%a' /var/lib/pip/worktrees)" = pip-control:pip-control:770
 test "$(getent passwd pip-ingress | cut -d: -f6-7)" = /nonexistent:/usr/sbin/nologin
 test "$(id -Gn pip-ingress)" = pip-ingress
@@ -110,7 +110,7 @@ second_target=$(readlink -f /opt/pip/current)
 test "$second_target" != "$first_target"
 test -d "$first_target"
 /opt/pip/current/bin/pip-control status --database /var/lib/pip/ledger.db --now 1787220000 \
-  | jq -e '.ok and .ledger.schema_version == 6' >/dev/null
+  | jq -e '.ok and .ledger.schema_version == 7' >/dev/null
 
 install -d -m 0755 /failure-bin
 touch /run/pip-fail-reload-once
