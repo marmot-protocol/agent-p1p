@@ -3,7 +3,7 @@ Description=Schedule Pip credential-free direct worker cycles for %i
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=15s
+OnUnitInactiveSec=15s
 RandomizedDelaySec=3s
 Persistent=true
 Unit=pip-direct-worker@%i.service

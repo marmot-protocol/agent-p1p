@@ -4,7 +4,7 @@ Documentation=https://github.com/marmot-protocol/agent-p1p
 
 [Timer]
 OnBootSec=30s
-OnUnitActiveSec=5s
+OnUnitInactiveSec=5s
 RandomizedDelaySec=1s
 AccuracySec=1s
 Persistent=true

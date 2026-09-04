@@ -15,7 +15,8 @@ fn installed_shadow_unit_is_hardened_credential_bound_and_never_dispatches() {
     assert!(command.contains("shadow-reconcile"));
     assert!(!command.contains("route-consumer"));
     assert!(!command.contains(" merge"));
-    assert!(timer.contains("OnUnitActiveSec=5min"));
+    assert!(timer.contains("OnUnitInactiveSec=5min"));
+    assert!(!timer.contains("OnUnitActiveSec="));
 }
 
 #[test]
@@ -53,7 +54,8 @@ fn staged_active_controller_template_uses_a_dedicated_shared_hermes_root() {
     assert!(!service.contains("github-reviewer-general.token"));
     assert!(!service.contains("github-reviewer-secperf.token"));
     assert!(!service.contains("/home/jeff"));
-    assert!(timer.contains("OnUnitActiveSec=15s"));
+    assert!(timer.contains("OnUnitInactiveSec=15s"));
+    assert!(!timer.contains("OnUnitActiveSec="));
 }
 
 #[test]
@@ -75,7 +77,8 @@ fn direct_worker_template_has_provider_state_but_no_controller_credentials() {
     assert!(service.contains("InaccessiblePaths=/var/lib/pip/ledger.db"));
     assert!(!service.contains("--hermes"));
     assert!(service.contains("/var/lib/pip/hermes"));
-    assert!(timer.contains("OnUnitActiveSec=15s"));
+    assert!(timer.contains("OnUnitInactiveSec=15s"));
+    assert!(!timer.contains("OnUnitActiveSec="));
 }
 
 #[test]
@@ -148,5 +151,6 @@ fn webhook_consumer_is_controller_owned_bounded_and_credential_scoped() {
     assert!(!service.contains("github-reviewer-general"));
     assert!(!service.contains("github-reviewer-secperf"));
     assert!(!service.contains("HERMES_HOME"));
-    assert!(timer.contains("OnUnitActiveSec=5s"));
+    assert!(timer.contains("OnUnitInactiveSec=5s"));
+    assert!(!timer.contains("OnUnitActiveSec="));
 }

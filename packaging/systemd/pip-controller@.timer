@@ -3,7 +3,7 @@ Description=Run the Pip active controller cycle for %i
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=15s
+OnUnitInactiveSec=15s
 AccuracySec=1s
 RandomizedDelaySec=2s
 Persistent=true

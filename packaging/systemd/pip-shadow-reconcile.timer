@@ -3,7 +3,7 @@ Description=Periodically run Pip non-dispatching reconciliation
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=5min
+OnUnitInactiveSec=5min
 RandomizedDelaySec=15s
 Persistent=true
 Unit=pip-shadow-reconcile.service
