@@ -78,7 +78,29 @@ pip-hermes-gateway.service disabled inactive
 ```
 
 This proves authentic non-intake issue events traverse and retire through the
-installed ingress/spool/ledger boundary without activation. It does not prove
-the configured-label live GitHub reread path; that still requires one
-deliberately controlled `pip-ok` delivery while all activation controls remain
-off.
+installed ingress/spool/ledger boundary without activation.
+
+## Controlled configured-label result
+
+With every execution unit still disabled, trusted actor 202880 added `pip-ok`
+to closed MDK issue 1652 and left it present for the consumer's live reread.
+The installed consumer processed delivery
+`bc058050-a83b-11f1-8b8f-9181b3f5e224` with this exact candidate result:
+
+```json
+{"blockers":["INTAKE_DISABLED","REPOSITORY_PAUSED","DISPATCH_DISABLED","ISSUE_CLOSED"],"case_key":null,"decision":"INELIGIBLE","issue_id":5333857892,"issue_number":1652}
+```
+
+The delivery was `APPLIED`; no case, event, task projection, run, or outbox
+effect was created. The actor then removed `pip-ok`. The consumer processed the
+resulting `issues/unlabeled` delivery
+`fa2b13e0-a83b-11f1-9d82-3ec84b2771a0` as a non-candidate, and a live GitHub
+reread showed issue 1652 closed with only its `bug` label.
+
+At the final check, the spool contained zero pending and eight processed
+envelopes. The ledger contained eight immutable webhook deliveries and still
+contained zero cases, events, evidence records, runs, findings, task
+projections, direct attempts, workspace retirements, or outbox effects. The
+consumer, controller, direct-worker, and Hermes gateway units remained disabled
+and inactive. This completes the configured-label ingress, spool, live-reread,
+and ledger proof without granting activation authority.

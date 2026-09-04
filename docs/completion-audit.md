@@ -100,21 +100,18 @@ implementation guess:
 1. A non-dispatching live provider capability probe and outage/recovery drill,
    plus confirmation that the separately supervised gateway uses the already
    bootstrapped service-owned Hermes root.
-2. One deliberately controlled configured-label delivery through the installed
-   Funnel, isolated receiver, and spool-to-ledger consumer. The live path has
-   passed signed ping, replay, reachability, empty-spool, and two authentic
-   non-intake issue-event service probes without enabling the consumer timer;
-   those non-intake events did not exercise the exact-issue reread.
-3. A protected `pip-release` GitHub environment with approved signing trust
+2. A protected `pip-release` GitHub environment with approved signing trust
    material, followed by an independently verified exact-head workflow run.
-4. Explicit authorization to activate the inert services and label exactly one
+3. Explicit authorization to activate the inert services and label exactly one
    suitable MDK issue. Installation alone grants no activation authority.
-5. JG acceptance of the complete shadow result before Phase 10 or legacy
+4. JG acceptance of the complete shadow result before Phase 10 or legacy
    retirement begins.
 
 Installed policy revision 2, both reviewer App token-mint/read probes, and the
 live `Safe Master` / GitHub Actions `Required CI` match are recorded in
 [`evidence/2026-09-04-pirate-reviewer-apps.md`](evidence/2026-09-04-pirate-reviewer-apps.md).
+The completed configured-label add/live-reread/remove proof is recorded in
+[`evidence/2026-09-04-pirate-webhook-consumer.md`](evidence/2026-09-04-pirate-webhook-consumer.md).
 
 Until those inputs exist, the correct state is the checked-in one: intake
 disabled, repository paused, dispatch disabled, shadow merge mode, autonomous
