@@ -96,6 +96,30 @@ fn completed_result_comes_from_the_latest_durable_run_envelope() {
 }
 
 #[test]
+fn contract_extraction_preserves_raw_transport_evidence_and_unknown_fields() {
+    let runner = FakeRunner::default();
+    runner.output(
+        r#"{
+      "task":{"id":"task-1","title":"Plan","status":"done","body":"{}"},
+      "runs":[{"outcome":"completed","profile":"planner","metadata":{
+        "contract_version":2,"task_id":"task-1","worker_session_id":"session-1",
+        "artifacts":["/tmp/plan.md"],"_staged_artifacts":[],"unknown":true
+      }}]
+    }"#,
+    );
+    let completed = reader(runner)
+        .show_completed_result("pip-mdk", "task-1")
+        .unwrap();
+    let original = completed.metadata.clone();
+    let contract = completed.worker_contract_metadata().unwrap();
+    assert_eq!(
+        contract,
+        serde_json::json!({"contract_version":2,"task_id":"task-1","unknown":true})
+    );
+    assert_eq!(completed.metadata, original);
+}
+
+#[test]
 fn incomplete_or_unsuccessful_run_cannot_be_consumed_as_a_result() {
     for payload in [
         r#"{"task":{"id":"task-1","title":"Plan","status":"in_progress","assignee":"planner","created_by":"pip-controller","body":"{}"},"runs":[]}"#,

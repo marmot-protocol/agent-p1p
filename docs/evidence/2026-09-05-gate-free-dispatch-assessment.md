@@ -2,7 +2,9 @@
 
 Status: gate-free Rust dispatch implemented and tested locally; an isolated
 real-Hermes CLI/scheduler recovery test passed on Pirate. Not installed or
-activated in the production Pip runtime. A real planner run remains unproven.
+activated in the production Pip runtime. The subsequent
+[real planner/result-contract probe](2026-09-05-real-planner-contract.md) passed
+after a Pip transport-metadata adapter fix.
 
 ## Recommendation
 
@@ -194,6 +196,7 @@ evidence records, zero runs/projections, and no pending outbox work. The
 temporary 1.2 GiB test-source/build directory was removed after validation;
 no production deployment or canary cleanup was performed.
 
-Next: the real planner/result-contract proof in isolation, not another live
-label attempt. A deployment candidate and explicit abandoned-case recovery
-decision are still required before renewed live activation.
+Follow-up: the [real planner/result-contract proof](2026-09-05-real-planner-contract.md)
+subsequently passed in isolation after a Pip completion-metadata adapter fix.
+Runtime packaging/bootstrap follow-ups, a deployment candidate, and an explicit
+abandoned-case recovery decision are still required before renewed activation.

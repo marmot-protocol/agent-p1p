@@ -1,0 +1,11 @@
+{
+  "repository_id": 17,
+  "repository": "pip-fixture/local-only",
+  "number": 1,
+  "title": "Empty text is counted as one line",
+  "body": "The local count_lines helper in src/lib.rs returns 1 for empty input. Define logical lines using Rust str::lines: empty input has zero lines, a trailing newline does not add an extra line, and CRLF counts as one delimiter. Preserve internal empty lines. Plan a minimal repo-local fix and tests; do not implement it.",
+  "labels": ["fixture-authorized"],
+  "comments": [],
+  "related_work": [],
+  "fixture_only": true
+}

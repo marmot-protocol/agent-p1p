@@ -69,6 +69,57 @@ fn completed_hermes_result_is_bound_to_the_owned_projection_and_ingested_once() 
 }
 
 #[test]
+fn stock_hermes_completion_annotations_are_not_worker_contract_fields() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    project_planner(&mut store);
+    let mut result = planner_result();
+    result["worker_session_id"] = json!("20260905_083128_12a0bd");
+    result["artifacts"] = json!(["/isolated/plans/plan-v1.md"]);
+    result["_staged_artifacts"] = json!(["/isolated/attachments/plan-v1.md"]);
+    let runner = FakeRunner::default();
+    runner.json(completed_planner("planner", result));
+    assert!(matches!(
+        ingest_completed_once_with(&mut store, &active_policy(), runner, "hermes", 10).unwrap(),
+        ResultCycle::Ingested {
+            transition_count: 1,
+            ..
+        }
+    ));
+    assert_eq!(store.run_count().unwrap(), 1);
+}
+
+#[test]
+fn transport_annotations_never_hide_unknown_fields_bad_shapes_or_binding_drift() {
+    for (field, value) in [
+        ("invented_contract_field", json!(true)),
+        ("_invented_transport_field", json!(true)),
+        ("worker_session_id", json!({"forged": true})),
+        ("worker_session_id", json!("")),
+        ("artifacts", json!({"path": "/tmp/result"})),
+        ("artifacts", json!([false])),
+        ("_staged_artifacts", json!("/tmp/result")),
+        ("task_id", json!("foreign-task")),
+        ("actual_model", json!("openai-codex/auto")),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+        project_planner(&mut store);
+        let mut result = planner_result();
+        result["worker_session_id"] = json!("20260905_083128_12a0bd");
+        result[field] = value;
+        let runner = FakeRunner::default();
+        runner.json(completed_planner("planner", result));
+        assert!(
+            ingest_completed_once_with(&mut store, &active_policy(), runner, "hermes", 10,)
+                .is_err(),
+            "accepted {field}"
+        );
+        assert_eq!(store.run_count().unwrap(), 0);
+    }
+}
+
+#[test]
 fn wrong_profile_or_self_described_model_never_mutates_the_case() {
     for (profile, mutate) in [("foreign", false), ("planner", true)] {
         let directory = tempfile::tempdir().unwrap();

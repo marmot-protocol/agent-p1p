@@ -256,7 +256,39 @@ pub struct TaskDetail {
 pub struct CompletedTaskResult {
     pub task: TaskSnapshot,
     pub profile: String,
+    /// Original durable Hermes run metadata, including transport annotations.
     pub metadata: Value,
+}
+
+impl CompletedTaskResult {
+    /// Separate stock Hermes's completion annotations from the strict worker
+    /// contract. These fields are transport diagnostics, never authorization or
+    /// artifact-validation evidence. Retain the original metadata untouched.
+    /// Unknown fields deliberately remain for the contract decoder to reject.
+    pub fn worker_contract_metadata(&self) -> Result<Value, HermesError> {
+        let mut contract = self
+            .metadata
+            .as_object()
+            .cloned()
+            .ok_or(HermesError::InvalidRunMetadata)?;
+        if let Some(session) = contract.remove("worker_session_id")
+            && !session.as_str().is_some_and(valid_id)
+        {
+            return Err(HermesError::InvalidRunMetadata);
+        }
+        for field in ["artifacts", "_staged_artifacts"] {
+            if let Some(artifacts) = contract.remove(field)
+                && !artifacts.as_array().is_some_and(|paths| {
+                    paths
+                        .iter()
+                        .all(|path| path.as_str().is_some_and(|path| !path.trim().is_empty()))
+                })
+            {
+                return Err(HermesError::InvalidRunMetadata);
+            }
+        }
+        Ok(Value::Object(contract))
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

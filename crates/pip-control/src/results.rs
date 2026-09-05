@@ -172,7 +172,7 @@ pub fn ingest_completed_once_with<R: CommandRunner>(
             return Err(ResultCycleError::ProfileMismatch);
         }
         let binding = binding(&projection.task_id, &desired)?;
-        let result: WorkerResult = serde_json::from_value(completed.metadata)
+        let result: WorkerResult = serde_json::from_value(completed.worker_contract_metadata()?)
             .map_err(|error| ResultCycleError::MalformedResult(error.to_string()))?;
         let workflow_policy = policy
             .workflow_policy()

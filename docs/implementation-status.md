@@ -9,14 +9,20 @@ Release `933ec69` is installed on Pirate. Recurring timer readiness passed,
 but the labeled canary stopped at a synthetic Hermes gate: stock Hermes
 promoted it to `ready`, which Pip rejected. Authorization was removed, the case
 was recorded as ABANDONED, and the runtime was returned to inert policy revision
-3. No planner or full pipeline succeeded.
+3. That canary never reached a planner or full pipeline.
 
 The gate-free refactor is now implemented in source. An isolated real-Hermes
 CLI/scheduler test passed with a deterministic callback and lost-create-reply
-recovery; it did not invoke a model. The production release, schema-7 ledger,
+recovery; it did not invoke a model. A subsequent isolated real Sol planner
+produced a plan whose untouched durable completion was accepted exactly once
+after a regression-tested Pip transport-metadata adapter fix. No Hermes fork
+was needed. The production release, schema-7 ledger,
 and abandoned canary evidence have not been changed. Details and remaining
 proof gates:
 [`evidence/2026-09-05-gate-free-dispatch-assessment.md`](evidence/2026-09-05-gate-free-dispatch-assessment.md).
+The real-provider result, runtime limitations, and newly observed profile
+re-bootstrap incompatibility are recorded in
+[`evidence/2026-09-05-real-planner-contract.md`](evidence/2026-09-05-real-planner-contract.md).
 
 This file is the implementation inventory. The target behavior remains defined
 by [`pip-architecture-plan.md`](pip-architecture-plan.md); the migration
@@ -81,8 +87,10 @@ empty-board Pip gateway probe have passed their inert real-host gates.
 
 1. Finish the isolated gate-free dispatch/recovery proof matrix, including
    result-contract ingestion under revocation and partial reviewer fan-out.
-2. Run one real planner with the configured model in an isolated board/workspace
-   and validate its actual result contract. No Hermes fork.
+2. The isolated real-planner/result-contract gate has passed. Before deployment,
+   resolve stock Hermes's bundled-skill seeding versus Pip's bootstrap ownership
+   rules, package the worker contract guide reliably, and check worker toolchain
+   availability. No Hermes fork.
 3. Build and verify the candidate release and its schema-8 migration/recovery.
 4. Decide explicit retirement/reconciliation and retry semantics for the
    abandoned canary and orphan gate; do not reset production history.
@@ -122,8 +130,9 @@ the controller, written to `/var/lib/pip/direct-queue/inbox`, executed by
 the separate `pip-worker` identity, and returned through `results`; it is
 never represented as a Hermes provider override. The controller alone records
 the attempt and ingests the result. Real-host compatibility, process-scoped
-provider recovery, and empty-board gateway supervision have passed; a deterministic isolated task now passes, but a real planner and full pipeline
-remain unproven.
+provider recovery, and empty-board gateway supervision have passed. Both a
+deterministic isolated task and a real planner/result-ingestion probe now pass;
+the live full pipeline remains unproven.
 
 The first exact-version compatibility review on 2026-09-03 targets Hermes
 `v2026.8.31` at commit
@@ -133,8 +142,9 @@ systemd gateway invocation to declare `--external-supervisor`. That pinned code
 is installed root-owned on Pirate. Pip's service-owned Hermes runtime bootstrap
 has now passed against that installation; the separately supervised gateway and
 live capability, process-scoped outage/recovery, and empty-board supervised
-gateway probes have passed. The gate-free deterministic scheduler test is now proven separately; actual
-planner execution remains a distinct pre-canary proof gate.
+gateway probes have passed. The gate-free deterministic scheduler and actual
+planner/result-ingestion tests are proven separately. Runtime packaging and
+post-worker bootstrap compatibility still need resolution before a live canary.
 
 The inert Pirate installation and service-root bootstrap are recorded in
 [`evidence/2026-09-03-pirate-inert-install.md`](evidence/2026-09-03-pirate-inert-install.md).

@@ -50,6 +50,13 @@ Unknown top-level fields are rejected. Return timestamps as integers, not ISO
 strings. Put supplemental diagnostics, artifact paths, confidence, and tool
 limitations under `evidence`; do not invent top-level fields.
 
+Stock Hermes may add `worker_session_id`, `artifacts`, and `_staged_artifacts`
+to its durable completion metadata. Pip's Hermes adapter validates and separates
+only these known transport annotations before strict contract decoding; it
+retains the original metadata unchanged. They do not provide authorization,
+model attestation, or proof that an artifact exists. Other unknown fields still
+fail closed. Workers should not add these fields to their contract JSON.
+
 ## Planner
 
 Additional fields:
