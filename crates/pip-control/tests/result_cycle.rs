@@ -69,6 +69,58 @@ fn completed_hermes_result_is_bound_to_the_owned_projection_and_ingested_once() 
 }
 
 #[test]
+fn late_completion_after_revocation_takeover_or_replan_cannot_advance_the_case() {
+    for (state, event) in [
+        ("ABANDONED", "AUTHORIZATION_REMOVED"),
+        ("TAKEN_OVER", "HUMAN_TAKEOVER"),
+        ("PLANNING", "REPLAN_REQUESTED"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+        project_planner(&mut store);
+        store
+            .apply_transition(
+                &pip_store::TransitionInput {
+                    case_key: "repo:984321#1240@1".into(),
+                    expected_revision: 1,
+                    next_state: state.into(),
+                    remediation_round: 0,
+                    plan_version: 0,
+                    pr_number: None,
+                    head_sha: None,
+                    observed_at: 9,
+                    event: EventInput {
+                        event_id: "superseding-event".into(),
+                        event_type: event.into(),
+                        payload: json!({}),
+                    },
+                    run: None,
+                    evidence: Vec::new(),
+                    findings: Vec::new(),
+                    effects: Vec::new(),
+                },
+                None,
+            )
+            .unwrap();
+        let before = store.status(10).unwrap();
+        let runner = FakeRunner::default();
+        runner.json(completed_planner("planner", planner_result()));
+        assert_eq!(
+            ingest_completed_once_with(&mut store, &active_policy(), runner.clone(), "hermes", 10)
+                .unwrap(),
+            ResultCycle::Idle
+        );
+        assert_eq!(store.status(10).unwrap(), before);
+        assert_eq!(store.run_count().unwrap(), 0);
+        assert_eq!(
+            runner.outputs.borrow().len(),
+            1,
+            "must not query obsolete task"
+        );
+    }
+}
+
+#[test]
 fn stock_hermes_completion_annotations_are_not_worker_contract_fields() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = Store::open(directory.path().join("ledger.db")).unwrap();

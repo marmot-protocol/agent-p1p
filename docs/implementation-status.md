@@ -93,8 +93,10 @@ reconciliation, conversational Sol probe, direct Grok/Kimi/Opus capability
 probes, isolated direct-provider outage/recovery drill, and supervised
 empty-board Pip gateway probe have passed their inert real-host gates.
 
-1. Finish the isolated gate-free dispatch/recovery proof matrix, including
-   result-contract ingestion under revocation and partial reviewer fan-out.
+1. The focused fixture proof matrix now covers late-result rejection after
+   revocation/takeover/replan and recovery from partial reviewer fan-out.
+   See [fresh canary preparation](evidence/2026-09-05-fresh-canary-readiness.md).
+   Actual full live reviewer execution remains unproven.
 2. The isolated real-planner/result-contract gate, stock-Hermes re-bootstrap,
    and packaged worker guide checks have passed. The service-visible Rust
    toolchain is now provisioned and sandbox-tested; retain the parallel-test
@@ -105,8 +107,9 @@ empty-board Pip gateway probe have passed their inert real-host gates.
    [release recovery evidence](evidence/2026-09-05-schema8-release-recovery.md).
    JG subsequently approved the live inert installation, which passed ledger
    preservation and three-profile bootstrap checks. Activation is still separate.
-4. Decide explicit retirement/reconciliation and retry semantics for the
-   abandoned canary and orphan gate; do not reset production history.
+4. Preserve the abandoned canary and its unassigned historical gate. The
+   proposed next trial uses a different issue after explicit selection;
+   verify that no Hermes default-assignee fallback can claim the old gate.
 5. Only then authorize renewed live shadow activation.
 
 The installed webhook boundary, controller credential, configured-label live
