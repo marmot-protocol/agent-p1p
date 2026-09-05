@@ -5,7 +5,8 @@ Description=Periodically run Pip non-dispatching reconciliation
 OnBootSec=2min
 OnUnitInactiveSec=5min
 RandomizedDelaySec=15s
-Persistent=true
+# Monotonic timers must ignore stamps left by older Persistent=true units.
+Persistent=false
 Unit=pip-shadow-reconcile.service
 
 [Install]

@@ -4,8 +4,10 @@ Description=Schedule Pip credential-free direct worker cycles for %i
 [Timer]
 OnBootSec=2min
 OnUnitInactiveSec=15s
+AccuracySec=1s
 RandomizedDelaySec=3s
-Persistent=true
+# Monotonic timers must ignore stamps left by older Persistent=true units.
+Persistent=false
 Unit=pip-direct-worker@%i.service
 
 [Install]

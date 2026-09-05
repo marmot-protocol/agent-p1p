@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+bash /source/tests/lifecycle/timer-restart.sh /source/packaging/systemd
+
 rm -rf /work/repo
 install -d -m 0755 /work
 cp -a /source /work/repo

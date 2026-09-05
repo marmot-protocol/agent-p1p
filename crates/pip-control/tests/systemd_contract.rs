@@ -1,4 +1,17 @@
 #[test]
+fn monotonic_timers_ignore_legacy_persistent_stamps() {
+    for timer in [
+        include_str!("../../../packaging/systemd/pip-shadow-reconcile.timer"),
+        include_str!("../../../packaging/systemd/pip-controller@.timer"),
+        include_str!("../../../packaging/systemd/pip-direct-worker@.timer"),
+        include_str!("../../../packaging/systemd/pip-webhook-consumer@.timer"),
+    ] {
+        assert!(timer.contains("Persistent=false"));
+        assert!(!timer.lines().any(|line| line == "Persistent=true"));
+    }
+}
+
+#[test]
 fn installed_shadow_unit_is_hardened_credential_bound_and_never_dispatches() {
     let service = include_str!("../../../packaging/systemd/pip-shadow-reconcile.service");
     let timer = include_str!("../../../packaging/systemd/pip-shadow-reconcile.timer");
@@ -79,6 +92,7 @@ fn direct_worker_template_has_provider_state_but_no_controller_credentials() {
     assert!(service.contains("/var/lib/pip/hermes"));
     assert!(timer.contains("OnUnitInactiveSec=15s"));
     assert!(!timer.contains("OnUnitActiveSec="));
+    assert!(timer.contains("AccuracySec=1s"));
 }
 
 #[test]

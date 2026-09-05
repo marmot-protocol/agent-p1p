@@ -1,9 +1,17 @@
 # Rust implementation status
 
-**Snapshot date:** 2026-09-04
+**Snapshot date:** 2026-09-05
 **Activation state:** public webhook receipt boundary enabled on Pirate;
 controller credential provisioned; consumer timer, controller, workers, Hermes
 gateway, and dispatch remain disabled
+
+The latest activation drained the superseded webhook backlog successfully but
+rolled back when recurring timers did not fire. The timer restart regression
+has been reproduced independently; the source fix and regression test are
+documented in
+[`evidence/2026-09-05-pirate-timer-restart.md`](evidence/2026-09-05-pirate-timer-restart.md).
+Deployment and another live readiness check are still required before labeling
+the canary.
 
 This file is the implementation inventory. The target behavior remains defined
 by [`pip-architecture-plan.md`](pip-architecture-plan.md); the migration
