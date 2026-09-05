@@ -74,6 +74,9 @@ fn late_completion_after_revocation_takeover_or_replan_cannot_advance_the_case()
         ("ABANDONED", "AUTHORIZATION_REMOVED"),
         ("TAKEN_OVER", "HUMAN_TAKEOVER"),
         ("PLANNING", "REPLAN_REQUESTED"),
+        ("COMPLETED", "WORKFLOW_COMPLETED"),
+        ("BLOCKED", "WORKFLOW_BLOCKED"),
+        ("ESCALATED", "WORKFLOW_ESCALATED"),
     ] {
         let directory = tempfile::tempdir().unwrap();
         let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
@@ -105,11 +108,17 @@ fn late_completion_after_revocation_takeover_or_replan_cannot_advance_the_case()
         let before = store.status(10).unwrap();
         let runner = FakeRunner::default();
         runner.json(completed_planner("planner", planner_result()));
-        assert_eq!(
-            ingest_completed_once_with(&mut store, &active_policy(), runner.clone(), "hermes", 10)
-                .unwrap(),
-            ResultCycle::Idle
-        );
+        let mut migrated = active_policy();
+        migrated.revision += 1;
+        migrated.roles[0].model = "model-after-migration".into();
+        for policy in [active_policy(), migrated] {
+            assert_eq!(
+                ingest_completed_once_with(&mut store, &policy, runner.clone(), "hermes", 10)
+                    .unwrap(),
+                ResultCycle::Idle,
+                "historical {state} task must not be revalidated against new models"
+            );
+        }
         assert_eq!(store.status(10).unwrap(), before);
         assert_eq!(store.run_count().unwrap(), 0);
         assert_eq!(
@@ -118,6 +127,24 @@ fn late_completion_after_revocation_takeover_or_replan_cannot_advance_the_case()
             "must not query obsolete task"
         );
     }
+}
+
+#[test]
+fn live_projection_model_drift_still_fails_before_querying_hermes() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    project_planner(&mut store);
+    let before = store.status(10).unwrap();
+    let runner = FakeRunner::default();
+    runner.json(completed_planner("planner", planner_result()));
+    let mut policy = active_policy();
+    policy.roles[0].model = "model-after-migration".into();
+    assert!(matches!(
+        ingest_completed_once_with(&mut store, &policy, runner.clone(), "hermes", 10),
+        Err(pip_control::ResultCycleError::InvalidProjection)
+    ));
+    assert_eq!(store.status(10).unwrap(), before);
+    assert_eq!(runner.outputs.borrow().len(), 1);
 }
 
 #[test]

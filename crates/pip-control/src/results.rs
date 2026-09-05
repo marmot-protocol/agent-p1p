@@ -108,7 +108,6 @@ pub fn ingest_completed_once_with<R: CommandRunner>(
         }
         let desired: TaskCreateSpec = serde_json::from_value(projection.desired.clone())
             .map_err(|_| ResultCycleError::InvalidProjection)?;
-        validate_projection(&projection.task_id, &desired, policy)?;
         let desired_body = desired
             .body
             .as_object()
@@ -125,6 +124,10 @@ pub fn ingest_completed_once_with<R: CommandRunner>(
         {
             continue;
         }
+        // Historical projections retain their original model/profile bindings.
+        // Only current, runnable work is checked against today's role policy;
+        // retired or superseded evidence must not block unrelated new cases.
+        validate_projection(&projection.task_id, &desired, policy)?;
         let completed = match reader.show_completed_result(&policy.board, &projection.task_id) {
             Ok(completed) => completed,
             Err(HermesError::IncompleteTask | HermesError::IncompleteRun) => continue,
