@@ -1,10 +1,10 @@
 use std::path::Path;
 
 use pip_store::{
-    ApplyResult, DirectAttemptStatus, EffectInput, EventInput, EvidenceInput, FaultPoint,
-    FindingInput, NewCase, PolicyInput, ReviewObservationInput, RunInput, Store, StoreError,
-    TaskProjectionInput, TransitionInput, WebhookDeliveryInput, WorkspaceRetirementInput,
-    WorkspaceRetirementOutcome,
+    ApplyResult, CreateReservation, DirectAttemptStatus, DispatchIntent, DispatchTransport,
+    EffectInput, EventInput, EvidenceInput, FaultPoint, FindingInput, NewCase, PolicyInput,
+    ReviewObservationInput, RunInput, Store, StoreError, TaskProjectionInput, TransitionInput,
+    WebhookDeliveryInput, WorkspaceRetirementInput, WorkspaceRetirementOutcome,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -82,9 +82,310 @@ fn transition() -> TransitionInput {
 #[test]
 fn migration_creates_hardened_authoritative_schema() {
     let (_directory, store) = open();
-    assert_eq!(store.schema_version().unwrap(), 7);
+    assert_eq!(store.schema_version().unwrap(), 8);
     assert!(store.foreign_keys_enabled().unwrap());
     assert_eq!(store.journal_mode().unwrap(), "wal");
+}
+
+fn dispatch_intents() -> Vec<DispatchIntent> {
+    vec![DispatchIntent {
+        intent_id: "planner:worker".into(),
+        transport: DispatchTransport::Hermes,
+        desired: json!({"model": "configured-model", "body": {"evidence": "frozen"}}),
+    }]
+}
+
+#[test]
+fn dispatch_manifest_is_frozen_before_external_creation_and_survives_restart() {
+    let (directory, mut store) = open();
+    store.create_case(&new_case()).unwrap();
+    let claim = store.claim_effect("controller", 100, 30).unwrap().unwrap();
+    let intents = dispatch_intents();
+    assert_eq!(
+        store
+            .freeze_dispatch_intents(&claim, &intents, 101)
+            .unwrap(),
+        ApplyResult::Applied
+    );
+    assert_eq!(
+        store
+            .freeze_dispatch_intents(&claim, &intents, 102)
+            .unwrap(),
+        ApplyResult::Replayed
+    );
+    let mut changed = intents.clone();
+    changed[0].desired["model"] = json!("another-model");
+    assert!(matches!(
+        store.freeze_dispatch_intents(&claim, &changed, 103),
+        Err(StoreError::IdempotencyConflict { .. })
+    ));
+    drop(store);
+    let store = Store::open(directory.path().join("ledger.db")).unwrap();
+    assert_eq!(
+        store.dispatch_intents(&claim.effect_id).unwrap(),
+        Some(intents)
+    );
+    assert_eq!(store.status(104).unwrap().task_projections, 0);
+    assert_eq!(store.status(104).unwrap().outbox_delivered, 0);
+    assert_eq!(store.status(104).unwrap().dispatch_batches, 1);
+    assert_eq!(store.status(104).unwrap().dispatch_create_attempts, 0);
+}
+
+#[test]
+fn dispatch_manifest_freezes_fanout_membership_and_rejects_invalid_inputs_atomically() {
+    let (_directory, mut store) = open();
+    store.create_case(&new_case()).unwrap();
+    let claim = store.claim_effect("controller", 100, 30).unwrap().unwrap();
+    let one = dispatch_intents();
+    for invalid in [
+        vec![],
+        vec![one[0].clone(), one[0].clone()],
+        vec![DispatchIntent {
+            desired: json!(null),
+            ..one[0].clone()
+        }],
+    ] {
+        assert!(
+            store
+                .freeze_dispatch_intents(&claim, &invalid, 101)
+                .is_err()
+        );
+        assert!(store.dispatch_intents(&claim.effect_id).unwrap().is_none());
+    }
+    let mut two = one.clone();
+    two.push(DispatchIntent {
+        intent_id: "second:worker".into(),
+        ..one[0].clone()
+    });
+    store.freeze_dispatch_intents(&claim, &two, 101).unwrap();
+    assert!(matches!(
+        store.freeze_dispatch_intents(&claim, &one, 102),
+        Err(StoreError::IdempotencyConflict { .. })
+    ));
+    assert_eq!(
+        store
+            .reserve_dispatch_create(&claim, &two[0].intent_id, 102)
+            .unwrap(),
+        CreateReservation::Granted
+    );
+    assert_eq!(
+        store
+            .reserve_dispatch_create(&claim, &two[1].intent_id, 102)
+            .unwrap(),
+        CreateReservation::Granted
+    );
+}
+
+#[test]
+fn a_create_reservation_is_never_reissued_after_a_crash_or_lease_expiry() {
+    let (directory, mut store) = open();
+    store.create_case(&new_case()).unwrap();
+    let claim = store.claim_effect("controller", 100, 30).unwrap().unwrap();
+    let intents = dispatch_intents();
+    store
+        .freeze_dispatch_intents(&claim, &intents, 101)
+        .unwrap();
+    assert_eq!(
+        store
+            .reserve_dispatch_create(&claim, &intents[0].intent_id, 102)
+            .unwrap(),
+        CreateReservation::Granted
+    );
+    assert_eq!(
+        store
+            .reserve_dispatch_create(&claim, &intents[0].intent_id, 103)
+            .unwrap(),
+        CreateReservation::Uncertain
+    );
+    drop(store);
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    // Even reusing the same owner does not let the old claim cross the new lease.
+    let replacement = store.claim_effect("controller", 131, 30).unwrap().unwrap();
+    assert!(matches!(
+        store.reserve_dispatch_create(&claim, &intents[0].intent_id, 132),
+        Err(StoreError::LeaseLost(_))
+    ));
+    assert_eq!(
+        store
+            .reserve_dispatch_create(&replacement, &intents[0].intent_id, 132)
+            .unwrap(),
+        CreateReservation::Uncertain
+    );
+}
+
+#[test]
+fn concurrent_create_reservations_grant_exactly_one_creator() {
+    let (directory, mut store) = open();
+    store.create_case(&new_case()).unwrap();
+    let claim = store.claim_effect("controller", 100, 30).unwrap().unwrap();
+    let intents = dispatch_intents();
+    store
+        .freeze_dispatch_intents(&claim, &intents, 101)
+        .unwrap();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let handles = (0..2)
+        .map(|_| {
+            let path = directory.path().join("ledger.db");
+            let barrier = barrier.clone();
+            let claim = claim.clone();
+            std::thread::spawn(move || {
+                let mut store = Store::open(path).unwrap();
+                barrier.wait();
+                store
+                    .reserve_dispatch_create(&claim, "planner:worker", 102)
+                    .unwrap()
+            })
+        })
+        .collect::<Vec<_>>();
+    let results = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| **result == CreateReservation::Granted)
+            .count(),
+        1
+    );
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| **result == CreateReservation::Uncertain)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn a_projection_identity_cannot_receive_a_second_create_via_another_effect() {
+    let (_directory, mut store) = open();
+    let mut case = new_case();
+    case.effects.push(EffectInput {
+        effect_id: "effect-planner-2".into(),
+        ..case.effects[0].clone()
+    });
+    store.create_case(&case).unwrap();
+    let first = store
+        .claim_effect("controller-1", 100, 30)
+        .unwrap()
+        .unwrap();
+    let second = store
+        .claim_effect("controller-2", 100, 30)
+        .unwrap()
+        .unwrap();
+    let intents = dispatch_intents();
+    store
+        .freeze_dispatch_intents(&first, &intents, 101)
+        .unwrap();
+    store
+        .freeze_dispatch_intents(&second, &intents, 101)
+        .unwrap();
+    assert_eq!(
+        store
+            .reserve_dispatch_create(&first, "planner:worker", 102)
+            .unwrap(),
+        CreateReservation::Granted
+    );
+    assert_eq!(
+        store
+            .reserve_dispatch_create(&second, "planner:worker", 102)
+            .unwrap(),
+        CreateReservation::Uncertain
+    );
+    assert_eq!(store.status(103).unwrap().dispatch_create_attempts, 1);
+}
+
+#[test]
+fn stale_revoked_and_delivered_dispatch_cannot_freeze_or_reserve() {
+    for mode in ["expired", "revoked", "delivered"] {
+        let (_directory, mut store) = open();
+        store.create_case(&new_case()).unwrap();
+        let claim = store.claim_effect("controller", 100, 30).unwrap().unwrap();
+        let intents = dispatch_intents();
+        store
+            .freeze_dispatch_intents(&claim, &intents, 101)
+            .unwrap();
+        let now = match mode {
+            "expired" => 131,
+            "revoked" => {
+                let mut revoke = transition();
+                revoke.next_state = "ABANDONED".into();
+                revoke.event.event_type = "AUTHORIZATION_REMOVED".into();
+                revoke.effects.clear();
+                store.apply_transition(&revoke, None).unwrap();
+                102
+            }
+            _ => {
+                store
+                    .acknowledge_effect(&claim.effect_id, "controller", 102)
+                    .unwrap();
+                103
+            }
+        };
+        assert!(matches!(
+            store.freeze_dispatch_intents(&claim, &intents, now),
+            Err(StoreError::LeaseLost(_))
+        ));
+        assert!(matches!(
+            store.reserve_dispatch_create(&claim, &intents[0].intent_id, now),
+            Err(StoreError::LeaseLost(_))
+        ));
+        assert_eq!(
+            store.dispatch_intents(&claim.effect_id).unwrap(),
+            Some(intents)
+        );
+    }
+}
+
+#[test]
+fn reservation_requires_a_known_frozen_hermes_intent() {
+    let (_directory, mut store) = open();
+    store.create_case(&new_case()).unwrap();
+    let claim = store.claim_effect("controller", 100, 30).unwrap().unwrap();
+    assert!(
+        store
+            .reserve_dispatch_create(&claim, "planner:worker", 101)
+            .is_err()
+    );
+    let mut intents = dispatch_intents();
+    intents[0].transport = DispatchTransport::Direct;
+    store
+        .freeze_dispatch_intents(&claim, &intents, 101)
+        .unwrap();
+    assert!(
+        store
+            .reserve_dispatch_create(&claim, "unknown", 102)
+            .is_err()
+    );
+    assert!(
+        store
+            .reserve_dispatch_create(&claim, "planner:worker", 102)
+            .is_err()
+    );
+}
+
+#[test]
+fn dispatch_intents_and_create_attempts_cannot_be_edited_or_deleted() {
+    let (_directory, mut store) = open();
+    store.create_case(&new_case()).unwrap();
+    let claim = store.claim_effect("controller", 100, 30).unwrap().unwrap();
+    store
+        .freeze_dispatch_intents(&claim, &dispatch_intents(), 101)
+        .unwrap();
+    store
+        .reserve_dispatch_create(&claim, "planner:worker", 102)
+        .unwrap();
+    assert_eq!(store.status(103).unwrap().dispatch_create_attempts, 1);
+    let connection = Connection::open(store.path()).unwrap();
+    for sql in [
+        "UPDATE dispatch_batches SET frozen_at = 0",
+        "DELETE FROM dispatch_batches",
+        "UPDATE dispatch_create_attempts SET attempted_at = 0",
+        "DELETE FROM dispatch_create_attempts",
+    ] {
+        assert!(connection.execute(sql, []).is_err(), "{sql}");
+    }
 }
 
 #[test]
@@ -373,7 +674,7 @@ fn operator_status_separates_pending_leased_and_delivered_work() {
         .unwrap();
 
     let status = store.status(110).unwrap();
-    assert_eq!(status.schema_version, 7);
+    assert_eq!(status.schema_version, 8);
     assert_eq!(status.cases.len(), 1);
     assert_eq!(status.cases[0].case_key, "repo:984321#1240@1");
     assert_eq!(status.events, 1);
@@ -879,6 +1180,8 @@ fn schema_one_upgrades_forward_without_losing_existing_projections() {
     connection
         .execute_batch(
             "PRAGMA foreign_keys = OFF;
+             DROP TABLE dispatch_create_attempts;
+             DROP TABLE dispatch_batches;
              DROP TABLE review_observations;
              DROP TABLE webhook_deliveries;
              DROP TABLE workspace_retirements;
@@ -906,7 +1209,7 @@ fn schema_one_upgrades_forward_without_losing_existing_projections() {
     drop(connection);
 
     let upgraded = Store::open(&path).unwrap();
-    assert_eq!(upgraded.schema_version().unwrap(), 7);
+    assert_eq!(upgraded.schema_version().unwrap(), 8);
     assert_eq!(
         upgraded
             .task_projection("legacy-projection")

@@ -13,7 +13,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: u32 = 7;
+mod dispatch_intents;
+pub use dispatch_intents::{CreateReservation, DispatchIntent, DispatchTransport};
+
+const SCHEMA_VERSION: u32 = 8;
 
 const MIGRATION_1: &str = r#"
 CREATE TABLE schema_migrations (
@@ -591,6 +594,8 @@ pub struct StoredDirectAttempt {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct LedgerStatus {
+    pub dispatch_batches: u64,
+    pub dispatch_create_attempts: u64,
     pub schema_version: u32,
     pub cases: Vec<StoredCase>,
     pub events: u64,
@@ -1699,6 +1704,8 @@ impl Store {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )?;
         Ok(LedgerStatus {
+            dispatch_batches: count(&self.connection, "dispatch_batches")?,
+            dispatch_create_attempts: count(&self.connection, "dispatch_create_attempts")?,
             schema_version: self.schema_version()?,
             cases,
             events: self.event_count()?,
@@ -2611,6 +2618,17 @@ fn migrate(connection: &mut Connection) -> Result<()> {
         transaction.commit()?;
         version = 7;
     }
+    if version == 7 {
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Exclusive)?;
+        transaction.execute_batch(dispatch_intents::MIGRATION)?;
+        transaction.execute(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (8, 0)",
+            [],
+        )?;
+        transaction.pragma_update(None, "user_version", 8)?;
+        transaction.commit()?;
+        version = 8;
+    }
     if version != SCHEMA_VERSION {
         return Err(StoreError::UnsupportedSchema(version));
     }
@@ -2984,6 +3002,8 @@ fn count(connection: &Connection, table: &str) -> Result<u64> {
         "webhook_deliveries" => "SELECT COUNT(*) FROM webhook_deliveries",
         "workspace_retirements" => "SELECT COUNT(*) FROM workspace_retirements",
         "review_observations" => "SELECT COUNT(*) FROM review_observations",
+        "dispatch_batches" => "SELECT COUNT(*) FROM dispatch_batches",
+        "dispatch_create_attempts" => "SELECT COUNT(*) FROM dispatch_create_attempts",
         _ => return Err(StoreError::InvalidInput("unknown count table")),
     };
     let value: i64 = connection.query_row(sql, [], |row| row.get(0))?;

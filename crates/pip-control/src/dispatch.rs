@@ -1,17 +1,19 @@
-//! Restart-safe durable outbox projection into controller-owned Hermes gates.
+//! Ledger-first, gate-free Hermes dispatch with fail-closed create recovery.
 
 use std::fmt;
 use std::str::FromStr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use pip_controller::{DispatchError, ExecutionKind, schedule_claimed_dispatch};
+use pip_controller::{DirectTaskSpec, DispatchError, ExecutionKind, schedule_claimed_dispatch};
 use pip_core::GitSha;
 use pip_hermes::{
-    CommandRunner, GateError, GateProjectionResult, GateReleaseResult, HermesError,
-    HermesGateController, HermesProjector, HermesReader, ProcessRunner, ProjectionError,
-    ProjectionResult, TaskSnapshot,
+    CommandRunner, HermesError, HermesProjector, HermesReader, ProcessRunner, ProjectionError,
+    ProjectionResult, TaskCreateSpec, TaskSnapshot,
 };
-use pip_store::{ApplyResult, EffectInput, Store, StoreError, TaskProjectionInput};
+use pip_store::{
+    ApplyResult, CreateReservation, DispatchIntent, DispatchTransport, EffectInput, Store,
+    StoreError, TaskProjectionInput,
+};
 use serde::Serialize;
 
 use crate::{
@@ -55,7 +57,7 @@ pub enum DispatchCycleError {
     Policy(PolicyError),
     Schedule(DispatchError),
     Hermes(HermesError),
-    Gate(GateError),
+    UncertainCreate(String),
     Projection(ProjectionError),
     Workspace(WorkspaceError),
     Serialization(String),
@@ -70,7 +72,10 @@ impl fmt::Display for DispatchCycleError {
             Self::Policy(error) => error.fmt(formatter),
             Self::Schedule(error) => error.fmt(formatter),
             Self::Hermes(error) => error.fmt(formatter),
-            Self::Gate(error) => error.fmt(formatter),
+            Self::UncertainCreate(id) => write!(
+                formatter,
+                "Hermes create outcome is uncertain for {id}; reconcile before retrying"
+            ),
             Self::Projection(error) => error.fmt(formatter),
             Self::Workspace(error) => error.fmt(formatter),
             Self::Serialization(error) => {
@@ -98,11 +103,16 @@ macro_rules! error_from {
     };
 }
 
+impl From<serde_json::Error> for DispatchCycleError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::Serialization(error.to_string())
+    }
+}
+
 error_from!(StoreError, Store);
 error_from!(PolicyError, Policy);
 error_from!(DispatchError, Schedule);
 error_from!(HermesError, Hermes);
-error_from!(GateError, Gate);
 error_from!(ProjectionError, Projection);
 error_from!(WorkspaceError, Workspace);
 
@@ -146,6 +156,10 @@ fn dispatch_once_inner<R: CommandRunner + Clone>(
     workspace: Option<&dyn WorkspacePreparer>,
     context: DispatchCycleContext<'_>,
 ) -> Result<DispatchCycleResult, DispatchCycleError> {
+    let started = Instant::now();
+    // Include time spent preparing workspaces and waiting on external commands
+    // when checking a lease; a cycle's initial timestamp is not a frozen clock.
+    let now = || context.now.saturating_add(started.elapsed().as_secs());
     if !policy.dispatch_enabled || policy.intake.paused {
         return Err(DispatchCycleError::DispatchPaused);
     }
@@ -176,9 +190,32 @@ fn dispatch_once_inner<R: CommandRunner + Clone>(
         &policy.workflow_policy()?,
         skills_repository_commit,
     )?;
-    let has_hermes = dispatches
+    let intents = dispatches
         .iter()
-        .any(|dispatch| dispatch.execution() == ExecutionKind::Hermes);
+        .map(|dispatch| {
+            let (transport, desired) = match dispatch.execution() {
+                ExecutionKind::Hermes => (
+                    DispatchTransport::Hermes,
+                    serde_json::to_value(dispatch.hermes_task()?)?,
+                ),
+                ExecutionKind::Direct => (
+                    DispatchTransport::Direct,
+                    serde_json::to_value(dispatch.direct_task()?)?,
+                ),
+            };
+            Ok(DispatchIntent {
+                intent_id: dispatch.worker_projection_key.clone(),
+                transport,
+                desired,
+            })
+        })
+        .collect::<Result<Vec<_>, DispatchCycleError>>()?;
+    // Freeze ALL roles atomically before the first queue write. A deployment or
+    // policy change cannot silently replace a previously authorized model/body.
+    store.freeze_dispatch_intents(&claimed, &intents, now())?;
+    let has_hermes = intents
+        .iter()
+        .any(|intent| intent.transport == DispatchTransport::Hermes);
     let timeout = Duration::from_secs(20);
     let output_bound = 4 * 1024 * 1024;
     let reader = has_hermes
@@ -191,33 +228,14 @@ fn dispatch_once_inner<R: CommandRunner + Clone>(
             )
         })
         .transpose()?;
-    let gate_controller = has_hermes
-        .then(|| {
-            HermesGateController::new(
-                runner.clone(),
-                context.hermes_program,
-                timeout,
-                output_bound,
-            )
-        })
-        .transpose()?;
     let projector = has_hermes
         .then(|| HermesProjector::new(runner, context.hermes_program, timeout, output_bound))
         .transpose()?;
-    let mut observed = if has_hermes {
-        reader
-            .as_ref()
-            .expect("Hermes reader exists for Hermes dispatch")
-            .list_tasks(&policy.board)?
-    } else {
-        Vec::new()
-    };
-    let mut projections = Vec::with_capacity(dispatches.len() * 2);
-    let mut direct_jobs = Vec::with_capacity(dispatches.len());
-    let mut gates = Vec::with_capacity(dispatches.len());
-    for dispatch in dispatches {
-        if dispatch.execution() == ExecutionKind::Direct {
-            let task = dispatch.direct_task()?;
+    let mut projections = Vec::with_capacity(intents.len());
+    let mut direct_jobs = Vec::with_capacity(intents.len());
+    for intent in intents {
+        if intent.transport == DispatchTransport::Direct {
+            let task: DirectTaskSpec = serde_json::from_value(intent.desired)?;
             let role = task
                 .body
                 .get("role")
@@ -225,8 +243,6 @@ fn dispatch_once_inner<R: CommandRunner + Clone>(
                 .ok_or_else(|| {
                     DispatchCycleError::Serialization("direct task role is missing".into())
                 })?;
-            let payload = serde_json::to_value(&task)
-                .map_err(|error| DispatchCycleError::Serialization(error.to_string()))?;
             let worker_id = task
                 .body
                 .get("reviewer_id")
@@ -240,78 +256,69 @@ fn dispatch_once_inner<R: CommandRunner + Clone>(
             direct_jobs.push(EffectInput {
                 effect_id: format!("{}:direct:{worker_id}", claimed.effect_id),
                 effect_type: if observer {
-                    "RUN_DIRECT_OBSERVER".into()
+                    "RUN_DIRECT_OBSERVER"
                 } else {
-                    "RUN_DIRECT_WORKER".into()
-                },
-                payload,
+                    "RUN_DIRECT_WORKER"
+                }
+                .into(),
+                payload: serde_json::to_value(&task)?,
             });
             continue;
         }
+        let worker_spec: TaskCreateSpec = serde_json::from_value(intent.desired)?;
         let reader = reader
             .as_ref()
             .expect("Hermes reader exists for Hermes dispatch");
-        let gate_controller = gate_controller
-            .as_ref()
-            .expect("Hermes gate controller exists for Hermes dispatch");
         let projector = projector
             .as_ref()
             .expect("Hermes projector exists for Hermes dispatch");
-        let gate_id = match gate_controller.project(&dispatch.gate, &observed)? {
-            GateProjectionResult::Created(id) | GateProjectionResult::Existing(id) => id,
+        // Reservation is durable BEFORE any create. It is never recycled:
+        // another controller may reconcile but cannot compete with a still-live
+        // subprocess, even if the originating controller died or its lease expired.
+        let observed = reader.list_tasks(&policy.board)?;
+        let existing = projector.reconcile(&worker_spec, &observed)?;
+        let reservation = store.reserve_dispatch_create(&claimed, &intent.intent_id, now())?;
+        let worker_id = match existing {
+            Some(id) => id,
+            None if reservation == CreateReservation::Granted => {
+                match projector.project(&worker_spec, &observed)? {
+                    ProjectionResult::Created(id) | ProjectionResult::Existing(id) => id,
+                }
+            }
+            None => return Err(DispatchCycleError::UncertainCreate(intent.intent_id)),
         };
-        let gate = reader.show_task(&policy.board, &gate_id)?;
-        upsert_observed(&mut observed, gate.clone());
-        let worker_spec = dispatch.bind_gate(&gate_id)?;
-        let worker_id = match projector.project(&worker_spec, &observed)? {
-            ProjectionResult::Created(id) | ProjectionResult::Existing(id) => id,
-        };
-        let worker = reader.show_task(&policy.board, &worker_id)?;
-        upsert_observed(&mut observed, worker.clone());
-        projections.push(projection(
-            &dispatch.gate.projection_key,
-            &claimed.effect_id,
-            &policy.board,
-            &gate,
-            &dispatch.gate,
-        )?);
+        // Hermes show returns an envelope, not a bare task. Verify identity and
+        // dependencies again: the task can already be running or done here.
+        let detail = reader.show_task_detail(&policy.board, &worker_id)?;
+        if detail.parents.as_deref() != Some(&[])
+            || projector
+                .reconcile(&worker_spec, std::slice::from_ref(&detail.task))?
+                .as_deref()
+                != Some(worker_id.as_str())
+        {
+            return Err(ProjectionError::ProjectionDrift.into());
+        }
         projections.push(projection(
             &worker_spec.projection_key,
             &claimed.effect_id,
             &policy.board,
-            &worker,
+            &detail.task,
             &worker_spec,
         )?);
-        gates.push((dispatch.gate, gate));
-    }
-    let mut released = 0;
-    for (gate_spec, gate) in &gates {
-        if gate_controller
-            .as_ref()
-            .expect("Hermes gate controller exists for projected gates")
-            .release(
-                gate_spec,
-                gate,
-                &format!("pip-controller accepted {}", claimed.effect_id),
-            )?
-            == GateReleaseResult::Released
-        {
-            released += 1;
-        }
     }
     let ledger = store.complete_dispatch_outputs(
         &claimed.effect_id,
         &projections,
         &direct_jobs,
         context.owner,
-        context.now,
+        now(),
         None,
     )?;
     Ok(DispatchCycleResult::Projected {
         effect_id: claimed.effect_id,
         projection_count: projections.len(),
         direct_job_count: direct_jobs.len(),
-        released_gate_count: released,
+        released_gate_count: 0,
         ledger_result: match ledger {
             ApplyResult::Applied => "applied",
             ApplyResult::Replayed => "replayed",
@@ -337,12 +344,4 @@ fn projection(
         observed: serde_json::to_value(observed)
             .map_err(|error| DispatchCycleError::Serialization(error.to_string()))?,
     })
-}
-
-fn upsert_observed(tasks: &mut Vec<TaskSnapshot>, task: TaskSnapshot) {
-    if let Some(existing) = tasks.iter_mut().find(|existing| existing.id == task.id) {
-        *existing = task;
-    } else {
-        tasks.push(task);
-    }
 }

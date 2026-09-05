@@ -181,6 +181,7 @@ fn project_planner(store: &mut Store) {
         parent_task_ids: vec!["gate-1".into()],
     };
     let observed = TaskSnapshot {
+        configuration: Default::default(),
         id: "planner-1".into(),
         title: desired.title.clone(),
         status: "ready".into(),

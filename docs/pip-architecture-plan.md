@@ -267,12 +267,38 @@ task-body annotation:
 
 - `hermes` roles are projected to the repository board with a managed,
   service-owned Hermes profile and Hermes-supported exact provider/model
-  override. Their workspace is encoded as `dir:<absolute-path>` or
-  `worktree:<absolute-path>`.
+  override. Pip prepares and owns their worktree; Hermes receives
+  `dir:<absolute-path>` so it cannot allocate a different task-specific branch.
 - `direct` roles are committed to a durable controller queue and consumed by
   the Rust direct-provider service. The board may show a controller-owned
   mirror for operator visibility, but the Hermes gateway cannot claim or run
   it, and `cursor` is never passed to Hermes as a provider.
+
+### Ledger-first queue dispatch
+
+Before any external task creation, Rust freezes the complete dispatch batch:
+case/effect revision, reviewer membership, transport, exact model/profile,
+skills revision, evidence body, and assigned workspace. A retry must match this
+intent; it cannot silently use newly deployed defaults. Ordinary assigned,
+parentless Hermes tasks are enqueued only when the ledger authorizes that role.
+There are no synthetic activation-gate cards or pre-created future stages.
+
+Each Hermes intent receives at most one durable create reservation. The
+reservation is committed before invoking the CLI and is never reset by lease
+expiry or subprocess failure. If a response is lost, reconcile all task states,
+including archived tasks, against the complete body and returned execution
+configuration. Adopt one exact active/completed match; stop on drift, duplicates,
+archival, or an uncertain create with no remaining card. A crash after reservation
+but before creation deliberately sacrifices automatic retry for duplicate-work
+prevention. Operator recovery must establish the old command's disposition;
+deleting an attempt row or clearing a ledger is not a recovery procedure.
+
+Workers may start or finish before the controller acknowledges the outbox.
+Result ingestion waits for the reconciled task binding and still checks current
+case authorization/revision and exact-head contracts. Only the Rust transition
+engine schedules successors. GitHub revocation and external enqueue are not an
+atomic transaction: stop future dispatch and reject stale results, without
+promising instantaneous interruption of already-running work.
 - Both paths persist the same immutable binding, artifacts, result contract,
   lease/attempt history, and typed terminal outcome before the state machine can
   advance.

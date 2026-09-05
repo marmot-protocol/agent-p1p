@@ -141,7 +141,7 @@ fn context() -> DispatchContext {
 }
 
 #[test]
-fn planner_and_builder_dispatches_are_blocked_behind_controller_gates() {
+fn planner_and_builder_use_ledger_authorized_workspaces_without_gate_dependencies() {
     let mut planner_context = context();
     planner_context.plan_version = None;
     planner_context.pr_number = None;
@@ -160,13 +160,12 @@ fn planner_and_builder_dispatches_are_blocked_behind_controller_gates() {
         planner[0].direct_task(),
         Err(DispatchError::WrongExecutor)
     ));
-    assert!(planner[0].gate.body["case_key"].is_string());
-    let worker = planner[0].bind_gate("gate-1").unwrap();
-    assert_eq!(worker.parent_task_ids, ["gate-1"]);
+    let worker = planner[0].hermes_task().unwrap();
+    assert!(worker.parent_task_ids.is_empty());
     assert_eq!(worker.assignee, "planner");
     assert_eq!(
         worker.workspace,
-        "worktree:/var/lib/pip/worktrees/mdk/repo-984321-issue-1240-workflow-1"
+        "dir:/var/lib/pip/worktrees/mdk/repo-984321-issue-1240-workflow-1"
     );
     assert_eq!(worker.model, "gpt-5.6-sol");
     assert_eq!(worker.body["state_revision"], 8);
@@ -184,7 +183,7 @@ fn planner_and_builder_dispatches_are_blocked_behind_controller_gates() {
     assert_eq!(builder[0].role, WorkerRole::Builder);
     assert_eq!(builder[0].execution(), ExecutionKind::Direct);
     assert!(matches!(
-        builder[0].bind_gate("gate-1"),
+        builder[0].hermes_task(),
         Err(DispatchError::WrongExecutor)
     ));
     let direct = builder[0].direct_task().unwrap();
@@ -234,7 +233,7 @@ fn review_effect_expands_policy_defined_instances_against_one_exact_head() {
     assert!(
         dispatches
             .iter()
-            .map(|dispatch| &dispatch.gate.effect_id)
+            .map(|dispatch| &dispatch.worker_projection_key)
             .collect::<std::collections::BTreeSet<_>>()
             .len()
             == 3
@@ -245,7 +244,7 @@ fn review_effect_expands_policy_defined_instances_against_one_exact_head() {
         assert_eq!(dispatch.worker_body["review_round"], 3);
         match dispatch.execution() {
             ExecutionKind::Hermes => {
-                assert!(dispatch.bind_gate("gate-1").unwrap().parent_task_ids == ["gate-1"]);
+                assert!(dispatch.hermes_task().unwrap().parent_task_ids.is_empty());
             }
             ExecutionKind::Direct => {
                 let direct = dispatch.direct_task().unwrap();

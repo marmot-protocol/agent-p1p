@@ -47,7 +47,7 @@ fn capability_board_and_task_reads_use_only_read_commands() {
         r#"[{"id":"task-1","title":"Plan","status":"ready","assignee":"planner","created_by":"pip-controller","body":"{\"projection_key\":\"plan-1\"}"}]"#,
     );
     runner.output(
-        r#"{"id":"task-1","title":"Plan","status":"ready","assignee":"planner","created_by":"pip-controller","body":"{\"projection_key\":\"plan-1\"}"}"#,
+        r#"{"task":{"id":"task-1","title":"Plan","status":"ready","assignee":"planner","created_by":"pip-controller","body":"{\"projection_key\":\"plan-1\"}"},"parents":[],"runs":[]}"#,
     );
 
     let reader = reader(runner.clone());

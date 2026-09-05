@@ -40,6 +40,7 @@ pub enum ProjectionError {
     InvalidSpec,
     DuplicateProjection,
     ProjectionDrift,
+    ArchivedProjection,
     Hermes(HermesError),
     MalformedResult(String),
 }
@@ -56,6 +57,9 @@ impl fmt::Display for ProjectionError {
             }
             Self::ProjectionDrift => {
                 formatter.write_str("existing Hermes task differs from its projection")
+            }
+            Self::ArchivedProjection => {
+                formatter.write_str("Hermes task was archived; explicit recovery is required")
             }
             Self::Hermes(error) => write!(formatter, "Hermes projection failed: {error}"),
             Self::MalformedResult(error) => {
@@ -102,11 +106,26 @@ impl<R: CommandRunner> HermesProjector<R> {
         })
     }
 
+    /// The caller must hold a fresh durable create reservation. A caller
+    /// recovering an uncertain attempt must use `reconcile` instead.
     pub fn project(
         &self,
         spec: &TaskCreateSpec,
         observed: &[TaskSnapshot],
     ) -> Result<ProjectionResult, ProjectionError> {
+        match self.reconcile(spec, observed)? {
+            Some(id) => Ok(ProjectionResult::Existing(id)),
+            None => self.create(spec),
+        }
+    }
+
+    /// Read-only identity reconciliation. In particular, missing and archived
+    /// tasks are not permission to retry an uncertain external create.
+    pub fn reconcile(
+        &self,
+        spec: &TaskCreateSpec,
+        observed: &[TaskSnapshot],
+    ) -> Result<Option<String>, ProjectionError> {
         validate_spec(spec)?;
 
         let matches = observed
@@ -114,10 +133,9 @@ impl<R: CommandRunner> HermesProjector<R> {
             .filter(|task| task_projection_key(task).as_deref() == Some(&spec.projection_key))
             .collect::<Vec<_>>();
         match matches.as_slice() {
-            [] => self.create(spec),
-            [task] if projection_matches(spec, task) => {
-                Ok(ProjectionResult::Existing(task.id.clone()))
-            }
+            [] => Ok(None),
+            [task] if task.status == "archived" => Err(ProjectionError::ArchivedProjection),
+            [task] if projection_matches(spec, task) => Ok(Some(task.id.clone())),
             [_] => Err(ProjectionError::ProjectionDrift),
             _ => Err(ProjectionError::DuplicateProjection),
         }
@@ -177,8 +195,6 @@ impl<R: CommandRunner> HermesProjector<R> {
             spec.model.clone(),
             "--provider".into(),
             spec.provider.clone(),
-            "--initial-status".into(),
-            "blocked".into(),
             "--json".into(),
         ]);
 
@@ -225,7 +241,7 @@ fn validate_spec(spec: &TaskCreateSpec) -> Result<(), ProjectionError> {
         && valid_id(&spec.model)
         && hermes_runtime(&spec.max_runtime).is_some()
         && spec.max_retries > 0
-        && spec.parent_task_ids.iter().all(|parent| valid_id(parent));
+        && spec.parent_task_ids.is_empty();
     if !valid {
         return Err(ProjectionError::InvalidSpec);
     }
@@ -286,9 +302,30 @@ fn projection_matches(spec: &TaskCreateSpec, task: &TaskSnapshot) -> bool {
         && task.title == spec.title
         && matches!(
             task.status.as_str(),
-            "blocked" | "ready" | "in_progress" | "done"
+            "blocked" | "ready" | "running" | "in_progress" | "review" | "done"
         )
         && task.assignee.as_deref() == Some(spec.assignee.as_str())
         && task.created_by.as_deref() == Some(CONTROLLER_IDENTITY)
         && task_projection_key(task).as_deref() == Some(spec.projection_key.as_str())
+        && serde_json::from_str::<Value>(&task.body).ok().as_ref()
+            == Some(&{
+                let mut body = spec.body.clone();
+                body["projection_key"] = Value::String(spec.projection_key.clone());
+                body
+            })
+        && {
+            let (kind, path) = spec
+                .workspace
+                .split_once(':')
+                .map_or((spec.workspace.as_str(), None), |(kind, path)| {
+                    (kind, Some(path))
+                });
+            task.configuration.workspace_kind.as_deref() == Some(kind)
+                && task.configuration.workspace_path.as_deref() == path
+        }
+        && task.configuration.skills.as_ref() == Some(&spec.skills)
+        && task.configuration.provider_override.as_ref() == Some(&spec.provider)
+        && task.configuration.model_override.as_ref() == Some(&spec.model)
+        && task.configuration.max_retries == Some(spec.max_retries)
+        && task.configuration.priority == Some(spec.priority)
 }

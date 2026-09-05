@@ -82,7 +82,7 @@ fn clean_install_reinstall_and_upgrade_are_content_addressed_and_paused() {
 }
 
 #[test]
-fn upgrade_snapshots_schema_six_before_migrating_to_seven() {
+fn upgrade_snapshots_schema_seven_before_migrating_to_eight() {
     let sandbox = tempfile::tempdir().unwrap();
     let layout = layout(sandbox.path());
     prepare_layout(&layout);
@@ -96,9 +96,10 @@ fn upgrade_snapshots_schema_six_before_migrating_to_seven() {
     let connection = Connection::open(&ledger).unwrap();
     connection
         .execute_batch(
-            "DROP TABLE review_observations;
-             DELETE FROM schema_migrations WHERE version = 7;
-             PRAGMA user_version = 6;",
+            "DROP TABLE dispatch_create_attempts;
+             DROP TABLE dispatch_batches;
+             DELETE FROM schema_migrations WHERE version = 8;
+             PRAGMA user_version = 7;",
         )
         .unwrap();
     drop(connection);
@@ -111,7 +112,7 @@ fn upgrade_snapshots_schema_six_before_migrating_to_seven() {
             .unwrap()
             .schema_version()
             .unwrap(),
-        7
+        8
     );
 }
 

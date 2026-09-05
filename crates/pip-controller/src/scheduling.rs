@@ -10,7 +10,7 @@ use pip_core::{
     CaseId, Effect, GitSha, IssueNumber, PlanVersion, PullRequestNumber, RepositoryId,
     StateRevision, WorkflowVersion,
 };
-use pip_hermes::{GateCreateSpec, TaskCreateSpec};
+use pip_hermes::TaskCreateSpec;
 use pip_store::{ClaimedEffect, Store, StoredCase};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -171,7 +171,6 @@ pub struct DispatchContext {
 #[derive(Clone, Debug, PartialEq)]
 pub struct WorkflowDispatch {
     pub role: WorkerRole,
-    pub gate: GateCreateSpec,
     pub worker_projection_key: String,
     pub worker_body: Value,
     worker_effect_id: String,
@@ -214,12 +213,9 @@ impl WorkflowDispatch {
         self.execution
     }
 
-    pub fn bind_gate(&self, gate_task_id: &str) -> Result<TaskCreateSpec, DispatchError> {
+    pub fn hermes_task(&self) -> Result<TaskCreateSpec, DispatchError> {
         if self.execution != ExecutionKind::Hermes {
             return Err(DispatchError::WrongExecutor);
-        }
-        if !valid_id(gate_task_id) {
-            return Err(DispatchError::InvalidGateTask);
         }
         Ok(TaskCreateSpec {
             board: self.board.clone(),
@@ -228,14 +224,16 @@ impl WorkflowDispatch {
             title: self.worker_title.clone(),
             body: self.worker_body.clone(),
             assignee: self.profile.clone(),
-            workspace: format!("worktree:{}", self.workspace),
+            // Pip has already materialized and owns this worktree/branch.
+            // Hermes's worktree: mode can create another task-specific branch.
+            workspace: format!("dir:{}", self.workspace),
             skills: self.skills.clone(),
             provider: self.provider.clone(),
             model: self.model.clone(),
             max_runtime: self.max_runtime.clone(),
             max_retries: self.max_retries,
             priority: self.priority,
-            parent_task_ids: vec![gate_task_id.into()],
+            parent_task_ids: Vec::new(),
         })
     }
 
@@ -268,7 +266,6 @@ pub enum DispatchError {
     MissingPlan,
     MissingPullRequest,
     MissingExactHead,
-    InvalidGateTask,
     WrongExecutor,
     InvalidStoredCase,
     InvalidEvidenceBundle,
@@ -284,7 +281,6 @@ impl fmt::Display for DispatchError {
             Self::MissingPlan => "worker dispatch requires an active plan",
             Self::MissingPullRequest => "review dispatch requires a pull request",
             Self::MissingExactHead => "review dispatch requires an exact head",
-            Self::InvalidGateTask => "invalid activation gate task identity",
             Self::WrongExecutor => "worker dispatch is bound to a different executor",
             Self::InvalidStoredCase => "ledger case cannot form a dispatch binding",
             Self::InvalidEvidenceBundle => {
@@ -476,7 +472,6 @@ fn dispatch(
         context.case_id,
         context.state_revision.get()
     );
-    let gate_projection_key = format!("{projection_base}:gate");
     let worker_projection_key = format!("{projection_base}:worker");
     let mut body = Map::from_iter([
         ("case_key".into(), json!(context.case_id.to_string())),
@@ -581,18 +576,6 @@ fn dispatch(
 
     Ok(WorkflowDispatch {
         role,
-        gate: GateCreateSpec {
-            board: policy.board.clone(),
-            effect_id: format!("{effect_id}:gate"),
-            projection_key: gate_projection_key,
-            title: format!("Activate {worker_id} for {}", context.case_id),
-            body: json!({
-                "case_key": context.case_id.to_string(),
-                "state_revision": context.state_revision.get(),
-                "activation_gate": worker_id,
-            }),
-            parent_task_ids: Vec::new(),
-        },
         worker_projection_key,
         worker_body: Value::Object(body),
         worker_effect_id: format!("{effect_id}:worker"),

@@ -5,13 +5,18 @@
 controller credential provisioned; consumer timer, controller, workers, Hermes
 gateway, and dispatch remain disabled
 
-The latest activation drained the superseded webhook backlog successfully but
-rolled back when recurring timers did not fire. The timer restart regression
-has been reproduced independently; the source fix and regression test are
-documented in
-[`evidence/2026-09-05-pirate-timer-restart.md`](evidence/2026-09-05-pirate-timer-restart.md).
-Deployment and another live readiness check are still required before labeling
-the canary.
+Release `933ec69` is installed on Pirate. Recurring timer readiness passed,
+but the labeled canary stopped at a synthetic Hermes gate: stock Hermes
+promoted it to `ready`, which Pip rejected. Authorization was removed, the case
+was recorded as ABANDONED, and the runtime was returned to inert policy revision
+3. No planner or full pipeline succeeded.
+
+The gate-free refactor is now implemented in source. An isolated real-Hermes
+CLI/scheduler test passed with a deterministic callback and lost-create-reply
+recovery; it did not invoke a model. The production release, schema-7 ledger,
+and abandoned canary evidence have not been changed. Details and remaining
+proof gates:
+[`evidence/2026-09-05-gate-free-dispatch-assessment.md`](evidence/2026-09-05-gate-free-dispatch-assessment.md).
 
 This file is the implementation inventory. The target behavior remains defined
 by [`pip-architecture-plan.md`](pip-architecture-plan.md); the migration
@@ -25,9 +30,9 @@ a completed canary.
 | Boundary | Current implementation | Evidence boundary |
 |---|---|---|
 | Deterministic workflow | Exhaustive Rust states, events, effects, policy-defined required reviewer-instance joins, semantic lane aggregation, exact-head binding, remediation/elapsed-time/repeated-finding/provider-failure bounds, durable escalation, and shadow-only MDK disposition | Workspace tests and frozen fixtures |
-| Authoritative storage | SQLite schema v7, immutable webhook deliveries/events/evidence/runs/findings/detached review observations/workspace retirements, current-case projection, durable outbox, leases, immutable direct attempts, observer-preserving effect supersession, backup, migration, and crash injection | Workspace and disposable lifecycle tests |
+| Authoritative storage | SQLite schema v8 (production still v7), frozen dispatch batches and non-recycled create reservations, immutable webhook deliveries/events/evidence/runs/findings/detached review observations/workspace retirements, current-case projection, durable outbox, leases, immutable direct attempts, observer-preserving effect supersession, backup, migration, and crash injection | Workspace and disposable lifecycle tests |
 | Intake reads | Signed configured-label webhook ingestion with delivery-ID/payload-digest replay protection and a live exact-issue re-read, plus bounded polling recovery using numeric repository/actor identity, exclusions, explicit holds, policy validation, and concurrency limits. A loopback-only `pip-ingress` service has only the webhook secret and atomically spools raw issue-event bodies; authenticated GitHub `ping` events are acknowledged without durable input. A separate bounded `pip-control` cycle revalidates and commits one pending delivery before marking it processed. Authenticated issue actions unrelated to the intake label are durably retired without a live read; configured-label events received while inactive are recorded as blocked and cannot create a case or outbox effect. | Adversarial HTTP/spool/consumer, inactive-delivery, unrelated-action, outage/replay, tamper, systemd-isolation, install/rollback, and disposable lifecycle tests; on Pirate, the isolated service, root-owned secret, Tailscale Funnel TLS path, public signed-request/replay probes, repository webhook reachability, production controller credential, empty-spool and authentic non-intake cycles, and a controlled configured-label add/live-reread/remove cycle are proven while the consumer timer remains disabled |
-| Worker dispatch routing | Hermes-native roles receive controller-gated, idempotent board projections; direct required roles become leased `RUN_DIRECT_WORKER` jobs; direct advisory/shadow instances become detached `RUN_DIRECT_OBSERVER` jobs that survive case advancement; both paths cross the immutable filesystem bridge to a separate worker identity | Fake-runner, restart/recovery, mixed-review, late-shadow, systemd-boundary, and offline integration tests |
+| Worker dispatch routing | Hermes-native roles receive ordinary parentless assigned tasks after immutable intent freeze and a one-time create reservation; exact-body/configuration reconciliation handles running/done cards and fails closed on missing/archived uncertain work; direct required roles become leased `RUN_DIRECT_WORKER` jobs; direct advisory/shadow instances become detached `RUN_DIRECT_OBSERVER` jobs that survive case advancement; both paths cross the immutable filesystem bridge to a separate worker identity | Fake-runner, reservation-race/restart/recovery, mixed-review, late-shadow, systemd-boundary, and offline integration tests; isolated stock-Hermes CLI/scheduler execution and lost-reply recovery passed with no model |
 | Worker contracts | Contract v2 planner, builder, policy-defined reviewer-instance, and final-reviewer results bound to case, task, semantic role, reviewer ID, model, skills commit, plan, PR, and exact head | Contract fixtures and ingestion tests |
 | Worker evidence bundles | Every projected worker receives the complete ordered ledger history at the claimed state revision, including record digests and a reproducible root digest; final review includes the atomically committed GitHub preflight | Ledger, scheduling, dispatch-command, and exact-final-preflight tests |
 | CI reconciliation | Independent current and historical check/status evaluation on the ledger-bound PR head | Fixture and controller-cycle tests |
@@ -59,8 +64,9 @@ a completed canary.
   gateway, controller, or direct-worker path.
 - Controller and direct-worker instance templates plus the dedicated Hermes
   gateway unit are installed but inert.
-- No Rust process has created an MDK task, branch, comment, PR, review,
-  notification, or merge in a live environment.
+- The live canary created one orphan activation-gate card before abandonment.
+  It has no planner card, ledger runs, or PR. Preserve that board/ledger evidence;
+  the old empty-board activation script is not a valid retry procedure.
 
 ## Remaining cutover work
 
@@ -73,8 +79,14 @@ reconciliation, conversational Sol probe, direct Grok/Kimi/Opus capability
 probes, isolated direct-provider outage/recovery drill, and supervised
 empty-board Pip gateway probe have passed their inert real-host gates.
 
-1. Obtain explicit authorization to enable the inert gateway/controller/direct
-   timers and run exactly one deliberately labeled MDK shadow case.
+1. Finish the isolated gate-free dispatch/recovery proof matrix, including
+   result-contract ingestion under revocation and partial reviewer fan-out.
+2. Run one real planner with the configured model in an isolated board/workspace
+   and validate its actual result contract. No Hermes fork.
+3. Build and verify the candidate release and its schema-8 migration/recovery.
+4. Decide explicit retirement/reconciliation and retry semantics for the
+   abandoned canary and orphan gate; do not reset production history.
+5. Only then authorize renewed live shadow activation.
 
 The installed webhook boundary, controller credential, configured-label live
 reread, and policy-driven reviewer release evidence are recorded in
@@ -110,8 +122,8 @@ the controller, written to `/var/lib/pip/direct-queue/inbox`, executed by
 the separate `pip-worker` identity, and returned through `results`; it is
 never represented as a Hermes provider override. The controller alone records
 the attempt and ingests the result. Real-host compatibility, process-scoped
-provider recovery, and empty-board gateway supervision have passed; full task
-execution remains reserved for the authorized canary.
+provider recovery, and empty-board gateway supervision have passed; a deterministic isolated task now passes, but a real planner and full pipeline
+remain unproven.
 
 The first exact-version compatibility review on 2026-09-03 targets Hermes
 `v2026.8.31` at commit
@@ -121,7 +133,8 @@ systemd gateway invocation to declare `--external-supervisor`. That pinned code
 is installed root-owned on Pirate. Pip's service-owned Hermes runtime bootstrap
 has now passed against that installation; the separately supervised gateway and
 live capability, process-scoped outage/recovery, and empty-board supervised
-gateway probes have passed. Actual task execution remains the Phase 9 canary.
+gateway probes have passed. The gate-free deterministic scheduler test is now proven separately; actual
+planner execution remains a distinct pre-canary proof gate.
 
 The inert Pirate installation and service-root bootstrap are recorded in
 [`evidence/2026-09-03-pirate-inert-install.md`](evidence/2026-09-03-pirate-inert-install.md).

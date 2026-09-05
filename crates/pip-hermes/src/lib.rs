@@ -1,17 +1,12 @@
-//! Read-only Hermes capability and task adapter.
+//! Hermes capabilities, task reads, and ledger-authorized queue projection.
 
 #![forbid(unsafe_code)]
 
 mod bootstrap;
-mod gate;
 mod projection;
 
 pub use bootstrap::{
     BootstrapError, BootstrapOutcome, HermesBootstrap, ProfileBootstrapSpec, RuntimeBootstrapSpec,
-};
-
-pub use gate::{
-    GateCreateSpec, GateError, GateProjectionResult, GateReleaseResult, HermesGateController,
 };
 
 pub use projection::{HermesProjector, ProjectionError, ProjectionResult, TaskCreateSpec};
@@ -225,6 +220,21 @@ pub struct TaskSnapshot {
     pub assignee: Option<String>,
     pub created_by: Option<String>,
     pub body: String,
+    #[serde(flatten)]
+    pub configuration: TaskConfiguration,
+}
+
+/// Missing configuration remains missing; recovery must not assume defaults
+/// supplied by a different Hermes version match the authorized worker intent.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TaskConfiguration {
+    pub workspace_kind: Option<String>,
+    pub workspace_path: Option<String>,
+    pub skills: Option<Vec<String>>,
+    pub provider_override: Option<String>,
+    pub model_override: Option<String>,
+    pub max_retries: Option<u32>,
+    pub priority: Option<u32>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -237,6 +247,7 @@ pub struct TaskRunSnapshot {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct TaskDetail {
     pub task: TaskSnapshot,
+    pub parents: Option<Vec<String>>,
     #[serde(default)]
     pub runs: Vec<TaskRunSnapshot>,
 }
@@ -328,6 +339,10 @@ impl<R: CommandRunner> HermesReader<R> {
     }
 
     pub fn show_task(&self, board: &str, task_id: &str) -> Result<TaskSnapshot, HermesError> {
+        Ok(self.show_task_detail(board, task_id)?.task)
+    }
+
+    pub fn show_task_detail(&self, board: &str, task_id: &str) -> Result<TaskDetail, HermesError> {
         if !valid_id(board) {
             return Err(HermesError::InvalidBoard);
         }

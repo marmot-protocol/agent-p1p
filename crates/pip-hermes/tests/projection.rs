@@ -51,15 +51,26 @@ fn task(id: &str, title: &str, key: &str) -> TaskSnapshot {
     TaskSnapshot {
         id: id.into(),
         title: title.into(),
-        status: "blocked".into(),
+        status: "ready".into(),
         assignee: Some("planner".into()),
         created_by: Some("pip-controller".into()),
-        body: json!({"projection_key": key}).to_string(),
+        body: {
+            let mut body = spec().body;
+            body["projection_key"] = json!(key);
+            body.to_string()
+        },
+        configuration: serde_json::from_value(json!({
+            "workspace_kind": "scratch", "workspace_path": null,
+            "skills": ["workflow-contract", "planner"],
+            "provider_override": "openai-codex", "model_override": "gpt-5.6-sol",
+            "max_retries": 3, "priority": 10
+        }))
+        .unwrap(),
     }
 }
 
 #[test]
-fn missing_projection_creates_one_blocked_idempotent_task() {
+fn missing_projection_creates_one_ordinary_idempotent_task() {
     let runner = FakeRunner::default();
     runner.outputs.borrow_mut().push_back(CommandOutput {
         status: 0,
@@ -92,10 +103,10 @@ fn missing_projection_creates_one_blocked_idempotent_task() {
             .any(|pair| { pair[0] == "--idempotency-key" && pair[1] == expected.effect_id })
     );
     assert!(
-        command
+        !command
             .args
-            .windows(2)
-            .any(|pair| pair == ["--initial-status", "blocked"])
+            .iter()
+            .any(|arg| arg == "--initial-status" || arg == "--parent")
     );
     assert!(
         command
@@ -135,7 +146,14 @@ fn exact_projection_remains_owned_after_its_gate_advances_status() {
     let runner = FakeRunner::default();
     let projector =
         HermesProjector::new(runner.clone(), "hermes", Duration::from_secs(2), 4096).unwrap();
-    for status in ["ready", "in_progress", "done"] {
+    for status in [
+        "ready",
+        "running",
+        "in_progress",
+        "done",
+        "review",
+        "blocked",
+    ] {
         let mut observed = task("task-1", "Plan issue 1240", "repo:984321#1240@1:planner:1");
         observed.status = status.into();
         assert_eq!(
@@ -143,6 +161,60 @@ fn exact_projection_remains_owned_after_its_gate_advances_status() {
             ProjectionResult::Existing("task-1".into())
         );
     }
+    assert!(runner.commands.borrow().is_empty());
+}
+
+#[test]
+fn uncertain_creation_only_reconciles_and_never_recreates_missing_or_archived_tasks() {
+    let runner = FakeRunner::default();
+    let projector =
+        HermesProjector::new(runner.clone(), "hermes", Duration::from_secs(2), 4096).unwrap();
+    assert_eq!(projector.reconcile(&spec(), &[]).unwrap(), None);
+    let mut archived = task("task-1", "Plan issue 1240", &spec().projection_key);
+    archived.status = "archived".into();
+    assert!(matches!(
+        projector.reconcile(&spec(), &[archived]),
+        Err(ProjectionError::ArchivedProjection)
+    ));
+    assert!(runner.commands.borrow().is_empty());
+}
+
+#[test]
+fn full_immutable_body_and_execution_configuration_are_required_for_adoption() {
+    let runner = FakeRunner::default();
+    let projector =
+        HermesProjector::new(runner.clone(), "hermes", Duration::from_secs(2), 4096).unwrap();
+    let original =
+        serde_json::to_value(task("task-1", "Plan issue 1240", &spec().projection_key)).unwrap();
+    for (field, changed) in [
+        (
+            "body",
+            json!(json!({"projection_key": spec().projection_key}).to_string()),
+        ),
+        ("model_override", json!("another-model")),
+        ("provider_override", json!("another-provider")),
+        ("workspace_kind", json!("dir")),
+        ("workspace_path", json!("/different")),
+        ("skills", json!(["planner"])),
+        ("max_retries", json!(100)),
+        ("priority", json!(99)),
+    ] {
+        let mut drifted = original.clone();
+        drifted[field] = changed;
+        assert!(
+            matches!(
+                projector.reconcile(&spec(), &[serde_json::from_value(drifted).unwrap()]),
+                Err(ProjectionError::ProjectionDrift)
+            ),
+            "{field}"
+        );
+    }
+    let mut missing = original;
+    missing.as_object_mut().unwrap().remove("skills");
+    assert!(matches!(
+        projector.reconcile(&spec(), &[serde_json::from_value(missing).unwrap()]),
+        Err(ProjectionError::ProjectionDrift)
+    ));
     assert!(runner.commands.borrow().is_empty());
 }
 
