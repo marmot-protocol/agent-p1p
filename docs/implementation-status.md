@@ -23,8 +23,11 @@ proof gates:
 The real-provider result and runtime limitations are recorded in
 [`evidence/2026-09-05-real-planner-contract.md`](evidence/2026-09-05-real-planner-contract.md).
 The subsequent [re-bootstrap and worker-guide fix](evidence/2026-09-05-hermes-rebootstrap.md)
-passed a no-provider stock-Hermes test on Pirate. A service-visible Rust
-toolchain remains to be provisioned and verified before activation.
+passed a no-provider stock-Hermes test on Pirate. The subsequent
+[service-visible Rust provision and sandbox checks](evidence/2026-09-05-rust-toolchain.md)
+passed: Hermes scratch compilation and serial MDK `fs-private` tests. One
+parallel MDK lock test failed; full MDK CI and native dependencies are not
+certified by that bounded toolchain check.
 
 This file is the implementation inventory. The target behavior remains defined
 by [`pip-architecture-plan.md`](pip-architecture-plan.md); the migration
@@ -90,8 +93,9 @@ empty-board Pip gateway probe have passed their inert real-host gates.
 1. Finish the isolated gate-free dispatch/recovery proof matrix, including
    result-contract ingestion under revocation and partial reviewer fan-out.
 2. The isolated real-planner/result-contract gate, stock-Hermes re-bootstrap,
-   and packaged worker guide checks have passed. Before deployment, provision
-   and verify the dedicated service-visible Rust toolchain. No Hermes fork.
+   and packaged worker guide checks have passed. The service-visible Rust
+   toolchain is now provisioned and sandbox-tested; retain the parallel-test
+   caveat in its evidence. No Hermes fork.
 3. Build and verify the candidate release and its schema-8 migration/recovery.
 4. Decide explicit retirement/reconciliation and retry semantics for the
    abandoned canary and orphan gate; do not reset production history.
@@ -145,8 +149,9 @@ has now passed against that installation; the separately supervised gateway and
 live capability, process-scoped outage/recovery, and empty-board supervised
 gateway probes have passed. The gate-free deterministic scheduler and actual
 planner/result-ingestion tests are proven separately. Post-worker bootstrap and
-contract-guide packaging are now fixed; the service toolchain remains a
-pre-canary requirement.
+contract-guide packaging are now fixed; a dedicated service-visible Rust
+toolchain has also passed bounded sandbox compilation checks. Full pipeline
+activation remains a separate gate.
 
 The inert Pirate installation and service-root bootstrap are recorded in
 [`evidence/2026-09-03-pirate-inert-install.md`](evidence/2026-09-03-pirate-inert-install.md).

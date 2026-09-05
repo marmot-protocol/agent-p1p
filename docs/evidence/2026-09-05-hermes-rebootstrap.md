@@ -62,6 +62,10 @@ Disposable remote build files were removed after validation.
 
 ## Remaining pre-activation requirement
 
+Update: the toolchain requirement below was subsequently addressed by the
+[dedicated Rust installation and sandbox checks](2026-09-05-rust-toolchain.md).
+The following describes the pre-provisioning observation.
+
 Pirate's Rust tools currently resolve through `/home/jeff/.cargo/bin/rustup`.
 With the service's clean PATH, `pip-control` finds neither `rustc` nor `cargo`.
 The service sandbox deliberately hides operator homes. Provision a dedicated,

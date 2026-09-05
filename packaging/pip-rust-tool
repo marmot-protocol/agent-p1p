@@ -1,0 +1,14 @@
+#!/bin/sh
+# Installed as root-owned /usr/local/bin/{cargo,rustc,...} symlinks.
+# Keep rustup outside operator homes; never download toolchains as a worker.
+set -eu
+tool=${0##*/}
+case "$tool" in
+  cargo|rustc|rustdoc|rustfmt|cargo-fmt|cargo-clippy|clippy-driver|rustup) ;;
+  *) echo "unsupported Pip Rust tool invocation: $tool" >&2; exit 64 ;;
+esac
+export RUSTUP_HOME=/opt/pip/rust/rustup
+export RUSTUP_AUTO_INSTALL=0
+# Do not override RUSTUP_TOOLCHAIN: repository pins and explicit +versions win.
+# Cargo defaults to this worker's HOME/.cargo and the workspace-local target/.
+exec "/opt/pip/rust/bin/$tool" "$@"
