@@ -2,6 +2,10 @@
 
 Source candidate, not a live release installation or canary activation.
 
+Subsequent deployment: see the [paused Astra installation](2026-09-05-astra-paused-install.md)
+for the signed release and post-install verification. The source-phase evidence
+below remains historical; no live canary was activated by either pass.
+
 ## Implemented
 
 - Policy-bound per-projection storage with reserve/device/ownership/path
