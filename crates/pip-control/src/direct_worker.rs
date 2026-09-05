@@ -152,6 +152,14 @@ impl<R: ProcessRunner + Clone> CursorDirectRuntime<R> {
             &self.skills_root,
             Path::new("shared/workflow-contract/SKILL.md"),
         )?;
+        let field_guide = read_skill(
+            &self.skills_root,
+            Path::new("shared/workflow-contract/references/worker-result-contracts.md"),
+        )?;
+        // Direct providers receive skill text rather than a Hermes skill path.
+        // Inline the same packaged reference so no target-repo file is assumed.
+        let workflow_skill =
+            format!("{workflow_skill}\n\n# Worker result field guide\n\n{field_guide}");
         let role_skill = read_skill(
             &self.skills_root,
             Path::new(role_skill_name(task.role))

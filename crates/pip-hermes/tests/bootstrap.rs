@@ -124,6 +124,24 @@ fn bootstrap_creates_only_managed_profiles_and_reprobes_the_board() {
             .unwrap()
     );
 
+    // Stock Hermes seeds these on the first worker run. They are not Pip-owned.
+    fs::write(
+        planner.join("skills/.bundled_manifest"),
+        "{\"fixture\":true}\n",
+    )
+    .unwrap();
+    fs::create_dir_all(planner.join("skills/autonomous-ai-agents/hermes-agent")).unwrap();
+    fs::write(
+        planner.join("skills/autonomous-ai-agents/hermes-agent/SKILL.md"),
+        "# upstream runtime\n",
+    )
+    .unwrap();
+    fs::create_dir_all(planner.join("skills/user-notes")).unwrap();
+    fs::write(
+        planner.join("skills/user-notes/SKILL.md"),
+        "# Preserve me\n",
+    )
+    .unwrap();
     let retry_runner = FakeRunner::default();
     retry_runner.output("hermes 0.9.0\n");
     retry_runner.output(r#"[{"slug":"pip-mdk","name":"Pip - marmot-protocol/mdk"}]"#);
@@ -143,6 +161,41 @@ fn bootstrap_creates_only_managed_profiles_and_reprobes_the_board() {
     assert_eq!(retry.profiles_created, 0);
     assert_eq!(retry.profiles_reconciled, 3);
     assert_eq!(retry_runner.commands.borrow().len(), 13);
+    assert_eq!(
+        fs::read_to_string(planner.join("skills/.bundled_manifest")).unwrap(),
+        "{\"fixture\":true}\n"
+    );
+    assert_eq!(
+        fs::read_to_string(planner.join("skills/user-notes/SKILL.md")).unwrap(),
+        "# Preserve me\n"
+    );
+    assert_eq!(
+        fs::read_to_string(planner.join("skills/autonomous-ai-agents/hermes-agent/SKILL.md"))
+            .unwrap(),
+        "# upstream runtime\n"
+    );
+    // A collision at an owned link is still refused before any CLI or rewrite.
+    fs::remove_file(planner.join("skills/planner")).unwrap();
+    fs::create_dir(planner.join("skills/planner")).unwrap();
+    fs::write(
+        planner.join("skills/planner/SKILL.md"),
+        "# foreign collision\n",
+    )
+    .unwrap();
+    let untouched = fs::read(planner.join("config.yaml")).unwrap();
+    let blocked = FakeRunner::default();
+    assert!(
+        HermesBootstrap::new(blocked.clone(), "hermes", Duration::from_secs(5), 4096)
+            .unwrap()
+            .apply(&spec(&root, &skills))
+            .is_err()
+    );
+    assert!(blocked.commands.borrow().is_empty());
+    assert_eq!(fs::read(planner.join("config.yaml")).unwrap(), untouched);
+    assert_eq!(
+        fs::read_to_string(planner.join("skills/planner/SKILL.md")).unwrap(),
+        "# foreign collision\n"
+    );
 }
 
 #[test]
@@ -210,4 +263,88 @@ fn profile_outputs(runner: &FakeRunner) {
         runner.output(&format!("{reasoning}\n"));
         runner.output("profile\n");
     }
+}
+
+/// No provider credentials or workers: use stock Hermes's real skill sync and
+/// then reconcile the same profiles twice, including a new release skill root.
+#[test]
+#[ignore = "requires PIP_TEST_HERMES and PIP_TEST_SKILLS_ROOT; no provider is called"]
+fn stock_hermes_skill_sync_survives_rebootstrap_and_release_relink() {
+    use pip_hermes::ProcessRunner;
+    let hermes = std::env::var("PIP_TEST_HERMES").unwrap();
+    let skills = std::path::PathBuf::from(std::env::var("PIP_TEST_SKILLS_ROOT").unwrap());
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("hermes");
+    fs::create_dir(&root).unwrap();
+    fs::write(root.join("auth.json"), "{}\n").unwrap();
+    fs::set_permissions(root.join("auth.json"), fs::Permissions::from_mode(0o600)).unwrap();
+    let runner = ProcessRunner::for_hermes_root(&root).unwrap();
+    let bootstrap = HermesBootstrap::new(
+        runner.clone(),
+        &hermes,
+        Duration::from_secs(30),
+        1024 * 1024,
+    )
+    .unwrap();
+    let mut spec = spec(&root, &skills);
+    spec.board = "pip-isolated-bootstrap-proof".into();
+    let first = bootstrap.apply(&spec).unwrap();
+    assert_eq!(first.profiles_created, 3);
+    let sync = runner
+        .run(&CommandSpec {
+            program: hermes,
+            args: ["-p", "planner", "skills", "opt-in", "--sync"]
+                .map(String::from)
+                .to_vec(),
+            timeout: Duration::from_secs(45),
+            max_output_bytes: 1024 * 1024,
+        })
+        .unwrap();
+    assert_eq!(sync.status, 0, "{}", String::from_utf8_lossy(&sync.stderr));
+    assert!(!sync.timed_out);
+    let profile = root.join("profiles/planner");
+    let manifest_path = profile.join("skills/.bundled_manifest");
+    let manifest = fs::read(&manifest_path).unwrap();
+    assert!(!manifest.is_empty());
+    let second = bootstrap.apply(&spec).unwrap();
+    assert_eq!(second.profiles_reconciled, 3);
+    assert_eq!(fs::read(&manifest_path).unwrap(), manifest);
+    let reference = profile.join("skills/workflow-contract/references/worker-result-contracts.md");
+    let guide = fs::read_to_string(&reference).unwrap();
+    assert!(guide.contains("## Planner"));
+    assert!(guide.contains("kanban_complete"));
+
+    let next_skills = temp.path().join("next-release-skills");
+    for relative in [
+        "shared/workflow-contract",
+        "planner",
+        "reviewer-general",
+        "final-reviewer",
+    ] {
+        fs::create_dir_all(next_skills.join(relative)).unwrap();
+        fs::copy(
+            skills.join(relative).join("SKILL.md"),
+            next_skills.join(relative).join("SKILL.md"),
+        )
+        .unwrap();
+    }
+    fs::create_dir_all(next_skills.join("shared/workflow-contract/references")).unwrap();
+    fs::write(
+        next_skills.join("shared/workflow-contract/references/worker-result-contracts.md"),
+        &guide,
+    )
+    .unwrap();
+    spec.skills_root = next_skills.clone();
+    let upgraded = bootstrap.apply(&spec).unwrap();
+    assert_eq!(upgraded.profiles_reconciled, 3);
+    assert_eq!(fs::read(&manifest_path).unwrap(), manifest);
+    assert_eq!(
+        fs::read_link(profile.join("skills/workflow-contract")).unwrap(),
+        next_skills
+            .join("shared/workflow-contract")
+            .canonicalize()
+            .unwrap()
+    );
+    assert_eq!(fs::read_to_string(reference).unwrap(), guide);
+    println!("STOCK_HERMES_REBOOTSTRAP_AND_RELEASE_RELINK_OK");
 }

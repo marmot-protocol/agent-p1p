@@ -43,6 +43,13 @@ fn production_runtime_probes_exact_model_reads_canonical_skills_and_retains_arti
     fs::create_dir_all(&worktree).unwrap();
     fs::create_dir(&artifacts).unwrap();
     fs::create_dir_all(skills.join("shared/workflow-contract")).unwrap();
+    fs::create_dir_all(skills.join("shared/workflow-contract/references")).unwrap();
+    let guide = skills.join("shared/workflow-contract/references/worker-result-contracts.md");
+    fs::write(
+        &guide,
+        "# Fixture field guide\nExact role result fields travel with this prompt.\n",
+    )
+    .unwrap();
     fs::create_dir_all(skills.join("builder-grok")).unwrap();
     fs::write(
         skills.join("shared/workflow-contract/SKILL.md"),
@@ -89,6 +96,13 @@ fn production_runtime_probes_exact_model_reads_canonical_skills_and_retains_arti
     assert!(
         commands[4]
             .args
+            .last()
+            .unwrap()
+            .contains("# Fixture field guide")
+    );
+    assert!(
+        commands[4]
+            .args
             .windows(2)
             .any(|pair| pair == ["--model", "composer-2.5"])
     );
@@ -119,6 +133,10 @@ fn production_runtime_probes_exact_model_reads_canonical_skills_and_retains_arti
         .unwrap()["status"],
         "COMPLETE"
     );
+    // Missing packaged documentation must fail before any provider call.
+    fs::remove_file(guide).unwrap();
+    assert!(runtime.execute(&direct_task(&worktree), 8).is_err());
+    assert_eq!(runner.commands.borrow().len(), 5);
 }
 
 fn direct_task(worktree: &std::path::Path) -> DirectTaskSpec {

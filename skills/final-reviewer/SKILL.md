@@ -1,7 +1,7 @@
 ---
 name: final-reviewer
 description: Use for holistic final adjudication of a Pip case.
-version: 0.3.0
+version: 0.4.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -34,7 +34,7 @@ Do not invoke merge, notify a human, or claim merge or notification authority. M
 ## Completion
 
 Post a final role-stamped rationale inside the Rust `final-reviewer` contract
-from `docs/worker-result-contracts.md`, tied to the exact reviewed head. After
+from `references/worker-result-contracts.md` in the loaded `workflow-contract` skill directory (not the target repository), tied to the exact reviewed head. After
 validating it, call `kanban_complete` with a
 concise summary and the complete object as `metadata`; Hermes must durably
 store the contract in the Kanban run metadata. Then return the same JSON object

@@ -1,7 +1,7 @@
 ---
 name: workflow-contract
 description: Use for every Pip case task. Enforce shared invariants.
-version: 0.4.0
+version: 0.5.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -33,7 +33,7 @@ This is the shared contract for every Pip role. Role-specific skills add respons
 13. Never merge directly from a planning, building, or review role.
 14. Worker processes never push Git branches or receive GitHub credentials. A builder commits only in its exact `assigned_worktree` on `assigned_branch`; the deterministic controller publishes and verifies that branch after accepting the result.
 15. Parent summaries may be truncated. Resolve every declared parent on the task's assigned board, read the full durable run metadata, and dereference declared result artifacts before relying on PR numbers, findings, or remediation evidence.
-16. Return contract version 2 with exactly these common fields plus the role fields: `contract_version`, `workflow_version`, `case` (`repository_id`, `issue_number`, `workflow_version`), `task_id`, `role`, `requested_model`, `actual_model`, `skills_repository_commit`, integer `started_at_unix`, integer `completed_at_unix`, and object `evidence`. Review results also copy the exact `reviewer_id`; the controller-owned `review_mode` binding is not an output choice. Put supplemental artifact paths or diagnostics inside `evidence`. The full field guide is `docs/worker-result-contracts.md` in the source/release documentation.
+16. Return contract version 2 with exactly these common fields plus the role fields: `contract_version`, `workflow_version`, `case` (`repository_id`, `issue_number`, `workflow_version`), `task_id`, `role`, `requested_model`, `actual_model`, `skills_repository_commit`, integer `started_at_unix`, integer `completed_at_unix`, and object `evidence`. Review results also copy the exact `reviewer_id`; the controller-owned `review_mode` binding is not an output choice. Put supplemental artifact paths or diagnostics inside `evidence`. The full field guide is `references/worker-result-contracts.md` in the loaded `workflow-contract` skill directory (not the target repository).
 
 ## Ownership
 

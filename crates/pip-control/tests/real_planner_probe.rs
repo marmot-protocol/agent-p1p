@@ -87,7 +87,9 @@ fn isolated_real_planner_contract() {
             .unwrap();
         }
         std::fs::copy(
-            root.join("source/docs/worker-result-contracts.md"),
+            root.join(
+                "source/skills/shared/workflow-contract/references/worker-result-contracts.md",
+            ),
             workspace.join("docs/worker-result-contracts.md"),
         )
         .unwrap();

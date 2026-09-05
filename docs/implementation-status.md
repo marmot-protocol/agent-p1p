@@ -20,9 +20,11 @@ was needed. The production release, schema-7 ledger,
 and abandoned canary evidence have not been changed. Details and remaining
 proof gates:
 [`evidence/2026-09-05-gate-free-dispatch-assessment.md`](evidence/2026-09-05-gate-free-dispatch-assessment.md).
-The real-provider result, runtime limitations, and newly observed profile
-re-bootstrap incompatibility are recorded in
+The real-provider result and runtime limitations are recorded in
 [`evidence/2026-09-05-real-planner-contract.md`](evidence/2026-09-05-real-planner-contract.md).
+The subsequent [re-bootstrap and worker-guide fix](evidence/2026-09-05-hermes-rebootstrap.md)
+passed a no-provider stock-Hermes test on Pirate. A service-visible Rust
+toolchain remains to be provisioned and verified before activation.
 
 This file is the implementation inventory. The target behavior remains defined
 by [`pip-architecture-plan.md`](pip-architecture-plan.md); the migration
@@ -87,10 +89,9 @@ empty-board Pip gateway probe have passed their inert real-host gates.
 
 1. Finish the isolated gate-free dispatch/recovery proof matrix, including
    result-contract ingestion under revocation and partial reviewer fan-out.
-2. The isolated real-planner/result-contract gate has passed. Before deployment,
-   resolve stock Hermes's bundled-skill seeding versus Pip's bootstrap ownership
-   rules, package the worker contract guide reliably, and check worker toolchain
-   availability. No Hermes fork.
+2. The isolated real-planner/result-contract gate, stock-Hermes re-bootstrap,
+   and packaged worker guide checks have passed. Before deployment, provision
+   and verify the dedicated service-visible Rust toolchain. No Hermes fork.
 3. Build and verify the candidate release and its schema-8 migration/recovery.
 4. Decide explicit retirement/reconciliation and retry semantics for the
    abandoned canary and orphan gate; do not reset production history.
@@ -143,8 +144,9 @@ is installed root-owned on Pirate. Pip's service-owned Hermes runtime bootstrap
 has now passed against that installation; the separately supervised gateway and
 live capability, process-scoped outage/recovery, and empty-board supervised
 gateway probes have passed. The gate-free deterministic scheduler and actual
-planner/result-ingestion tests are proven separately. Runtime packaging and
-post-worker bootstrap compatibility still need resolution before a live canary.
+planner/result-ingestion tests are proven separately. Post-worker bootstrap and
+contract-guide packaging are now fixed; the service toolchain remains a
+pre-canary requirement.
 
 The inert Pirate installation and service-root bootstrap are recorded in
 [`evidence/2026-09-03-pirate-inert-install.md`](evidence/2026-09-03-pirate-inert-install.md).

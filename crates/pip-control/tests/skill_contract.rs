@@ -26,7 +26,7 @@ const ROLE_SKILLS: [(&str, &str); 6] = [
 fn canonical_skills_name_the_rust_worker_contract_and_reject_legacy_final_outcome() {
     for (name, skill) in ROLE_SKILLS {
         assert!(
-            skill.contains("docs/worker-result-contracts.md"),
+            skill.contains("references/worker-result-contracts.md"),
             "{name} does not name the canonical Rust result contract"
         );
         assert!(
@@ -34,6 +34,31 @@ fn canonical_skills_name_the_rust_worker_contract_and_reject_legacy_final_outcom
             "{name} still instructs workers to emit the legacy final outcome"
         );
     }
+}
+
+#[test]
+fn worker_field_guide_is_a_packaged_shared_skill_resource() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let guide = std::fs::read_to_string(
+        root.join("skills/shared/workflow-contract/references/worker-result-contracts.md"),
+    )
+    .expect("field guide must travel with the shared skill");
+    for required in [
+        "## Common fields",
+        "## Planner",
+        "## Builder",
+        "## Reviewers",
+        "## Final reviewer",
+        "kanban_complete",
+    ] {
+        assert!(guide.contains(required), "missing {required}");
+    }
+    let release = std::fs::read_to_string(root.join("scripts/build-rust-release.sh")).unwrap();
+    assert!(release.contains("cp -R skills"));
+    assert!(
+        release
+            .contains("cp skills/shared/workflow-contract/references/worker-result-contracts.md")
+    );
 }
 
 #[test]

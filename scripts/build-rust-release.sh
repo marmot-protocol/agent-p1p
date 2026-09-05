@@ -65,7 +65,7 @@ cp -R skills "$release_root/share/pip/skills"
 cp -R config/target "$release_root/share/pip/config"
 cp -R migration/target-v1 "$release_root/share/pip/contracts"
 cp -R packaging/systemd "$release_root/share/pip/systemd"
-cp docs/worker-result-contracts.md "$release_root/share/pip/docs/worker-result-contracts.md"
+cp skills/shared/workflow-contract/references/worker-result-contracts.md "$release_root/share/pip/docs/worker-result-contracts.md"
 find "$release_root/share" -type d -exec chmod 0555 {} +
 find "$release_root/share" -type f -exec chmod 0444 {} +
 chmod 0555 "$release_root/bin"

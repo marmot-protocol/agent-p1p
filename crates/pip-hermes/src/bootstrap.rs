@@ -398,19 +398,16 @@ impl PreparedSpec {
             let profile_skills = profile_root.join("skills");
             if profile_skills.exists() {
                 real_directory(&profile_skills)?;
-                let expected = profile
-                    .skills
-                    .iter()
-                    .map(String::as_str)
-                    .collect::<BTreeSet<_>>();
-                for entry in fs::read_dir(&profile_skills).map_err(fs_error)? {
-                    let entry = entry.map_err(fs_error)?;
-                    let name = entry
-                        .file_name()
-                        .into_string()
-                        .map_err(|_| BootstrapError::UnsafePath(entry.path()))?;
-                    if !expected.contains(name.as_str()) {
-                        return Err(BootstrapError::UnmanagedPath(entry.path()));
+                // Hermes owns its bundled manifest, runtime skills, and other
+                // siblings. Our ownership marker authorizes only the named Pip
+                // links, not replacement or deletion of this entire directory.
+                for skill in &profile.skills {
+                    let path = profile_skills.join(skill);
+                    match fs::symlink_metadata(&path) {
+                        Ok(metadata) if metadata.file_type().is_symlink() => {}
+                        Ok(_) => return Err(BootstrapError::ManagedPathDrift(path)),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(fs_error(error)),
                     }
                 }
             }

@@ -1,7 +1,7 @@
 ---
 name: reviewer-secperf
 description: Use when reviewing a Pip PR for security and performance.
-version: 0.6.0
+version: 0.7.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -30,7 +30,7 @@ The Rust direct-provider runtime starts one fresh read-only Cursor Agent invocat
    Pip reviewer role: reviewer-secperf
    ```
    Do not use that marker for any other role. Return the Rust
-   `reviewer-secperf` contract from `docs/worker-result-contracts.md`. Put confidence, provider limitations, and durable artifact paths under `evidence`. After validating it, call
+   `reviewer-secperf` contract from `references/worker-result-contracts.md` in the loaded `workflow-contract` skill directory (not the target repository). Put confidence, provider limitations, and durable artifact paths under `evidence`. After validating it, call
    `kanban_complete` with a concise summary and the complete object as
    `metadata`; Hermes must durably store the contract in the Kanban run
    metadata. Then return the same object as the entire final response without

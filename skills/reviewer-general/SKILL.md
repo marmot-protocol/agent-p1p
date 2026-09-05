@@ -1,7 +1,7 @@
 ---
 name: reviewer-general
 description: Use for exact-head correctness review of a Pip PR.
-version: 0.5.0
+version: 0.6.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -45,7 +45,7 @@ Pip reviewer role: reviewer-general
 
 Do not use that marker for any other role. Then produce the Rust
 `reviewer-general` contract
-from `docs/worker-result-contracts.md`. After
+from `references/worker-result-contracts.md` in the loaded `workflow-contract` skill directory (not the target repository). After
 validating it, call `kanban_complete` with a concise summary and the complete
 object as `metadata`; Hermes must durably store the contract in the Kanban run
 metadata. Then return the same object as the entire final response without
