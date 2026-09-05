@@ -96,7 +96,11 @@ empty-board Pip gateway probe have passed their inert real-host gates.
    and packaged worker guide checks have passed. The service-visible Rust
    toolchain is now provisioned and sandbox-tested; retain the parallel-test
    caveat in its evidence. No Hermes fork.
-3. Build and verify the candidate release and its schema-8 migration/recovery.
+3. Candidate `ab16528` passed its protected release build and an isolated
+   actual-artifact schema-7 to schema-8 upgrade, injected rollback, restart,
+   downgrade-refusal, and offline backup-restore drill. See
+   [release recovery evidence](evidence/2026-09-05-schema8-release-recovery.md).
+   Live installation remains a separate operator-approved step.
 4. Decide explicit retirement/reconciliation and retry semantics for the
    abandoned canary and orphan gate; do not reset production history.
 5. Only then authorize renewed live shadow activation.

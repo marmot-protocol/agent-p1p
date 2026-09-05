@@ -86,6 +86,15 @@ All gates bind to the exact release commit:
 Passing local tests does not imply these lifecycle gates or live shadow evidence
 passed.
 
+The signed `ab16528` artifact was additionally verified using both actual
+published releases and a private copy of Pirate's schema-7 ledger in a
+network-disabled Debian 13 systemd container. See the
+[schema-8 upgrade/recovery evidence](../evidence/2026-09-05-schema8-release-recovery.md).
+Published Ubuntu-built binaries require at least the observed `GLIBC_2.39`
+symbol version; the Debian-12 CI harness builds its own binary and does not
+prove those published artifacts can run on Debian 12. Validate the actual
+artifact on the intended host baseline.
+
 The disposable lifecycle gate is:
 
 ```bash
