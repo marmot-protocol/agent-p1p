@@ -2,6 +2,10 @@
 
 Date: 2026-09-05. Candidate verified and staged, **not installed on Pirate**.
 
+Subsequent update: JG separately approved the
+[live inert installation](2026-09-05-schema8-live-install.md), which passed.
+The record below describes the preceding isolated drill.
+
 ## Exact candidate
 
 Source: `ab16528588acc1b50e1a30fdb303c6a025bc4a4a`.

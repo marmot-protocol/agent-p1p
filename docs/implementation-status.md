@@ -5,8 +5,10 @@
 controller credential provisioned; consumer timer, controller, workers, Hermes
 gateway, and dispatch remain disabled
 
-Release `933ec69` is installed on Pirate. Recurring timer readiness passed,
-but the labeled canary stopped at a synthetic Hermes gate: stock Hermes
+Release `ab16528` is now installed inertly on Pirate with a schema-8 ledger;
+[live install and bootstrap verification](evidence/2026-09-05-schema8-live-install.md)
+preserved all existing history. On the prior `933ec69` release, recurring timer
+readiness passed, but the labeled canary stopped at a synthetic Hermes gate: stock Hermes
 promoted it to `ready`, which Pip rejected. Authorization was removed, the case
 was recorded as ABANDONED, and the runtime was returned to inert policy revision
 3. That canary never reached a planner or full pipeline.
@@ -16,8 +18,9 @@ CLI/scheduler test passed with a deterministic callback and lost-create-reply
 recovery; it did not invoke a model. A subsequent isolated real Sol planner
 produced a plan whose untouched durable completion was accepted exactly once
 after a regression-tested Pip transport-metadata adapter fix. No Hermes fork
-was needed. The production release, schema-7 ledger,
-and abandoned canary evidence have not been changed. Details and remaining
+was needed. Those isolated probes left production unchanged; the subsequent
+approved schema-8 installation preserved the abandoned canary evidence.
+Details and remaining
 proof gates:
 [`evidence/2026-09-05-gate-free-dispatch-assessment.md`](evidence/2026-09-05-gate-free-dispatch-assessment.md).
 The real-provider result and runtime limitations are recorded in
@@ -100,7 +103,8 @@ empty-board Pip gateway probe have passed their inert real-host gates.
    actual-artifact schema-7 to schema-8 upgrade, injected rollback, restart,
    downgrade-refusal, and offline backup-restore drill. See
    [release recovery evidence](evidence/2026-09-05-schema8-release-recovery.md).
-   Live installation remains a separate operator-approved step.
+   JG subsequently approved the live inert installation, which passed ledger
+   preservation and three-profile bootstrap checks. Activation is still separate.
 4. Decide explicit retirement/reconciliation and retry semantics for the
    abandoned canary and orphan gate; do not reset production history.
 5. Only then authorize renewed live shadow activation.
