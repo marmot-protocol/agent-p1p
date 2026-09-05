@@ -87,9 +87,48 @@ pub fn run_cli(arguments: impl IntoIterator<Item = String>) -> Result<Value, Cli
         "controller-cycle" => controller_cycle(&arguments[1..]),
         "direct-worker-cycle" => direct_worker_cycle(&arguments[1..]),
         "bootstrap-runtime" => bootstrap_runtime(&arguments[1..]),
+        "scratch-retire" => scratch_retire(&arguments[1..]),
         "install-release" => install(&arguments[1..]),
         _ => Err(CliError::InvalidArgument(command.into())),
     }
+}
+
+fn scratch_retire(arguments: &[String]) -> Result<Value, CliError> {
+    let options = options(
+        arguments,
+        &["--policy", "--database", "--projection", "--now"],
+        &[],
+    )?;
+    let policy = crate::load_repository_policy(&read_bounded(
+        Path::new(required(&options, "--policy")?),
+        1024 * 1024,
+    )?)
+    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    if policy.intake.enabled || !policy.intake.paused || policy.dispatch_enabled {
+        return Err(CliError::Reconciliation(
+            "scratch retirement requires inert policy".into(),
+        ));
+    }
+    crate::verify_scratch_runtime_stopped(&pip_hermes::ProcessRunner::default())
+        .map_err(CliError::Reconciliation)?;
+    let store = Store::open_read_only(required(&options, "--database")?)
+        .map_err(|error| CliError::Ledger(error.to_string()))?;
+    let projection = store
+        .task_projection(required(&options, "--projection")?)
+        .map_err(|error| CliError::Ledger(error.to_string()))?
+        .ok_or_else(|| CliError::Reconciliation("missing frozen task projection".into()))?;
+    if projection.board != policy.board {
+        return Err(CliError::Reconciliation("foreign task board".into()));
+    }
+    let body = &projection.desired["body"];
+    let now = required(&options, "--now")?
+        .parse::<u64>()
+        .map_err(|_| CliError::InvalidArgument("--now".into()))?;
+    crate::retire_hermes_scratch(&policy, &store, body, now, true)
+        .map_err(CliError::Reconciliation)?;
+    Ok(
+        json!({"ok":true,"case_key":body["case_key"],"projection_key":body["projection_key"],"disposable_retired":true,"results_retained":true}),
+    )
 }
 
 fn webhook_spool_cycle(arguments: &[String]) -> Result<Value, CliError> {

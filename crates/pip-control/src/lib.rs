@@ -12,6 +12,7 @@ mod dispatch;
 mod disposition;
 mod draft_pr;
 mod final_preflight;
+mod hermes_scratch;
 mod install;
 mod intake;
 mod merge;
@@ -61,6 +62,9 @@ pub use draft_pr::{
 };
 pub use final_preflight::{
     FinalPreflightCycle, FinalPreflightError, FinalPreflightSource, reconcile_final_preflight_once,
+};
+pub use hermes_scratch::{
+    prepare_hermes_scratch, retire_hermes_scratch, verify_scratch_runtime_stopped,
 };
 pub use install::{
     HostInstallOptions, InstallError, InstallFault, InstallLayout, InstallOutcome, InstallResult,

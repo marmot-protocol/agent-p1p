@@ -88,9 +88,28 @@ impl CommandRunner for FakeRunner {
 struct FakeWorkspace {
     calls: Rc<RefCell<Vec<String>>>,
     fail: bool,
+    fail_storage: bool,
 }
 
 impl WorkspacePreparer for FakeWorkspace {
+    fn prepare_dispatch_storage(
+        &self,
+        _policy: &pip_control::RepositoryPolicy,
+        store: &Store,
+        _dispatches: &[pip_controller::WorkflowDispatch],
+    ) -> Result<(), WorkspaceError> {
+        assert!(
+            store
+                .dispatch_intents("effect-intake-planner")
+                .unwrap()
+                .is_some()
+        );
+        if self.fail_storage {
+            Err(WorkspaceError::InvalidCase)
+        } else {
+            Ok(())
+        }
+    }
     fn prepare(
         &self,
         _policy: &pip_control::RepositoryPolicy,
@@ -107,6 +126,29 @@ impl WorkspacePreparer for FakeWorkspace {
             Ok(())
         }
     }
+}
+
+#[test]
+fn missing_scratch_blocks_external_dispatch_after_freezing_intents() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = seeded_store(directory.path());
+    let runner = FakeRunner::default();
+    let workspace = FakeWorkspace {
+        fail_storage: true,
+        ..FakeWorkspace::default()
+    };
+    assert!(
+        dispatch_once_with_workspace(
+            &mut store,
+            &active_policy(),
+            runner.clone(),
+            &workspace,
+            context("controller-1", 100)
+        )
+        .is_err()
+    );
+    assert!(runner.commands.borrow().is_empty());
+    assert_eq!(store.task_projection_count().unwrap(), 0);
 }
 
 #[test]

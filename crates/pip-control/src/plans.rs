@@ -208,6 +208,14 @@ fn next_plan(store: &Store, case: &StoredCase) -> Result<PlannerResult, PlanPubl
 }
 
 fn render_plan(plan: &PlannerResult) -> Result<String, PlanPublicationError> {
+    let inline = plan
+        .common
+        .evidence
+        .get("plan_markdown")
+        .and_then(serde_json::Value::as_str)
+        .map_or_else(String::new, |text| {
+            format!("\n\n### Implementation plan\n\n{text}")
+        });
     let dependencies = serde_json::to_string_pretty(&plan.dependencies)
         .map_err(|error| PlanPublicationError::Serialization(error.to_string()))?;
     let decisions = serde_json::to_string_pretty(&plan.open_decisions)
@@ -233,7 +241,7 @@ fn render_plan(plan: &PlannerResult) -> Result<String, PlanPublicationError> {
         String::new()
     };
     Ok(format!(
-        "## Pip plan v{}: {}\n\nPlanned base: `{}`\n\n### Root cause\n\n{}\n\n### Authorized scope\n\n{}\n\n### Sensitive scope\n\n```json\n{sensitive}\n```\n\n### Dependencies\n\n```json\n{dependencies}\n```\n\n### Open decisions\n\n```json\n{decisions}\n```\n\nPlan artifact: `{}`\n\nPip planner task: `{}`{binding}",
+        "## Pip plan v{}: {}\n\nPlanned base: `{}`\n\n### Root cause\n\n{}\n\n### Authorized scope\n\n{}\n\n### Sensitive scope\n\n```json\n{sensitive}\n```\n\n### Dependencies\n\n```json\n{dependencies}\n```\n\n### Open decisions\n\n```json\n{decisions}\n```\n\nPlan artifact: `{}`{inline}\n\nPip planner task: `{}`{binding}",
         plan.plan_version,
         outcome_name(plan.outcome),
         plan.planned_base_sha,

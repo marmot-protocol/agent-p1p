@@ -1,7 +1,7 @@
 ---
 name: workflow-contract
 description: Use for every Pip case task. Enforce shared invariants.
-version: 0.5.0
+version: 0.6.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -34,6 +34,28 @@ This is the shared contract for every Pip role. Role-specific skills add respons
 14. Worker processes never push Git branches or receive GitHub credentials. A builder commits only in its exact `assigned_worktree` on `assigned_branch`; the deterministic controller publishes and verifies that branch after accepting the result.
 15. Parent summaries may be truncated. Resolve every declared parent on the task's assigned board, read the full durable run metadata, and dereference declared result artifacts before relying on PR numbers, findings, or remediation evidence.
 16. Return contract version 2 with exactly these common fields plus the role fields: `contract_version`, `workflow_version`, `case` (`repository_id`, `issue_number`, `workflow_version`), `task_id`, `role`, `requested_model`, `actual_model`, `skills_repository_commit`, integer `started_at_unix`, integer `completed_at_unix`, and object `evidence`. Review results also copy the exact `reviewer_id`; the controller-owned `review_mode` binding is not an output choice. Put supplemental artifact paths or diagnostics inside `evidence`. The full field guide is `references/worker-result-contracts.md` in the loaded `workflow-contract` skill directory (not the target repository).
+
+## Hermes storage
+
+For Hermes tasks carrying `storage` schema 1, `source` is the controller-owned
+read-only checkout, and the current directory remains that checkout. Use the
+exact `cargo_target`, `cargo_home`, and `temporary` paths from the task as
+`CARGO_TARGET_DIR`, `CARGO_HOME`, and `TMPDIR` for Cargo commands. The controller
+has already created these paths. Keep plan/review artifacts in `results`, not
+in disposable build directories. Never redirect builds into profile caches,
+operator homes, or another task's storage. Do not install language servers.
+If paths are absent, unwritable, or the disk reserve is exhausted, block and
+report the failure; do not invent substitute paths. These rules do not alter
+direct-worker storage or allow a planner/reviewer to modify source.
+
+Managed-storage planners must include the full canonical plan as
+`evidence.plan_markdown` (nonempty, at most 16 KiB of UTF-8). Keep the file in
+`storage.results` as a retained copy. The accepted run and its payload digest,
+not cross-user filesystem access, bind the plan for downstream workers.
+Builders and reviewers read this field from the accepted planner run in the
+immutable evidence bundle. Private artifact paths are provenance, not a
+requirement to bypass their sandbox. The controller also publishes the inline
+plan in the issue comment before builder dispatch.
 
 ## Ownership
 

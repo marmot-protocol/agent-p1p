@@ -220,14 +220,21 @@ fn a_hermes_circuit_breaker_escalates_the_case_once() {
         ]
     }));
 
+    let mut current_policy = active_policy();
+    current_policy.max_provider_failures = 9;
+    current_policy.max_hermes_attempts = Some(1);
     assert_eq!(
-        ingest_completed_once_with(&mut store, &active_policy(), runner, "hermes", 50).unwrap(),
+        ingest_completed_once_with(&mut store, &current_policy, runner, "hermes", 50).unwrap(),
         ResultCycle::ProviderFailureEscalated {
             task_id: "planner-1".into()
         }
     );
     let case = store.case("repo:984321#1240@1").unwrap().unwrap();
     assert_eq!(case.state, "ESCALATED");
+    let history = store.immutable_history_for_case(&case.case_key).unwrap();
+    let event = history.events.last().unwrap();
+    assert_eq!(event.payload["observed"], 3);
+    assert_eq!(event.payload["limit"], 3);
     assert_eq!(
         store.latest_event_type(&case.case_key).unwrap().as_deref(),
         Some("OPERATIONAL_BOUND_REACHED")
@@ -235,6 +242,109 @@ fn a_hermes_circuit_breaker_escalates_the_case_once() {
 }
 
 fn project_planner(store: &mut Store) {
+    project_planner_with_limit(store, 3);
+}
+
+#[test]
+fn crash_breaker_event_escalates_one_attempt_without_accepting_a_result() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    project_planner_with_limit(&mut store, 1);
+    let runner = FakeRunner::default();
+    runner.json(json!({
+        "task": {"id":"planner-1", "title":"Run planner", "status":"blocked",
+            "assignee":"planner", "created_by":"pip-controller", "body":"{}", "max_retries":1},
+        "runs":[{"outcome":"crashed", "profile":"planner", "metadata":{"protocol_violation":true}}],
+        "events":[{"kind":"gave_up", "payload":{"failures":1, "effective_limit":1,
+            "limit_source":"task", "trigger_outcome":"crashed"}}]
+    }));
+    assert!(matches!(
+        ingest_completed_once_with(&mut store, &active_policy(), runner, "hermes", 50).unwrap(),
+        ResultCycle::ProviderFailureEscalated { .. }
+    ));
+    assert_eq!(store.run_count().unwrap(), 0);
+    let case = store.case("repo:984321#1240@1").unwrap().unwrap();
+    assert_eq!(case.state, "ESCALATED");
+    let history = store.immutable_history_for_case(&case.case_key).unwrap();
+    let event = history.events.last().unwrap();
+    assert_eq!(event.payload["observed"], 1);
+    assert_eq!(event.payload["limit"], 1);
+}
+
+fn project_planner_with_limit(store: &mut Store, max_retries: u32) {
+    project_planner_with_task(store, max_retries, "planner-1", false);
+}
+
+#[test]
+fn scratch_planner_requires_bounded_inline_plan_for_cross_identity_handoff() {
+    for inline in [
+        Value::Null,
+        json!(""),
+        json!("x".repeat(16385)),
+        json!("## Plan\n1. Add regression coverage.\n2. Implement the local fix."),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+        project_planner_with_task(&mut store, 1, "planner-1", true);
+        let mut metadata = planner_result();
+        metadata["evidence"]["plan_markdown"] = inline.clone();
+        let runner = FakeRunner::default();
+        runner.json(completed_planner("planner", metadata));
+        let result = ingest_completed_once_with(&mut store, &active_policy(), runner, "hermes", 10);
+        let valid = inline
+            .as_str()
+            .is_some_and(|text| !text.is_empty() && text.len() <= 16384);
+        assert_eq!(result.is_ok(), valid);
+        assert_eq!(store.run_count().unwrap(), u64::from(valid));
+    }
+}
+
+#[test]
+#[ignore = "requires PIP_OFFLINE_PLANNER_REPORT from the no-model stock-Hermes service sandbox"]
+fn offline_sandbox_completion_is_ingested_exactly_once() {
+    let report: Value = serde_json::from_slice(
+        &std::fs::read(std::env::var("PIP_OFFLINE_PLANNER_REPORT").unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(report["ok"], true);
+    assert_eq!(report["provider_calls"], 0);
+    let task = report["task_detail"]["task"]["id"].as_str().unwrap();
+    let now = report["task_detail"]["runs"][0]["metadata"]["completed_at_unix"]
+        .as_u64()
+        .unwrap()
+        + 1;
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    project_planner_with_task(&mut store, 1, task, true);
+    let runner = FakeRunner::default();
+    runner.json(report["task_detail"].clone());
+    assert!(matches!(
+        ingest_completed_once_with(&mut store, &active_policy(), runner, "hermes", now).unwrap(),
+        ResultCycle::Ingested {
+            transition_count: 1,
+            ..
+        }
+    ));
+    assert_eq!(store.run_count().unwrap(), 1);
+    assert_eq!(
+        ingest_completed_once_with(
+            &mut store,
+            &active_policy(),
+            FakeRunner::default(),
+            "hermes",
+            now + 1
+        )
+        .unwrap(),
+        ResultCycle::Idle
+    );
+}
+
+fn project_planner_with_task(
+    store: &mut Store,
+    max_retries: u32,
+    task_id: &str,
+    inline_plan: bool,
+) {
     store
         .create_case(&NewCase {
             case_key: "repo:984321#1240@1".into(),
@@ -257,7 +367,7 @@ fn project_planner(store: &mut Store) {
         })
         .unwrap();
     store.claim_effect("dispatch", 2, 30).unwrap().unwrap();
-    let desired = TaskCreateSpec {
+    let mut desired = TaskCreateSpec {
         board: "pip-mdk".into(),
         effect_id: "effect-planner:worker".into(),
         projection_key: "repo:984321#1240@1:planner:round:1:revision:1:worker".into(),
@@ -270,22 +380,25 @@ fn project_planner(store: &mut Store) {
             "state_revision":1,
             "role":"planner",
             "plan_version":1,
-            "requested_model":"openai-codex/gpt-5.6-sol"
+            "requested_model":"openai-codex/gpt-6-astra"
             ,"skills_repository_commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }),
         assignee: "planner".into(),
         workspace: "/tmp/worktree".into(),
         skills: vec!["workflow-contract".into(), "planner".into()],
         provider: "openai-codex".into(),
-        model: "gpt-5.6-sol".into(),
+        model: "gpt-6-astra".into(),
         max_runtime: "PT30M".into(),
-        max_retries: 3,
+        max_retries,
         priority: 50,
         parent_task_ids: vec!["gate-1".into()],
     };
+    if inline_plan {
+        desired.body["storage"] = json!({"schema_version":1});
+    }
     let observed = TaskSnapshot {
         configuration: Default::default(),
-        id: "planner-1".into(),
+        id: task_id.into(),
         title: desired.title.clone(),
         status: "ready".into(),
         assignee: Some("planner".into()),
@@ -298,7 +411,7 @@ fn project_planner(store: &mut Store) {
                 projection_id: desired.projection_key.clone(),
                 effect_id: "effect-planner".into(),
                 board: "pip-mdk".into(),
-                task_id: "planner-1".into(),
+                task_id: task_id.into(),
                 desired: serde_json::to_value(desired).unwrap(),
                 observed: serde_json::to_value(observed).unwrap(),
             },
@@ -314,7 +427,11 @@ fn planner_result() -> Value {
         "../../../migration/target-v1/worker-results.json"
     ))
     .unwrap();
-    fixture["results"][0].clone()
+    // Adapt this current-policy test without rewriting frozen migration evidence.
+    let mut result = fixture["results"][0].clone();
+    result["requested_model"] = json!("openai-codex/gpt-6-astra");
+    result["actual_model"] = json!("openai-codex/gpt-6-astra");
+    result
 }
 
 fn completed_planner(profile: &str, metadata: Value) -> Value {

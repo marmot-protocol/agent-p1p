@@ -78,6 +78,7 @@ test -x /opt/pip/current/bin/pip-control
 test "$(stat -c '%U:%G:%a' /var/lib/pip/ledger.db)" = pip-control:pip-control:600
 test "$(stat -c '%U:%G:%a' /var/lib/pip)" = pip-control:pip-control:710
 test "$(stat -c '%U:%G:%a' /var/lib/pip/worktrees)" = pip-control:pip-control:770
+test "$(stat -c '%U:%G:%a' /var/lib/pip/worktrees/hermes-scratch)" = pip-control:pip-control:700
 test "$(getent passwd pip-ingress | cut -d: -f6-7)" = /nonexistent:/usr/sbin/nologin
 test "$(id -Gn pip-ingress)" = pip-ingress
 test "$(stat -c '%U:%G:%a' /var/spool/pip-webhooks)" = root:root:711

@@ -213,6 +213,9 @@ fn dispatch_once_inner<R: CommandRunner + Clone>(
     // Freeze ALL roles atomically before the first queue write. A deployment or
     // policy change cannot silently replace a previously authorized model/body.
     store.freeze_dispatch_intents(&claimed, &intents, now())?;
+    if let Some(workspace) = workspace {
+        workspace.prepare_dispatch_storage(policy, store, &dispatches)?;
+    }
     let has_hermes = intents
         .iter()
         .any(|intent| intent.transport == DispatchTransport::Hermes);

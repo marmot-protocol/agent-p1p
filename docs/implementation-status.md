@@ -1,17 +1,40 @@
 # Rust implementation status
 
 **Snapshot date:** 2026-09-05
-**Activation state:** public webhook receipt boundary enabled on Pirate;
-controller credential provisioned; consumer timer, controller, workers, Hermes
-gateway, and dispatch remain disabled
+**Activation state:** MDK #1639 canary paused after a planner provider rejection;
+execution services stopped and inert host policy revision 3 restored. History
+is preserved; no accepted plan or PR. Merge remains disabled.
+See [live canary evidence](evidence/2026-09-05-canary-1639.md).
 
-Release `ab16528` is now installed inertly on Pirate with a schema-8 ledger;
+**Undeployed model selection:** source target policy revision 6 now selects
+GPT-6 Astra for planner, general review and final review, with prior reasoning
+efforts retained. Pirate remains on inert revision 3 and the interrupted Sol
+task is unchanged. See [migration evidence](evidence/2026-09-05-astra-policy-migration.md).
+
+**Undeployed canary hardening:** bounded issue/comment snapshots, a separate
+one-attempt Hermes policy, and stock crash-breaker event ingestion now have
+regression coverage. A no-model stock-Hermes failure/CLI/Rust-adapter probe
+passed on isolated boards. Managed scratch storage and a complete offline
+service-sandbox lifecycle remain prerequisites; another live canary has not
+started. See [preflight evidence](evidence/2026-09-05-canary-preflight-hardening.md).
+
+**Subsequent storage/sandbox work:** per-projection managed build storage,
+offline-only retirement, disabled optional LSP setup, and inline canonical plan
+handoff are now implemented in source. An isolated no-provider stock-Hermes
+planner lifecycle passed under Pirate's service restrictions, followed by
+exactly-once Rust ingestion. This supersedes the earlier storage prerequisite,
+but not the deployment/provider-access gates. See
+[storage and sandbox evidence](evidence/2026-09-05-hermes-storage-sandbox.md).
+
+Release `ab16528` was installed inertly on Pirate with a schema-8 ledger;
 [live install and bootstrap verification](evidence/2026-09-05-schema8-live-install.md)
 preserved all existing history. On the prior `933ec69` release, recurring timer
 readiness passed, but the labeled canary stopped at a synthetic Hermes gate: stock Hermes
 promoted it to `ready`, which Pip rejected. Authorization was removed, the case
 was recorded as ABANDONED, and the runtime was returned to inert policy revision
-3. That canary never reached a planner or full pipeline.
+3. That old canary never reached a planner or full pipeline. The separately
+approved #1639 canary has reached its ordinary assigned planner task; the rest
+of the live pipeline is not yet proven.
 
 The gate-free refactor is now implemented in source. An isolated real-Hermes
 CLI/scheduler test passed with a deterministic callback and lost-create-reply
@@ -44,7 +67,7 @@ a completed canary.
 | Boundary | Current implementation | Evidence boundary |
 |---|---|---|
 | Deterministic workflow | Exhaustive Rust states, events, effects, policy-defined required reviewer-instance joins, semantic lane aggregation, exact-head binding, remediation/elapsed-time/repeated-finding/provider-failure bounds, durable escalation, and shadow-only MDK disposition | Workspace tests and frozen fixtures |
-| Authoritative storage | SQLite schema v8 (production still v7), frozen dispatch batches and non-recycled create reservations, immutable webhook deliveries/events/evidence/runs/findings/detached review observations/workspace retirements, current-case projection, durable outbox, leases, immutable direct attempts, observer-preserving effect supersession, backup, migration, and crash injection | Workspace and disposable lifecycle tests |
+| Authoritative storage | SQLite schema v8 (including Pirate production), frozen dispatch batches and non-recycled create reservations, immutable webhook deliveries/events/evidence/runs/findings/detached review observations/workspace retirements, current-case projection, durable outbox, leases, immutable direct attempts, observer-preserving effect supersession, backup, migration, and crash injection | Workspace and disposable lifecycle tests |
 | Intake reads | Signed configured-label webhook ingestion with delivery-ID/payload-digest replay protection and a live exact-issue re-read, plus bounded polling recovery using numeric repository/actor identity, exclusions, explicit holds, policy validation, and concurrency limits. A loopback-only `pip-ingress` service has only the webhook secret and atomically spools raw issue-event bodies; authenticated GitHub `ping` events are acknowledged without durable input. A separate bounded `pip-control` cycle revalidates and commits one pending delivery before marking it processed. Authenticated issue actions unrelated to the intake label are durably retired without a live read; configured-label events received while inactive are recorded as blocked and cannot create a case or outbox effect. | Adversarial HTTP/spool/consumer, inactive-delivery, unrelated-action, outage/replay, tamper, systemd-isolation, install/rollback, and disposable lifecycle tests; on Pirate, the isolated service, root-owned secret, Tailscale Funnel TLS path, public signed-request/replay probes, repository webhook reachability, production controller credential, empty-spool and authentic non-intake cycles, and a controlled configured-label add/live-reread/remove cycle are proven while the consumer timer remains disabled |
 | Worker dispatch routing | Hermes-native roles receive ordinary parentless assigned tasks after immutable intent freeze and a one-time create reservation; exact-body/configuration reconciliation handles running/done cards and fails closed on missing/archived uncertain work; direct required roles become leased `RUN_DIRECT_WORKER` jobs; direct advisory/shadow instances become detached `RUN_DIRECT_OBSERVER` jobs that survive case advancement; both paths cross the immutable filesystem bridge to a separate worker identity | Fake-runner, reservation-race/restart/recovery, mixed-review, late-shadow, systemd-boundary, and offline integration tests; isolated stock-Hermes CLI/scheduler execution and lost-reply recovery passed with no model |
 | Worker contracts | Contract v2 planner, builder, policy-defined reviewer-instance, and final-reviewer results bound to case, task, semantic role, reviewer ID, model, skills commit, plan, PR, and exact head | Contract fixtures and ingestion tests |
@@ -52,7 +75,7 @@ a completed canary.
 | CI reconciliation | Independent current and historical check/status evaluation on the ledger-bound PR head | Fixture and controller-cycle tests |
 | GitHub reads/writes | Bounded REST reads plus bounded GraphQL review-thread pagination; idempotent issue comments, controller-owned draft PRs, exact-head reviews, ready-for-review mutation, and guarded merge. Reviewer Apps use RS256 JWTs to mint repository-scoped, short-lived installation tokens each active controller cycle. | Adapter, App-auth, and controller-cycle tests; Pirate has root-owned controller and reviewer credentials, verified controller identity/repository/read access, and successful installed-key token mint plus repository/issue/PR read probes for each distinct reviewer App, while MDK policy cannot enable the guarded path |
 | Release/install | Signed source-bound release cohort, protected manual CI build/sign/upload workflow, exact action/image pins, artifact verification, content-addressed install, rollback, schema migration, isolated identities, hardened shadow timer, and inert active-runtime templates | Exact source `48ac1e2` passed ordinary and protected CI, independent signature and digest verification, live injected-failure rollback, protected-CI trust rotation, Pirate upgrade, idempotent reinstall, inert Hermes reconciliation, and ingress restart recovery |
-| Active controller | One `controller-cycle` command that ingests Hermes and isolated direct-worker results, reconciles CI and authorization, performs polling recovery intake, enforces all operational bounds, handles takeover, publishes branches/plans/PRs/reviews/dispositions, verifies final preflight, and routes only freshly authorized effects | Local fixture and restart tests; live activation remains unauthorized |
+| Active controller | One `controller-cycle` command that ingests Hermes and isolated direct-worker results, reconciles CI and authorization, performs polling recovery intake, enforces all operational bounds, handles takeover, publishes branches/plans/PRs/reviews/dispositions, verifies final preflight, and routes only freshly authorized effects | Local fixture and restart tests; approved #1639 activation has reached one live planner task, full pipeline pending |
 | Final-review preflight | A durable observation effect joins the accepted plan/build and every policy-required reviewer instance, fresh issue/clarification and authorization evidence, exact numeric GitHub actor and role-stamped lane approvals, current head CI, clean draft-PR ownership/mergeability, and resolved review threads before final-review dispatch | State-machine, adapter, multi-instance fixture, drift, and restart-safe lease tests |
 | Review publication | Two distinct controller-held lane credentials publish one aggregate general and one aggregate security/performance verdict on the exact head; each body names its required reviewer instances, while detached observations have no publication authority | Policy, state-machine, multi-instance aggregation, mutation, outage/retry, and exact-role fixture tests |
 | Plan publication | Planner results first create a durable `PUBLISH_PLAN` effect; the controller publishes the immutable plan comment and only then applies the typed outcome that releases build, human disposition, or terminal recording | Contract, state-machine, mutation, and outage/retry tests |
@@ -66,18 +89,19 @@ a completed canary.
 | Human disposition | `HOLD_FOR_HUMAN`, `ESCALATE`, and shadow-ready effects publish idempotent provenance-marked issue or draft-PR comments; local completion, block, abandonment, and takeover effects commit evidence without writing after lost authorization | Mutation fixtures and transactional effect/evidence tests |
 | Provider retry control | Direct-provider failures are immutable attempts counted by Pip; Hermes tasks receive the policy retry limit and a terminal `gave_up` circuit breaker is converted to a Pip operational-bound escalation | Direct queue, Hermes projection, terminal-run, and escalation tests; live Cursor calls proved current Grok, Kimi, and Opus availability under `pip-worker`, and an isolated Kimi connection-refusal/fresh-success drill proved live direct-provider recovery without changing the production ledger |
 
-## What is deliberately inert
+## Source defaults and live activation
 
 - `config/target/repositories/mdk.json` has intake disabled, repository paused,
   dispatch disabled, merge mode `shadow`, and autonomous merge false. Source
-  policy revision 3/workflow 3 binds the three verified numeric GitHub actors,
-  the live `Required CI` ruleset context, required Sol/Kimi instances, and a
+  policy revision 6/workflow 3 binds the three verified numeric GitHub actors,
+  the live `Required CI` ruleset context, required Astra/Kimi instances, and a
   detached Opus comparison instance without granting activation authority. It
-  is installed inertly on Pirate.
+  remains the inert source default. Pirate's approved revision-5 activation
+  was paused and revision 3 restored after the planner failure described above.
 - The production installer does not enable or start any reconciliation,
   gateway, controller, or direct-worker path.
 - Controller and direct-worker instance templates plus the dedicated Hermes
-  gateway unit are installed but inert.
+  gateway unit are installed but stopped following the #1639 planner failure.
 - The live canary created one orphan activation-gate card before abandonment.
   It has no planner card, ledger runs, or PR. Preserve that board/ledger evidence;
   the old empty-board activation script is not a valid retry procedure.

@@ -129,6 +129,10 @@ pub struct RepositoryPolicy {
     pub max_remediation_rounds: u32,
     pub max_case_elapsed_seconds: u64,
     pub max_provider_failures: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_hermes_attempts: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hermes_scratch_root: Option<String>,
     pub max_repeated_finding_fingerprint: u32,
     pub sensitive_scope_categories: Vec<String>,
     pub required_ci_contexts: Vec<String>,
@@ -184,6 +188,14 @@ impl RepositoryPolicy {
                 workflow.with_sensitive_scope_categories(self.sensitive_scope_categories.clone())
             })
             .and_then(|workflow| workflow.with_max_provider_failures(self.max_provider_failures))
+            .and_then(|workflow| match self.max_hermes_attempts {
+                Some(attempts) => workflow.with_max_hermes_attempts(attempts),
+                None => Ok(workflow),
+            })
+            .and_then(|workflow| match &self.hermes_scratch_root {
+                Some(root) => workflow.with_hermes_scratch_root(root.clone()),
+                None => Ok(workflow),
+            })
             .map_err(|error| PolicyError::Dispatch(error.to_string()))
     }
 
@@ -292,6 +304,12 @@ fn validate_policy(policy: &RepositoryPolicy) -> Result<(), PolicyError> {
         && disjoint_paths(&policy.checkout, &policy.workspace)
         && disjoint_paths(&policy.checkout, &policy.artifacts)
         && disjoint_paths(&policy.workspace, &policy.artifacts)
+        && policy.hermes_scratch_root.as_deref().is_none_or(|root| {
+            valid_absolute_path(root)
+                && disjoint_paths(root, &policy.checkout)
+                && disjoint_paths(root, &policy.workspace)
+                && disjoint_paths(root, &policy.artifacts)
+        })
         && policy.workspace_storage.minimum_free_bytes > 0
         && policy.workspace_storage.terminal_retention_seconds > 0
         && valid_branch_prefix(&policy.branch_prefix)
@@ -314,6 +332,7 @@ fn validate_policy(policy: &RepositoryPolicy) -> Result<(), PolicyError> {
         && policy.max_remediation_rounds > 0
         && policy.max_case_elapsed_seconds > 0
         && policy.max_provider_failures > 0
+        && policy.max_hermes_attempts != Some(0)
         && policy.max_repeated_finding_fingerprint > 0
         && sensitive_scope.len() == policy.sensitive_scope_categories.len()
         && sensitive_scope.iter().all(|category| {

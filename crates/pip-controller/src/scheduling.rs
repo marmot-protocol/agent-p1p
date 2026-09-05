@@ -45,6 +45,8 @@ pub struct WorkflowPolicy {
     branch_prefix: String,
     sensitive_scope_categories: Vec<String>,
     max_provider_failures: u32,
+    max_hermes_attempts: Option<u32>,
+    hermes_scratch_root: Option<String>,
     roles: Vec<RolePolicy>,
 }
 
@@ -98,6 +100,8 @@ impl WorkflowPolicy {
             branch_prefix,
             sensitive_scope_categories: Vec::new(),
             max_provider_failures: 1,
+            max_hermes_attempts: None,
+            hermes_scratch_root: None,
             roles,
         })
     }
@@ -110,6 +114,35 @@ impl WorkflowPolicy {
             return Err(DispatchError::InvalidPolicy);
         }
         self.max_provider_failures = max_provider_failures;
+        Ok(self)
+    }
+
+    pub fn with_max_hermes_attempts(mut self, attempts: u32) -> Result<Self, DispatchError> {
+        if attempts == 0 {
+            return Err(DispatchError::InvalidPolicy);
+        }
+        self.max_hermes_attempts = Some(attempts);
+        Ok(self)
+    }
+
+    pub fn with_hermes_scratch_root(mut self, root: String) -> Result<Self, DispatchError> {
+        let path = std::path::Path::new(&root);
+        let source = std::path::Path::new(&self.workspace);
+        if !path.is_absolute()
+            || root.ends_with('/')
+            || !valid_text(&root, 4096)
+            || path.components().any(|part| {
+                matches!(
+                    part,
+                    std::path::Component::ParentDir | std::path::Component::CurDir
+                )
+            })
+            || path.starts_with(source)
+            || source.starts_with(path)
+        {
+            return Err(DispatchError::InvalidPolicy);
+        }
+        self.hermes_scratch_root = Some(root);
         Ok(self)
     }
 
@@ -573,6 +606,24 @@ fn dispatch(
         "immutable_evidence_bundle".into(),
         context.immutable_evidence_bundle.clone(),
     );
+    if binding.execution == ExecutionKind::Hermes
+        && let Some(root) = &policy.hermes_scratch_root
+    {
+        body.insert("projection_key".into(), json!(worker_projection_key));
+        let root = format!(
+            "{root}/{}",
+            hex_digest(&Sha256::digest(worker_projection_key.as_bytes()))
+        );
+        body.insert("storage".into(), json!({
+            "schema_version": 1,
+            "root": root,
+            "source": format!("{}/repo-{}-issue-{}-workflow-{}", policy.workspace.trim_end_matches('/'), context.case_id.repository().get(), context.case_id.issue().get(), context.case_id.workflow().get()),
+            "cargo_target": format!("{root}/disposable/target"),
+            "cargo_home": format!("{root}/disposable/cargo-home"),
+            "temporary": format!("{root}/disposable/tmp"),
+            "results": format!("{root}/results"),
+        }));
+    }
 
     Ok(WorkflowDispatch {
         role,
@@ -601,7 +652,9 @@ fn dispatch(
         provider: binding.provider.clone(),
         model: binding.model.clone(),
         max_runtime: binding.max_runtime.clone(),
-        max_retries: policy.max_provider_failures,
+        max_retries: policy
+            .max_hermes_attempts
+            .unwrap_or(policy.max_provider_failures),
         priority: binding.priority,
         board: policy.board.clone(),
     })

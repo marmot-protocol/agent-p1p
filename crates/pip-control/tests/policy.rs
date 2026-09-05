@@ -5,7 +5,7 @@ fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
     let bytes = include_bytes!("../../../config/target/repositories/mdk.json");
     let policy = load_repository_policy(bytes).unwrap();
     assert_eq!(policy.policy_format, 2);
-    assert_eq!(policy.revision, 3);
+    assert_eq!(policy.revision, 6);
     assert_eq!(policy.workflow_version, 3);
     assert_eq!(policy.repository.id, 1_055_628_515);
     assert_eq!(policy.repository.full_name(), "marmot-protocol/mdk");
@@ -31,6 +31,11 @@ fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
     assert_eq!(policy.merge.method, "squash");
     assert_eq!(policy.max_case_elapsed_seconds, 86_400);
     assert_eq!(policy.max_provider_failures, 3);
+    assert_eq!(policy.max_hermes_attempts, Some(1));
+    assert_eq!(
+        policy.hermes_scratch_root.as_deref(),
+        Some("/var/lib/pip/worktrees/hermes-scratch")
+    );
     assert_eq!(policy.max_repeated_finding_fingerprint, 2);
     assert_eq!(policy.required_ci_contexts, ["Required CI"]);
     assert_eq!(policy.sensitive_scope_categories.len(), 7);
@@ -47,13 +52,13 @@ fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
 }
 
 #[test]
-fn phase9_mdk_policy_changes_only_revision_and_activation_controls() {
+fn phase9_mdk_policy_preserves_historical_sol_activation() {
     let target_bytes = include_bytes!("../../../config/target/repositories/mdk.json");
     let active_bytes = include_bytes!("../../../config/activation/repositories/mdk-phase9.json");
     let target = load_repository_policy(target_bytes).unwrap();
     let active = load_repository_policy(active_bytes).unwrap();
 
-    assert_eq!(target.revision, 3);
+    assert_eq!(target.revision, 6);
     assert_eq!(active.revision, 4);
     assert!(active.intake.enabled);
     assert!(!active.intake.paused);
@@ -69,8 +74,75 @@ fn phase9_mdk_policy_changes_only_revision_and_activation_controls() {
     target["intake"]["enabled"] = active["intake"]["enabled"].clone();
     target["intake"]["paused"] = active["intake"]["paused"].clone();
     target["dispatch_enabled"] = active["dispatch_enabled"].clone();
+    target
+        .as_object_mut()
+        .unwrap()
+        .remove("max_hermes_attempts");
+    target
+        .as_object_mut()
+        .unwrap()
+        .remove("hermes_scratch_root");
+    for role in target["roles"].as_array_mut().unwrap() {
+        if role["provider"] == "openai-codex" {
+            assert_eq!(role["model"], "gpt-6-astra");
+            role["model"] = serde_json::json!("gpt-5.6-sol");
+        }
+    }
     assert_eq!(active, target);
     assert!(active.get("canary_issue").is_none());
+}
+
+#[test]
+fn hermes_attempt_limit_is_optional_for_old_policies_and_rejects_zero() {
+    let mut value: serde_json::Value = serde_json::from_slice(include_bytes!(
+        "../../../config/target/repositories/mdk.json"
+    ))
+    .unwrap();
+    value["max_hermes_attempts"] = serde_json::json!(0);
+    assert!(load_repository_policy(&serde_json::to_vec(&value).unwrap()).is_err());
+    value.as_object_mut().unwrap().remove("max_hermes_attempts");
+    let policy = load_repository_policy(&serde_json::to_vec(&value).unwrap()).unwrap();
+    assert_eq!(policy.max_hermes_attempts, None);
+    assert!(
+        serde_json::to_value(policy)
+            .unwrap()
+            .get("max_hermes_attempts")
+            .is_none()
+    );
+}
+
+#[test]
+fn astra_policy_preserves_effort_other_providers_and_inert_boundaries() {
+    let policy = load_repository_policy(include_bytes!(
+        "../../../config/target/repositories/mdk.json"
+    ))
+    .unwrap();
+    let openai: Vec<_> = policy
+        .roles
+        .iter()
+        .filter(|role| role.provider == "openai-codex")
+        .collect();
+    assert_eq!(openai.len(), 3);
+    for (role, effort) in openai.iter().zip(["xhigh", "high", "xhigh"]) {
+        assert_eq!(role.model, "gpt-6-astra");
+        assert_eq!(role.reasoning_effort.as_deref(), Some(effort));
+    }
+    let direct: Vec<_> = policy
+        .roles
+        .iter()
+        .filter(|role| role.provider == "cursor")
+        .map(|role| role.model.as_str())
+        .collect();
+    assert_eq!(
+        direct,
+        [
+            "cursor-grok-4.6-high-fast",
+            "kimi-k3-max",
+            "claude-opus-5-thinking-high"
+        ]
+    );
+    assert!(!policy.intake.enabled && policy.intake.paused && !policy.dispatch_enabled);
+    assert!(policy.merge.is_shadow() && !policy.merge.autonomous);
 }
 
 #[test]

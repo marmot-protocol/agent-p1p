@@ -375,6 +375,7 @@ merge:
 max_remediation_rounds: 3
 max_case_elapsed_seconds: 86400
 max_provider_failures: 3
+max_hermes_attempts: 1
 max_repeated_finding_fingerprint: 2
 required_ci_contexts:
   - Required CI

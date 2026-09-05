@@ -1,6 +1,7 @@
 //! Operator-only, two-phase real-provider probe. Preparation queues exactly one
 //! worker; execution belongs in a bounded OS sandbox, outside this test process.
 //! Verification reads the worker's durable metadata without repairing it.
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -38,6 +39,9 @@ fn isolated_real_planner_contract() {
         policy["workspace"] = json!(root.join("workspaces"));
         policy["checkout"] = json!(root.join("fixture"));
         policy["artifacts"] = json!(root.join("artifacts"));
+        policy["hermes_scratch_root"] = json!(root.join("scratch"));
+        policy["workspace_storage"]["require_distinct_filesystem"] = json!(false);
+        policy["workspace_storage"]["minimum_free_bytes"] = json!(1);
         policy["intake"]["enabled"] = json!(true);
         policy["intake"]["paused"] = json!(false);
         policy["dispatch_enabled"] = json!(true);
@@ -153,6 +157,10 @@ fn isolated_real_planner_contract() {
                 event_id: "isolated-fixture-authorized".into(),
                 event_type: "ISSUE_AUTHORIZED".into(),
                 payload: json!({"fixture_only": true, "issue": issue,
+                    "issue_context": {"schema_version":1,"observed_at":now,
+                        "repository":{"id":17,"full_name":"pip-fixture/local-only","default_branch":"master"},
+                        "issue":{"id":1,"number":1,"open":true,"is_pull_request":false,"labels":["fixture-authorized"]},
+                        "issue_content":{"author_id":101,"title":issue["title"],"body":issue["body"],"created_at":"2026-09-05T00:00:00Z","updated_at":"2026-09-05T00:00:00Z"},"comments":[]},
                     "instructions": "Offline local fixture, not a GitHub issue. Use the supplied immutable checkout and issue.json; do not fetch or publish. Read AGENTS.md and docs/worker-result-contracts.md. Produce the real planner contract and submit it via kanban_complete metadata. Do not implement the fix."}),
             },
             effects: vec![EffectInput {
@@ -187,6 +195,11 @@ fn isolated_real_planner_contract() {
         let tasks = reader.list_tasks(&policy.board).unwrap();
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].status, "ready");
+        std::fs::create_dir(root.join("scratch")).unwrap();
+        std::fs::set_permissions(root.join("scratch"), std::fs::Permissions::from_mode(0o700))
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_str(&tasks[0].body).unwrap();
+        pip_control::prepare_hermes_scratch(&policy, &store, &body).unwrap();
         std::fs::write(root.join("task-id"), &tasks[0].id).unwrap();
         println!("ISOLATED_PLANNER_QUEUED {}", tasks[0].id);
     } else {
@@ -217,13 +230,16 @@ fn isolated_real_planner_contract() {
             workspace.join(artifact)
         };
         let artifact = artifact.canonicalize().unwrap();
-        assert!(artifact.starts_with(workspace.canonicalize().unwrap()));
+        let body: serde_json::Value = serde_json::from_str(&tasks[0].body).unwrap();
+        let results = PathBuf::from(body["storage"]["results"].as_str().unwrap())
+            .canonicalize()
+            .unwrap();
+        assert!(artifact.starts_with(&results));
         let contents = std::fs::read_to_string(artifact).unwrap();
         assert!(contents.contains(base.trim()));
         assert!(contents.len() > 200);
         let plan_json: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(workspace.join("plans/plan-v1.json")).unwrap())
-                .unwrap();
+            serde_json::from_slice(&std::fs::read(results.join("plan-v1.json")).unwrap()).unwrap();
         assert_eq!(completed.worker_contract_metadata().unwrap(), plan_json);
         let report =
             ingest_completed_once_with(&mut store, &policy, runner.clone(), &hermes, now).unwrap();

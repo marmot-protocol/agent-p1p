@@ -1,7 +1,7 @@
 ---
 name: reviewer-general
 description: Use for exact-head correctness review of a Pip PR.
-version: 0.6.0
+version: 0.7.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -14,7 +14,7 @@ metadata:
 
 ## Overview
 
-Independently review the exact PR head with the policy-bound model and reasoning effort. The current MDK `general-sol` instance uses GPT-5.6-Sol at High reasoning, but the skill must copy rather than choose the model or reviewer identity.
+Independently review the exact PR head with the policy-bound model and reasoning effort. MDK policy revision 6 selects GPT-6 Astra at `high`. The existing `general-sol` reviewer ID is retained as a stable identifier, not a model selector. Copy the exact task-bound model and reviewer identity; never reinterpret a historical task using a newer policy.
 
 ## Review focus
 

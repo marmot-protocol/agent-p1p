@@ -144,8 +144,8 @@ pub fn ingest_completed_once_with<R: CommandRunner>(
                     observed_at,
                     crate::bounds::BoundObservation {
                         bound: crate::OperationalBound::ProviderFailures,
-                        observed: u64::from(policy.max_provider_failures),
-                        limit: u64::from(policy.max_provider_failures),
+                        observed: u64::from(desired.max_retries),
+                        limit: u64::from(desired.max_retries),
                         details: serde_json::json!({
                             "source": "hermes-circuit-breaker",
                             "task_id": projection.task_id,
@@ -174,6 +174,19 @@ pub fn ingest_completed_once_with<R: CommandRunner>(
         let binding = binding(&projection.task_id, &desired)?;
         let result: WorkerResult = serde_json::from_value(completed.worker_contract_metadata()?)
             .map_err(|error| ResultCycleError::MalformedResult(error.to_string()))?;
+        if desired.body.get("storage").is_some()
+            && let WorkerResult::Planner(plan) = &result
+            && !plan
+                .common
+                .evidence
+                .get("plan_markdown")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|text| !text.trim().is_empty() && text.len() <= 16 * 1024)
+        {
+            return Err(ResultCycleError::MalformedResult(
+                "managed-storage planners require a nonempty inline plan of at most 16 KiB".into(),
+            ));
+        }
         let workflow_policy = policy
             .workflow_policy()
             .map_err(|error| ResultCycleError::MalformedResult(error.to_string()))?;

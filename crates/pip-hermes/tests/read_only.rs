@@ -149,6 +149,75 @@ fn dispatcher_circuit_breaker_is_a_typed_terminal_failure() {
 }
 
 #[test]
+fn crash_circuit_breaker_event_is_terminal_but_stale_or_unbounded_events_are_not() {
+    let payload = serde_json::json!({
+        "task": {"id":"task-1", "title":"Plan", "status":"blocked", "assignee":"planner",
+                 "created_by":"pip-controller", "body":"{}", "max_retries":1},
+        "runs": [{"outcome":"crashed", "profile":"planner", "metadata":{"protocol_violation":true}}],
+        "events": [{"kind":"gave_up", "payload":{"failures":1,"effective_limit":1,"limit_source":"task","trigger_outcome":"crashed"}}]
+    });
+    let runner = FakeRunner::default();
+    runner.output(&payload.to_string());
+    assert!(matches!(
+        reader(runner).show_completed_result("pip-mdk", "task-1"),
+        Err(HermesError::RetryLimitReached)
+    ));
+    for mutation in ["stale", "zero", "below", "mismatch", "ready", "profile"] {
+        let mut value = payload.clone();
+        match mutation {
+            "stale" => value["events"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({"kind":"unblocked", "payload":{}})),
+            "zero" => value["events"][0]["payload"]["effective_limit"] = serde_json::json!(0),
+            "below" => value["events"][0]["payload"]["failures"] = serde_json::json!(0),
+            "mismatch" => value["task"]["max_retries"] = serde_json::json!(3),
+            "ready" => value["task"]["status"] = serde_json::json!("ready"),
+            "profile" => value["runs"][0]["profile"] = serde_json::json!("foreign"),
+            _ => unreachable!(),
+        }
+        let runner = FakeRunner::default();
+        runner.output(&value.to_string());
+        assert!(
+            matches!(
+                reader(runner).show_completed_result("pip-mdk", "task-1"),
+                Err(HermesError::IncompleteTask)
+            ),
+            "accepted {mutation}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires PIP_TEST_HERMES_PYTHON, PIP_TEST_HERMES and stock Hermes on PYTHONPATH"]
+fn stock_hermes_protocol_failure_is_consumed_without_a_model_call() {
+    let python = std::env::var("PIP_TEST_HERMES_PYTHON").expect("explicit Hermes Python");
+    std::env::var("PIP_TEST_HERMES").expect("explicit Hermes CLI");
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/hermes_failure_probe.py");
+    let output = std::process::Command::new(python)
+        .arg(fixture)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["provider_calls"], 0);
+    assert_eq!(report["ok"], true);
+    let task_id = report["terminal_detail"]["task"]["id"].as_str().unwrap();
+    let runner = FakeRunner::default();
+    runner.output(&report["terminal_detail"].to_string());
+    let result = reader(runner).show_completed_result("pip-offline-failure-1", task_id);
+    assert!(
+        matches!(result, Err(HermesError::RetryLimitReached)),
+        "{result:?}"
+    );
+}
+
+#[test]
 fn malformed_oversized_failed_and_timed_out_commands_fail_closed() {
     let runner = FakeRunner::default();
     runner.output("not-json");

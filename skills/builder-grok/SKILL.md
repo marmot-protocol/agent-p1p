@@ -1,7 +1,7 @@
 ---
 name: builder-grok
 description: Use when implementing an approved Pip plan with Grok.
-version: 0.9.0
+version: 0.10.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -18,7 +18,7 @@ The Rust direct-provider runtime starts one fresh Cursor Agent invocation using 
 
 ## Workflow
 
-1. Read and verify the task's `immutable_evidence_bundle`. Select the one accepted planner run for the exact active plan version and its `GITHUB_PLAN_PUBLICATION` evidence, including the controller actor, comment ID, and body digest. Independently fetch that exact comment and verify the provenance marker and digest. Treat the matching run, publication evidence, and bound plan artifacts as the authorized plan.
+1. Read and verify the task's `immutable_evidence_bundle`. Select the one accepted planner run for the exact active plan version and its `GITHUB_PLAN_PUBLICATION` evidence, including the controller actor, comment ID, and body digest. Read the canonical implementation plan from the accepted run's `evidence.plan_markdown`. Treat that digest-bound run and the matching controller publication evidence as the authorized plan; the controller owns live GitHub revalidation. Do not seek credentials or bypass the sandbox to read a private Hermes artifact path. Historical tasks lacking an inline plan need an explicitly accessible bound artifact; otherwise block for missing plan evidence.
 2. Verify the task's `assigned_worktree` is a child of the policy workspace and its `assigned_branch` is the exact case-owned `pip/*` branch. Clone or reconcile the exact repository only at that path, check out only that branch, and fetch current `master`. Record the actual implementation base. The planned base is context, not a checkout lock: adapt paths and mechanics to ordinary upstream movement. Return to planning only when a concrete upstream change makes the authorized scope unsafe, contradictory, or unimplementable; report that incompatibility precisely.
 3. Verify the task's requested model is exactly the model reported by the fresh runtime session. The runtime probes model availability and constructs the single invocation before this skill runs; do not start, resume, or substitute another agent session.
 4. Record that Cursor does not provide independent provider-side routing attestation; do not overstate the available assurance.

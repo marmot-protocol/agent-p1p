@@ -7,11 +7,11 @@ use pip_control::{
     load_repository_policy, reconcile_intake,
 };
 use pip_github::{
-    GitHubError, IntakeSnapshot, IssueContentSnapshot, IssueSnapshot, LabelEvent,
-    RepositorySnapshot,
+    GitHubError, IntakeSnapshot, IssueCommentSnapshot, IssueContentSnapshot, IssueSnapshot,
+    LabelEvent, RepositorySnapshot,
 };
 use pip_store::Store;
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
 struct FixtureSource {
@@ -41,6 +41,78 @@ impl IntakeSource for FixtureSource {
             .cloned()
             .ok_or_else(|| GitHubError::Transport("missing fixture".into()))
     }
+}
+
+#[test]
+fn intake_freezes_bounded_issue_context_for_credential_free_workers() {
+    let directory = tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("cases.db")).unwrap();
+    let policy = active_policy(1, 1);
+    let source = source(&[42]);
+    let comment = IssueCommentSnapshot {
+        id: 501,
+        actor_id: 202880,
+        issue_number: 42,
+        html_url: "https://github.com/marmot-protocol/mdk/issues/42#issuecomment-501".into(),
+        body: "Untrusted issue discussion".into(),
+        body_sha256: Sha256::digest(b"Untrusted issue discussion")
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+        created_at: "2026-09-05T00:00:00Z".into(),
+        updated_at: "2026-09-05T00:01:00Z".into(),
+    };
+    source
+        .snapshots
+        .borrow_mut()
+        .get_mut(&42)
+        .unwrap()
+        .comments
+        .push(comment.clone());
+    reconcile_intake(&source, &policy, &mut store, 100, false).unwrap();
+    let history = store
+        .immutable_history_for_case("repo:1055628515#42@3")
+        .unwrap();
+    let context = &history.events[0].payload["issue_context"];
+    assert_eq!(context["schema_version"], 1);
+    assert_eq!(context["observed_at"], 100);
+    assert_eq!(context["repository"]["full_name"], "marmot-protocol/mdk");
+    assert_eq!(context["issue"]["number"], 42);
+    assert_eq!(context["issue_content"]["body"], "Fixture body");
+    assert_eq!(context["comments"], serde_json::json!([comment]));
+    source
+        .snapshots
+        .borrow_mut()
+        .get_mut(&42)
+        .unwrap()
+        .issue_content
+        .body = "changed later".into();
+    reconcile_intake(&source, &policy, &mut store, 101, false).unwrap();
+    assert_eq!(
+        store
+            .immutable_history_for_case("repo:1055628515#42@3")
+            .unwrap(),
+        history
+    );
+}
+
+#[test]
+fn oversized_issue_context_cannot_create_case_or_dispatch() {
+    let directory = tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("cases.db")).unwrap();
+    let source = source(&[42]);
+    source
+        .snapshots
+        .borrow_mut()
+        .get_mut(&42)
+        .unwrap()
+        .issue_content
+        .body = "x".repeat(256 * 1024);
+    assert!(reconcile_intake(&source, &active_policy(1, 1), &mut store, 100, false).is_err());
+    let status = store.status(100).unwrap();
+    assert!(status.cases.is_empty());
+    assert_eq!(status.events, 0);
+    assert_eq!(status.outbox_total, 0);
 }
 
 #[test]

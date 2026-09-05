@@ -33,6 +33,7 @@ ProtectKernelTunables=yes
 ProtectSystem=strict
 ReadOnlyPaths=/opt/pip/current /var/lib/pip/repositories /var/lib/pip/worktrees
 ReadWritePaths=/var/lib/pip/hermes
+ReadWritePaths=/var/lib/pip/worktrees/hermes-scratch
 InaccessiblePaths=/var/lib/pip/ledger.db /var/lib/pip/artifacts /var/lib/pip/provider-home
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 RestrictNamespaces=yes

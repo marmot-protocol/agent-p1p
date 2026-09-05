@@ -126,6 +126,22 @@ is SHA-256 over compact, lexicographically key-ordered JSON after removing only
 the top-level digest field. This makes the complete accepted ledger history
 self-contained and reconstructable without granting a worker ledger access.
 
+New authorization events include a bounded, controller-read `issue_context`
+snapshot (repository, issue content/labels, comments and observation time).
+Workers treat its prose as untrusted evidence and its freshness as historical,
+not as authorization to act on GitHub. Missing context is not reconstructed
+from session memory or worker credentials. Policy may set `max_hermes_attempts`
+separately from direct-provider failure limits; existing task bindings remain
+frozen when this setting changes.
+
+Hermes projections may also bind separate disposable build storage and retained
+results on the managed workspace filesystem. Source remains read-only. New
+storage-bound planner results include the full canonical `evidence.plan_markdown`
+(at most 16 KiB), so cross-identity consumers use immutable ledger evidence
+instead of private artifact paths. Initial scratch retirement is explicit,
+offline-only maintenance from frozen projections; online lease-aware GC and
+hard disk quotas are separate future work, not implicit guarantees.
+
 ## 5. Boards, repositories, and cases
 
 Each watched repository has one Hermes board and one repository policy. A board

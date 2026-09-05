@@ -52,6 +52,11 @@ fn proceed_plan_is_published_before_builder_dispatch() {
     assert_eq!(comments[0].expected_actor_id, 202_880);
     assert!(comments[0].body.contains("## Pip plan v1: PROCEED"));
     assert!(comments[0].body.contains("Pip execution binding:"));
+    assert!(
+        comments[0]
+            .body
+            .contains("1. Verify the regression.\n2. Fix the implementation.")
+    );
     let case = store.case("repo:984321#1240@1").unwrap().unwrap();
     assert_eq!(case.state, "READY_TO_BUILD");
     assert_eq!(case.plan_version, 1);
@@ -128,6 +133,8 @@ fn publication_outage_releases_the_effect_without_advancing() {
 
 fn plan_store(path: std::path::PathBuf, outcome: &str) -> Store {
     let mut result = planner_fixture();
+    result["evidence"]["plan_markdown"] =
+        json!("1. Verify the regression.\n2. Fix the implementation.");
     result["outcome"] = json!(outcome);
     if outcome != "PROCEED" {
         result["open_decisions"] = json!(["human must define the authorized scope"]);

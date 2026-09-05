@@ -519,6 +519,7 @@ fn root_config() -> Result<Vec<u8>, BootstrapError> {
 
 fn profile_config(profile: &ProfileBootstrapSpec) -> Result<Vec<u8>, BootstrapError> {
     encoded(&json!({
+        "lsp": {"enabled": false},
         "model": profile.model,
         "provider": profile.provider,
         "fallback_providers": [],

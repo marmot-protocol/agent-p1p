@@ -108,6 +108,12 @@ fn hermes_gateway_owns_dispatch_without_controller_credentials_or_ledger_access(
     assert!(!service.contains("--no-supervise"));
     assert!(service.contains("InaccessiblePaths=/var/lib/pip/ledger.db"));
     assert!(service.contains("ReadWritePaths=/var/lib/pip/hermes"));
+    assert!(service.contains("ReadWritePaths=/var/lib/pip/worktrees/hermes-scratch"));
+    assert!(
+        include_str!("../../../scripts/install-rust-control-plane.sh").contains(
+            "ensure_directory /var/lib/pip/worktrees/hermes-scratch pip-control pip-control 700"
+        )
+    );
     assert!(service.contains(
         "ReadOnlyPaths=/opt/pip/current /var/lib/pip/repositories /var/lib/pip/worktrees"
     ));

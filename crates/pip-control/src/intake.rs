@@ -352,6 +352,24 @@ fn reconcile_validated_evidence(
                 case_key: None,
             }),
             IntakeDecision::Eligible => {
+                // Freeze the controller's authenticated read with the authorization
+                // event. Workers receive this through the digest-bound history bundle,
+                // without GitHub credentials or a second live-read implementation.
+                let issue_context = json!({
+                    "schema_version": 1,
+                    "observed_at": observed_at,
+                    "repository": evidence.repository,
+                    "issue": evidence.issue,
+                    "issue_content": evidence.issue_content,
+                    "comments": evidence.comments,
+                });
+                let context_bytes = serde_json::to_vec(&issue_context)
+                    .map_err(|error| ActiveIntakeError::Serialization(error.to_string()))?;
+                if context_bytes.len() > 256 * 1024 {
+                    return Err(ActiveIntakeError::InvalidWebhook(
+                        "issue context exceeds worker evidence bound",
+                    ));
+                }
                 let label_event = latest_event
                     .filter(|event| event.labeled)
                     .ok_or(ActiveIntakeError::InvalidIdentity)?;
@@ -377,6 +395,7 @@ fn reconcile_validated_evidence(
                             "label": policy.intake.label,
                             "label_event_id": label_event.id,
                             "label_actor_id": label_event.actor_id,
+                            "issue_context": issue_context,
                         }),
                     },
                     effects: vec![EffectInput {

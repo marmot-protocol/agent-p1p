@@ -250,6 +250,48 @@ pub struct TaskDetail {
     pub parents: Option<Vec<String>>,
     #[serde(default)]
     pub runs: Vec<TaskRunSnapshot>,
+    #[serde(default)]
+    pub events: Vec<TaskEventSnapshot>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TaskEventSnapshot {
+    pub kind: String,
+    #[serde(default)]
+    pub payload: Value,
+}
+
+impl TaskDetail {
+    fn has_crash_circuit_breaker(&self) -> bool {
+        let Some(run) = self.runs.last() else {
+            return false;
+        };
+        let Some(event) = self.events.last() else {
+            return false;
+        };
+        let Some(limit) = self
+            .task
+            .configuration
+            .max_retries
+            .filter(|limit| *limit > 0)
+        else {
+            return false;
+        };
+        // Stock Hermes closes crash/timeout runs before tripping its breaker.
+        // The terminal marker therefore lives in events, not the run outcome.
+        // Require the final event so an earlier, subsequently reopened breaker
+        // cannot be mistaken for the current attempt's disposition.
+        matches!(run.outcome.as_deref(), Some("crashed" | "timed_out"))
+            && run.profile.is_some()
+            && run.profile == self.task.assignee
+            && event.kind == "gave_up"
+            && event.payload["limit_source"] == "task"
+            && event.payload["trigger_outcome"].as_str() == run.outcome.as_deref()
+            && event.payload["effective_limit"].as_u64() == Some(u64::from(limit))
+            && event.payload["failures"]
+                .as_u64()
+                .is_some_and(|failures| failures >= u64::from(limit))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -414,7 +456,8 @@ impl<R: CommandRunner> HermesReader<R> {
             return Err(HermesError::IncompleteTask);
         }
         if detail.task.status == "blocked"
-            && detail.runs.last().and_then(|run| run.outcome.as_deref()) == Some("gave_up")
+            && (detail.runs.last().and_then(|run| run.outcome.as_deref()) == Some("gave_up")
+                || detail.has_crash_circuit_breaker())
         {
             return Err(HermesError::RetryLimitReached);
         }

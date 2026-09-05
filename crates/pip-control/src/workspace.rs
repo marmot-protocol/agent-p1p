@@ -69,6 +69,14 @@ impl From<crate::WorkspaceLifecycleError> for WorkspaceError {
 }
 
 pub trait WorkspacePreparer {
+    fn prepare_dispatch_storage(
+        &self,
+        _policy: &RepositoryPolicy,
+        _store: &Store,
+        _dispatches: &[pip_controller::WorkflowDispatch],
+    ) -> Result<(), WorkspaceError> {
+        Ok(())
+    }
     fn prepare(
         &self,
         policy: &RepositoryPolicy,
@@ -82,6 +90,26 @@ pub trait WorkspacePreparer {
 pub struct GitWorkspacePreparer;
 
 impl WorkspacePreparer for GitWorkspacePreparer {
+    fn prepare_dispatch_storage(
+        &self,
+        policy: &RepositoryPolicy,
+        store: &Store,
+        dispatches: &[pip_controller::WorkflowDispatch],
+    ) -> Result<(), WorkspaceError> {
+        if policy.hermes_scratch_root.is_some() {
+            for dispatch in dispatches
+                .iter()
+                .filter(|dispatch| dispatch.execution() == pip_controller::ExecutionKind::Hermes)
+            {
+                let task = dispatch
+                    .hermes_task()
+                    .map_err(|error| WorkspaceError::MalformedRun(error.to_string()))?;
+                crate::prepare_hermes_scratch(policy, store, &task.body)
+                    .map_err(WorkspaceError::MalformedRun)?;
+            }
+        }
+        Ok(())
+    }
     fn prepare(
         &self,
         policy: &RepositoryPolicy,

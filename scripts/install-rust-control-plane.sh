@@ -248,6 +248,7 @@ ensure_directory /etc/systemd/system root root 755
 ensure_directory /var/lib/pip pip-control pip-control 710
 ensure_directory /var/lib/pip/repositories pip-control pip-control 700
 ensure_directory /var/lib/pip/worktrees pip-control pip-control 770
+ensure_directory /var/lib/pip/worktrees/hermes-scratch pip-control pip-control 700
 ensure_directory /var/lib/pip/artifacts pip-control pip-control 770
 ensure_directory /var/lib/pip/provider-home pip-worker pip-control 700
 ensure_directory /var/lib/pip/hermes pip-control pip-control 700

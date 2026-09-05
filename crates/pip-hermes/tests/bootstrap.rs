@@ -103,6 +103,7 @@ fn bootstrap_creates_only_managed_profiles_and_reprobes_the_board() {
     assert_eq!(planner_config["agent"]["reasoning_effort"], "xhigh");
     assert_eq!(planner_config["max_concurrent_sessions"], 1);
     assert_eq!(planner_config["terminal"]["home_mode"], "profile");
+    assert_eq!(planner_config["lsp"]["enabled"], false);
     assert_eq!(
         planner_config["platform_toolsets"]["cli"],
         serde_json::json!(["file", "terminal"])

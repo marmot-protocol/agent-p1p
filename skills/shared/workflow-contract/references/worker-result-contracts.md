@@ -73,6 +73,12 @@ Additional fields:
 - `root_cause`, `authorized_scope`, `sensitive_scope`, `dependencies`,
   `open_decisions`, and `plan_artifact`.
 
+Tasks with `storage` schema 1 also require the full plan in
+`evidence.plan_markdown`: nonempty UTF-8 text, at most 16 KiB. This is the
+digest-bound handoff to direct workers that cannot read private Hermes files.
+Keep a retained file copy under `storage.results`; do not rely on its path as
+the only implementation plan.
+
 `PROCEED` requires empty sensitive scope, dependencies, and open decisions.
 The planner never publishes or identifies a GitHub comment. The controller
 renders the accepted contract into an immutable provenance-marked issue comment

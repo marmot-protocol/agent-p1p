@@ -123,6 +123,41 @@ fn policy() -> WorkflowPolicy {
     .unwrap()
 }
 
+#[test]
+fn hermes_storage_is_projection_scoped_and_direct_tasks_are_unchanged() {
+    let configured = policy()
+        .with_hermes_scratch_root("/var/lib/pip/worktrees/hermes-scratch".into())
+        .unwrap();
+    let planner =
+        schedule_effect("planner", Effect::DispatchPlanner, &context(), &configured).unwrap();
+    let task = planner[0].hermes_task().unwrap();
+    let storage = &task.body["storage"];
+    assert_eq!(task.body["projection_key"], task.projection_key);
+    assert_eq!(storage["schema_version"], 1);
+    let root = storage["root"].as_str().unwrap();
+    assert!(root.starts_with("/var/lib/pip/worktrees/hermes-scratch/"));
+    assert_eq!(root.rsplit('/').next().unwrap().len(), 64);
+    assert_eq!(storage["cargo_target"], format!("{root}/disposable/target"));
+    assert_eq!(storage["results"], format!("{root}/results"));
+    assert_eq!(
+        task.workspace,
+        format!("dir:{}", storage["source"].as_str().unwrap())
+    );
+    let replay =
+        schedule_effect("planner", Effect::DispatchPlanner, &context(), &configured).unwrap();
+    assert_eq!(replay[0].hermes_task().unwrap(), task);
+    assert!(
+        policy()
+            .with_hermes_scratch_root("/tmp/../escape".into())
+            .is_err()
+    );
+    assert!(
+        policy()
+            .with_hermes_scratch_root("/var/lib/pip/worktrees/mdk/target".into())
+            .is_err()
+    );
+}
+
 fn context() -> DispatchContext {
     DispatchContext {
         case_id: CaseId::new(
@@ -138,6 +173,18 @@ fn context() -> DispatchContext {
         skills_repository_commit: GitSha::from_str(&"a".repeat(40)).unwrap(),
         immutable_evidence_bundle: json!({"schema_version": 1, "sha256": "fixture"}),
     }
+}
+
+#[test]
+fn hermes_attempt_limit_is_independent_of_direct_provider_retries() {
+    let policy = policy()
+        .with_max_provider_failures(3)
+        .unwrap()
+        .with_max_hermes_attempts(1)
+        .unwrap();
+    let task = schedule_effect("planner", Effect::DispatchPlanner, &context(), &policy).unwrap();
+    assert_eq!(task[0].hermes_task().unwrap().max_retries, 1);
+    assert!(policy.clone().with_max_hermes_attempts(0).is_err());
 }
 
 #[test]

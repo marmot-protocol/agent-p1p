@@ -1,7 +1,7 @@
 ---
 name: final-reviewer
 description: Use for holistic final adjudication of a Pip case.
-version: 0.4.0
+version: 0.5.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -14,7 +14,7 @@ metadata:
 
 ## Overview
 
-Holistically adjudicate the complete case using GPT-5.6-Sol at `xhigh` reasoning. Do not merely repeat the general code review.
+Holistically adjudicate the complete case using the exact policy-bound model and reasoning effort; MDK policy revision 6 selects GPT-6 Astra at `xhigh`. Never reinterpret a historical task's model binding using a newer policy. Do not merely repeat the general code review.
 
 ## Workflow
 
