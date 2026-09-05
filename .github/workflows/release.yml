@@ -14,7 +14,7 @@ jobs:
   verify-rust:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0, Node 24
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -24,6 +24,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           scripts/check-supply-chain-pins.sh
           tests/test-supply-chain-pins.sh
+          sh tests/test-action-runtimes.sh
           tests/test-release-workflow.sh
           cargo fmt --all --check
           cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
@@ -33,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0, Node 24
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -48,7 +49,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: pip-release
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0, Node 24
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -92,7 +93,7 @@ jobs:
         if: ${{ always() }}
         run: rm -f -- "$RUNNER_TEMP/release-signing.key" "$RUNNER_TEMP/release-public.key"
       - name: Upload immutable cohort envelope
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0, Node 24
         with:
           name: pip-${{ github.sha }}
           path: |

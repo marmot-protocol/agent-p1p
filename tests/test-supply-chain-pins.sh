@@ -13,7 +13,7 @@ cat >"$fixture/.github/workflows/ci.yml" <<'EOF'
 jobs:
   test:
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 EOF
 cat >"$fixture/container/Dockerfile" <<'EOF'
 FROM rust:latest
@@ -27,7 +27,7 @@ cat >"$fixture/.github/workflows/ci.yml" <<'EOF'
 jobs:
   test:
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 EOF
 cat >"$fixture/container/Dockerfile" <<'EOF'
 FROM rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
