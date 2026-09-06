@@ -62,16 +62,24 @@ install_version() (
 )
 
 assert_service_release_access() {
+  local release=$1
+  local installed_root
+  installed_root=$(readlink -f /opt/pip/current)
   test -z "$(find /opt/pip/releases -type d ! -perm 0755 -print -quit)"
-  # This disposable harness has an empty ledger and no running producers.
-  # Give every UID a read-only probe copy, never access to the real ledger.
-  install -m 0444 /var/lib/pip/ledger.db /run/pip-release-access-probe.db
+  # Share only public verification inputs, never ledger or signing-key copies.
+  install -d -m 0755 /run/pip-release-access-probe
+  install -m 0444 "$release/release-manifest.json" "$release/release-manifest.sig" \
+    /run/pip-release-access-probe/
+  install -m 0444 /etc/pip-release-public.key /run/pip-release-access-probe/public.key
   for identity in pip-control pip-worker pip-ingress; do
     # Exercise exec as the real service UID, not just root's access checks.
     systemd-run --quiet --wait --pipe --collect --property="User=$identity" \
-      /opt/pip/current/bin/pip-control status \
-      --database /run/pip-release-access-probe.db --now 1787220000 \
-      | jq -e '.ok and .ledger.schema_version == 8' >/dev/null
+      /opt/pip/current/bin/pip-control verify-release \
+      --release-root "$installed_root" \
+      --manifest /run/pip-release-access-probe/release-manifest.json \
+      --signature /run/pip-release-access-probe/release-manifest.sig \
+      --public-key /run/pip-release-access-probe/public.key \
+      | jq -e '.ok' >/dev/null
     runuser -u "$identity" -- test -r /opt/pip/current/SOURCE.COMMIT
     runuser -u "$identity" -- test -r /etc/pip/repositories/mdk.json
     runuser -u "$identity" -- test -r /opt/pip/current/share/pip/skills/planner/SKILL.md
@@ -98,7 +106,7 @@ test "$(stat -c '%U:%G:%a' /var/lib/pip)" = root:root:755
 test "$(stat -c '%U:%G:%a' /var/lib/pip/worktrees)" = root:root:770
 
 install_version /work/releases/v0
-assert_service_release_access
+assert_service_release_access /work/releases/v0
 first_target=$(readlink -f /opt/pip/current)
 bash /source/tests/lifecycle/workspace-handoff.sh
 test -x /opt/pip/current/bin/pip-control
@@ -133,11 +141,11 @@ test "$(systemctl is-enabled pip-webhook-consumer@mdk.timer || true)" = disabled
 test "$(systemctl is-active pip-webhook-consumer@mdk.timer || true)" = inactive
 
 install_version /work/releases/v0 000
-assert_service_release_access
+assert_service_release_access /work/releases/v0
 test "$(readlink -f /opt/pip/current)" = "$first_target"
 
 install_version /work/releases/v1
-assert_service_release_access
+assert_service_release_access /work/releases/v1
 second_target=$(readlink -f /opt/pip/current)
 test "$second_target" != "$first_target"
 test -d "$first_target"
