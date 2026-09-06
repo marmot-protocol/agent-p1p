@@ -215,7 +215,7 @@ impl<R: GitRunner> GitPublisher<R> {
             program,
             timeout,
             max_output_bytes,
-            environment: BTreeMap::new(),
+            environment: BTreeMap::from([("GIT_OPTIONAL_LOCKS".into(), "0".into())]),
         })
     }
 

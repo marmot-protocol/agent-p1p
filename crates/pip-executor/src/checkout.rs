@@ -87,6 +87,7 @@ impl<R: ProcessRunner> CheckoutReconciler<R> {
         }
         environment.insert("GIT_CONFIG_GLOBAL".into(), "/dev/null".into());
         environment.insert("GIT_CONFIG_NOSYSTEM".into(), "1".into());
+        environment.insert("GIT_OPTIONAL_LOCKS".into(), "0".into());
         environment.insert("GIT_TERMINAL_PROMPT".into(), "0".into());
         Ok(Self {
             runner,
@@ -166,7 +167,29 @@ impl<R: ProcessRunner> CheckoutReconciler<R> {
         expected_branch: &str,
         expected_head: GitSha,
     ) -> Result<(), CheckoutError> {
-        let worktree = canonical_directory(worktree.as_ref())?;
+        self.verify_case_tree(worktree.as_ref(), expected_branch, expected_head, false)
+    }
+
+    /// Recovery never resets a failed builder's checkpoint or unfinished edits.
+    /// The assigned branch must still descend from the accepted plan's base.
+    /// Publication and reviewers continue to require an exact clean head.
+    pub fn verify_builder_retry(
+        &self,
+        worktree: impl AsRef<Path>,
+        expected_branch: &str,
+        planned_base: GitSha,
+    ) -> Result<(), CheckoutError> {
+        self.verify_case_tree(worktree.as_ref(), expected_branch, planned_base, true)
+    }
+
+    fn verify_case_tree(
+        &self,
+        worktree: &Path,
+        expected_branch: &str,
+        expected_head: GitSha,
+        builder_retry: bool,
+    ) -> Result<(), CheckoutError> {
+        let worktree = canonical_directory(worktree)?;
         if !valid_branch(expected_branch) {
             return Err(CheckoutError::InvalidBranch);
         }
@@ -187,7 +210,21 @@ impl<R: ProcessRunner> CheckoutReconciler<R> {
             vec!["rev-parse".into(), "--verify".into(), "HEAD".into()],
         )?;
         if head.trim() != expected_head.to_string() {
-            return Err(CheckoutError::HeadDrift);
+            if !builder_retry {
+                return Err(CheckoutError::HeadDrift);
+            }
+            self.checked(
+                &worktree,
+                vec![
+                    "merge-base".into(),
+                    "--is-ancestor".into(),
+                    expected_head.to_string(),
+                    "HEAD".into(),
+                ],
+            )?;
+        }
+        if builder_retry {
+            return Ok(());
         }
         let status = self.text(
             &worktree,

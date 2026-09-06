@@ -155,6 +155,88 @@ fn allocator() -> IsolatedWorkspace<ProcessGitRunner> {
 const REMOTE: &str = "https://github.com/example/fixture.git";
 
 #[test]
+fn builder_retry_preserves_descendant_commits_and_unfinished_edits() {
+    let tmp = tempfile::tempdir().unwrap();
+    let spec = fixture(tmp.path());
+    allocator().allocate(&spec, REMOTE).unwrap();
+    fs::write(spec.path().join("tracked"), "first completed change\n").unwrap();
+    git(spec.path(), &["add", "."]);
+    git(
+        spec.path(),
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-qm",
+            "checkpoint",
+        ],
+    );
+    fs::write(spec.path().join("tracked"), "unfinished follow-up\n").unwrap();
+    let head = git(spec.path(), &["rev-parse", "HEAD"]);
+    let verifier = pip_executor::CheckoutReconciler::new(
+        pip_executor::BoundedProcessRunner,
+        "git",
+        Default::default(),
+        Duration::from_secs(10),
+        65536,
+    )
+    .unwrap();
+    assert!(
+        verifier
+            .verify_worktree(spec.path(), spec.branch(), spec.base())
+            .is_err()
+    );
+    verifier
+        .verify_builder_retry(spec.path(), spec.branch(), spec.base())
+        .unwrap();
+    assert!(
+        verifier
+            .verify_builder_retry(spec.path(), "pip/wrong", spec.base())
+            .is_err()
+    );
+    assert!(
+        verifier
+            .verify_builder_retry(spec.path(), spec.branch(), "0".repeat(40).parse().unwrap())
+            .is_err()
+    );
+    assert_eq!(git(spec.path(), &["rev-parse", "HEAD"]), head);
+    assert_eq!(
+        fs::read_to_string(spec.path().join("tracked")).unwrap(),
+        "unfinished follow-up\n"
+    );
+}
+
+#[test]
+fn controller_status_does_not_replace_the_shared_worker_index() {
+    let tmp = tempfile::tempdir().unwrap();
+    let spec = fixture(tmp.path());
+    allocator().allocate(&spec, REMOTE).unwrap();
+    let index = spec.path().join(".git/index");
+    let before = fs::read(&index).unwrap();
+    fs::File::open(spec.path().join("tracked"))
+        .unwrap()
+        .set_times(
+            fs::FileTimes::new()
+                .set_modified(std::time::SystemTime::now() + Duration::from_secs(60)),
+        )
+        .unwrap();
+    let output = Command::new("/bin/sh")
+        .args(["-c", "umask 0077; exec git status --porcelain"])
+        .current_dir(spec.path())
+        .envs(workspace_git_environment(spec.path(), Default::default()))
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        fs::metadata(&index).unwrap().permissions().mode() & 0o777,
+        0o660
+    );
+    assert_eq!(fs::read(index).unwrap(), before);
+}
+
+#[test]
 fn independent_case_repository_survives_hidden_canonical_metadata() {
     let tmp = tempfile::tempdir().unwrap();
     let spec = fixture(tmp.path());

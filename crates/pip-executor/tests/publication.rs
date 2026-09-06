@@ -384,6 +384,13 @@ fn authenticated_publication_passes_only_credential_paths_to_git() {
     );
     for command in runner.commands.borrow().iter() {
         assert_eq!(
+            command
+                .environment
+                .get("GIT_OPTIONAL_LOCKS")
+                .map(String::as_str),
+            Some("0")
+        );
+        assert_eq!(
             command.environment.get("GIT_ASKPASS").unwrap(),
             askpass.to_str().unwrap()
         );

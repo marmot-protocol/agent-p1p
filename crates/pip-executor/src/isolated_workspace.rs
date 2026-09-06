@@ -31,6 +31,9 @@ pub fn workspace_git_environment(
     environment.retain(|key, _| !key.starts_with("GIT_CONFIG_"));
     environment.insert("GIT_CONFIG_GLOBAL".into(), "/dev/null".into());
     environment.insert("GIT_CONFIG_NOSYSTEM".into(), "1".into());
+    // Read-only probes must not rewrite a worker's index under the controller's
+    // private umask. Explicit add/commit operations still acquire normal locks.
+    environment.insert("GIT_OPTIONAL_LOCKS".into(), "0".into());
     let values = [
         ("safe.directory", path.to_string_lossy().into_owned()),
         ("core.hooksPath", "/dev/null".into()),

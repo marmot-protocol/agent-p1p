@@ -153,7 +153,13 @@ impl WorkspacePreparer for GitWorkspacePreparer {
             4 * 1024 * 1024,
         )?;
         allocator.allocate(&spec, &expected_remote)?;
-        reconciler.verify_worktree(spec.path(), spec.branch(), expected_head)?;
+        if claimed.effect_type == "DISPATCH_BUILDER"
+            && store.failed_direct_attempt_count_for_case(&case.case_key)? > 0
+        {
+            reconciler.verify_builder_retry(spec.path(), spec.branch(), expected_head)?;
+        } else {
+            reconciler.verify_worktree(spec.path(), spec.branch(), expected_head)?;
+        }
         Ok(())
     }
 }

@@ -69,6 +69,7 @@ fn exact_remote_default_branch_is_fetched_and_resolved_without_repo_configuratio
         == BTreeMap::from([
             ("GIT_CONFIG_GLOBAL".into(), "/dev/null".into()),
             ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
+            ("GIT_OPTIONAL_LOCKS".into(), "0".into()),
             ("GIT_TERMINAL_PROMPT".into(), "0".into()),
             ("PATH".into(), "/usr/bin:/bin".into()),
         ])));
