@@ -183,38 +183,45 @@ fn dispatch_once_inner<R: CommandRunner + Clone>(
     if let Some(workspace) = workspace {
         workspace.prepare(policy, &claimed, &case, store)?;
     }
-    let dispatches = schedule_claimed_dispatch(
-        &claimed,
-        &case,
-        store,
-        &policy.workflow_policy()?,
-        skills_repository_commit,
-    )?;
-    let intents = dispatches
-        .iter()
-        .map(|dispatch| {
-            let (transport, desired) = match dispatch.execution() {
-                ExecutionKind::Hermes => (
-                    DispatchTransport::Hermes,
-                    serde_json::to_value(dispatch.hermes_task()?)?,
-                ),
-                ExecutionKind::Direct => (
-                    DispatchTransport::Direct,
-                    serde_json::to_value(dispatch.direct_task()?)?,
-                ),
-            };
-            Ok(DispatchIntent {
-                intent_id: dispatch.worker_projection_key.clone(),
-                transport,
-                desired,
+    // Existing work is an immutable saved job, not a request to render today's
+    // profiles/skills/history again. Claim validation still fences stale work.
+    let intents = if let Some(saved) = store.dispatch_intents(&claimed.effect_id)? {
+        saved
+    } else {
+        let dispatches = schedule_claimed_dispatch(
+            &claimed,
+            &case,
+            store,
+            &policy.workflow_policy()?,
+            skills_repository_commit,
+        )?;
+        let intents = dispatches
+            .iter()
+            .map(|dispatch| {
+                let (transport, desired) = match dispatch.execution() {
+                    ExecutionKind::Hermes => (
+                        DispatchTransport::Hermes,
+                        serde_json::to_value(dispatch.hermes_task()?)?,
+                    ),
+                    ExecutionKind::Direct => (
+                        DispatchTransport::Direct,
+                        serde_json::to_value(dispatch.direct_task()?)?,
+                    ),
+                };
+                Ok(DispatchIntent {
+                    intent_id: dispatch.worker_projection_key.clone(),
+                    transport,
+                    desired,
+                })
             })
-        })
-        .collect::<Result<Vec<_>, DispatchCycleError>>()?;
-    // Freeze ALL roles atomically before the first queue write. A deployment or
-    // policy change cannot silently replace a previously authorized model/body.
-    store.freeze_dispatch_intents(&claimed, &intents, now())?;
+            .collect::<Result<Vec<_>, DispatchCycleError>>()?;
+        // Freeze ALL roles atomically before the first queue write. A deployment or
+        // policy change cannot silently replace a previously authorized model/body.
+        store.freeze_dispatch_intents(&claimed, &intents, now())?;
+        intents
+    };
     if let Some(workspace) = workspace {
-        workspace.prepare_dispatch_storage(policy, store, &dispatches)?;
+        workspace.prepare_dispatch_storage(policy, store, &intents)?;
     }
     let has_hermes = intents
         .iter()

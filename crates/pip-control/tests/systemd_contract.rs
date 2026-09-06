@@ -106,6 +106,9 @@ fn hermes_gateway_owns_dispatch_without_controller_credentials_or_ledger_access(
     let service = include_str!("../../../packaging/systemd/pip-hermes-gateway.service");
 
     assert!(service.contains("User=pip-control"));
+    assert!(service.contains("MemoryDenyWriteExecute=no"));
+    assert!(service.contains("NoNewPrivileges=yes"));
+    assert!(service.contains("ProtectSystem=strict"));
     assert!(service.contains("RequiresMountsFor=/var/lib/pip/worktrees"));
     assert!(service.contains("ConditionPathIsMountPoint=/var/lib/pip/worktrees"));
     assert!(service.contains("Environment=HERMES_HOME=/var/lib/pip/hermes"));

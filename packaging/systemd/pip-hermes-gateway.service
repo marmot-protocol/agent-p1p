@@ -41,7 +41,9 @@ RestrictRealtime=yes
 RestrictSUIDSGID=yes
 SystemCallArchitectures=native
 LockPersonality=yes
-MemoryDenyWriteExecute=yes
+# Planner/reviewer terminal tools must be able to run Node/V8 test suites.
+# Controller state remains hidden and the system/source mounts remain read-only.
+MemoryDenyWriteExecute=no
 CapabilityBoundingSet=
 AmbientCapabilities=
 StandardOutput=journal

@@ -2112,13 +2112,17 @@ impl Store {
         count(&self.connection, "direct_attempts")
     }
 
+    /// Failures charged to a case's work budget. Detached comparisons retain
+    /// their attempts in history/status, but have no authority over the case.
     pub fn failed_direct_attempt_count_for_case(&self, case_key: &str) -> Result<u64> {
         if case_key.trim().is_empty() {
             return Err(StoreError::InvalidInput("case key is required"));
         }
         let value: i64 = self.connection.query_row(
-            "SELECT COUNT(*) FROM direct_attempts
-             WHERE case_key = ?1 AND status = 'FAILED'",
+            "SELECT COUNT(*) FROM direct_attempts a
+             JOIN outbox o ON o.effect_id = a.effect_id
+             WHERE a.case_key = ?1 AND a.status = 'FAILED'
+               AND o.effect_type != 'RUN_DIRECT_OBSERVER'",
             [case_key],
             |row| row.get(0),
         )?;

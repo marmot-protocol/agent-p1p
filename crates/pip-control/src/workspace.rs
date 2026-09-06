@@ -73,7 +73,7 @@ pub trait WorkspacePreparer {
         &self,
         _policy: &RepositoryPolicy,
         _store: &Store,
-        _dispatches: &[pip_controller::WorkflowDispatch],
+        _dispatches: &[pip_store::DispatchIntent],
     ) -> Result<(), WorkspaceError> {
         Ok(())
     }
@@ -94,16 +94,16 @@ impl WorkspacePreparer for GitWorkspacePreparer {
         &self,
         policy: &RepositoryPolicy,
         store: &Store,
-        dispatches: &[pip_controller::WorkflowDispatch],
+        dispatches: &[pip_store::DispatchIntent],
     ) -> Result<(), WorkspaceError> {
         if policy.hermes_scratch_root.is_some() {
             for dispatch in dispatches
                 .iter()
-                .filter(|dispatch| dispatch.execution() == pip_controller::ExecutionKind::Hermes)
+                .filter(|dispatch| dispatch.transport == pip_store::DispatchTransport::Hermes)
             {
-                let task = dispatch
-                    .hermes_task()
-                    .map_err(|error| WorkspaceError::MalformedRun(error.to_string()))?;
+                let task: pip_hermes::TaskCreateSpec =
+                    serde_json::from_value(dispatch.desired.clone())
+                        .map_err(|error| WorkspaceError::MalformedRun(error.to_string()))?;
                 crate::prepare_hermes_scratch(policy, store, &task.body)
                     .map_err(WorkspaceError::MalformedRun)?;
             }

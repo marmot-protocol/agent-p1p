@@ -3,9 +3,8 @@ use std::rc::Rc;
 
 use pip_contracts::{WorkerResult, WorkerRole};
 use pip_control::{
-    DirectQueue, DirectQueueCycle, DirectWorkerCycle, DirectWorkerCycleContext, DirectWorkerError,
-    DirectWorkerRuntime, DirectWorkerRuntimeError, execute_direct_queue_once,
-    recommended_direct_lease_seconds, reconcile_direct_queue_once, run_direct_worker_once_with,
+    DirectQueue, DirectQueueCycle, DirectQueueError, DirectWorkerRuntime, DirectWorkerRuntimeError,
+    execute_direct_queue_once, recommended_direct_lease_seconds, reconcile_direct_queue_once,
 };
 
 #[test]
@@ -34,39 +33,6 @@ impl DirectWorkerRuntime for FakeRuntime {
         self.tasks.borrow_mut().push((task.clone(), attempt_id));
         self.result.clone()
     }
-}
-
-#[test]
-fn leased_direct_builder_executes_and_enters_the_shared_ingestion_path() {
-    let directory = tempfile::tempdir().unwrap();
-    let mut store = queued_builder(directory.path());
-    let runtime = runtime(Ok(builder_result()));
-
-    assert_eq!(
-        run_direct_worker_once_with(
-            &mut store,
-            &active_policy(),
-            &runtime,
-            context("direct-worker-1", 100),
-        )
-        .unwrap(),
-        DirectWorkerCycle::Ingested {
-            task_id: task_id().into(),
-            transition_count: 2,
-        }
-    );
-    assert_eq!(runtime.tasks.borrow().len(), 1);
-    assert_eq!(
-        runtime.tasks.borrow()[0].0.model,
-        "cursor-grok-4.6-high-fast"
-    );
-    assert_eq!(runtime.tasks.borrow()[0].1, 1);
-    assert_eq!(store.run_count().unwrap(), 1);
-    assert!(store.run_by_task_id(task_id()).unwrap().is_some());
-    let status = store.status(101).unwrap();
-    assert_eq!(status.outbox_leased, 0);
-    assert_eq!(status.outbox_superseded, 1);
-    assert_eq!(status.direct_attempts_complete, 1);
 }
 
 #[test]
@@ -337,6 +303,14 @@ fn shadow_failure_converges_after_crash_between_attempt_and_effect_completion() 
     assert_eq!(status.outbox_pending, 0);
     assert_eq!(status.outbox_leased, 0);
     assert_eq!(status.outbox_delivered, 1);
+    // A failed comparison is preserved, but cannot spend the main case budget.
+    let mut policy = active_policy();
+    policy.max_provider_failures = 1;
+    assert_eq!(
+        pip_control::enforce_operational_bounds(&mut store, &policy, 104).unwrap(),
+        pip_control::OperationalBoundsCycle::Idle
+    );
+    assert_eq!(store.case(case_key()).unwrap().unwrap().state, "REVIEWING");
     assert!(
         store
             .immutable_history_for_case(case_key())
@@ -347,129 +321,124 @@ fn shadow_failure_converges_after_crash_between_attempt_and_effect_completion() 
     );
 }
 
+// All execution tests use the production controller/worker message boundary.
+fn queue(root: &std::path::Path) -> DirectQueue {
+    let root = root.join("direct-queue");
+    for child in ["inbox", "results", "archive"] {
+        std::fs::create_dir_all(root.join(child)).unwrap();
+    }
+    DirectQueue::new(root).unwrap()
+}
+
 #[test]
-fn provider_failure_releases_the_job_for_immediate_retry_without_state_change() {
+fn failed_result_preserves_attempt_and_releases_only_its_job() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = queued_builder(directory.path());
+    let queue = queue(directory.path());
+    let policy = active_policy();
     let runtime = runtime(Err(DirectWorkerRuntimeError::Unavailable(
         "fixture outage".into(),
     )));
-
-    assert!(matches!(
-        run_direct_worker_once_with(
-            &mut store,
-            &active_policy(),
-            &runtime,
-            context("direct-worker-1", 100),
-        ),
-        Err(DirectWorkerError::Runtime(_))
-    ));
+    reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 100, 30, true).unwrap();
+    execute_direct_queue_once(&runtime, &queue, 101).unwrap();
+    assert_eq!(
+        reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 102, 30, true)
+            .unwrap(),
+        DirectQueueCycle::Failed { attempt_id: 1 }
+    );
+    let status = store.status(102).unwrap();
+    assert_eq!(status.direct_attempts_failed, 1);
+    assert_eq!(status.outbox_pending, 1);
+    assert_eq!(status.outbox_leased, 0);
     assert_eq!(store.run_count().unwrap(), 0);
     assert_eq!(
         store.case(case_key()).unwrap().unwrap().state,
         "READY_TO_BUILD"
     );
-    let status = store.status(100).unwrap();
-    assert_eq!(status.outbox_pending, 1);
-    assert_eq!(status.outbox_leased, 0);
-    assert_eq!(status.direct_attempts_failed, 1);
-    assert!(
-        store
-            .claim_effect_matching("direct-worker-2", 100, 30, &["RUN_DIRECT_WORKER"])
-            .unwrap()
-            .is_some()
-    );
 }
 
 #[test]
-fn completed_result_is_ingested_after_a_crash_without_rerunning_the_provider() {
+fn completed_result_survives_controller_restart_without_rerunning_provider() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = queued_builder(directory.path());
-    let claimed = store
-        .claim_effect_matching("crashed-worker", 90, 30, &["RUN_DIRECT_WORKER"])
-        .unwrap()
-        .unwrap();
-    let attempt_id = store.begin_direct_attempt(&claimed, task_id(), 90).unwrap();
-    store
-        .complete_direct_attempt(
-            attempt_id,
-            "crashed-worker",
-            91,
-            &serde_json::to_value(builder_result()).unwrap(),
-        )
-        .unwrap();
-    store
-        .release_effect(&claimed.effect_id, "crashed-worker")
-        .unwrap();
-    let runtime = runtime(Err(DirectWorkerRuntimeError::Unavailable(
-        "must not execute".into(),
-    )));
-
+    let queue = queue(directory.path());
+    let policy = active_policy();
+    let runtime = runtime(Ok(builder_result()));
+    reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 100, 30, true).unwrap();
+    execute_direct_queue_once(&runtime, &queue, 101).unwrap();
+    drop(store);
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    // Even another worker tick does not execute an inbox item with a result.
     assert_eq!(
-        run_direct_worker_once_with(
-            &mut store,
-            &active_policy(),
-            &runtime,
-            context("recovery-worker", 100),
-        )
-        .unwrap(),
-        DirectWorkerCycle::Ingested {
+        execute_direct_queue_once(&runtime, &queue, 102).unwrap(),
+        DirectQueueCycle::Idle
+    );
+    assert_eq!(
+        reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 103, 30, true)
+            .unwrap(),
+        DirectQueueCycle::Ingested {
             task_id: task_id().into(),
-            transition_count: 2,
+            transition_count: 2
         }
     );
-    assert!(runtime.tasks.borrow().is_empty());
-    assert_eq!(store.status(101).unwrap().direct_attempts_complete, 1);
+    assert_eq!(runtime.tasks.borrow().len(), 1);
+    assert_eq!(
+        runtime.tasks.borrow()[0].0.model,
+        "cursor-grok-4.6-high-fast"
+    );
+    assert_eq!(store.status(103).unwrap().direct_attempts_complete, 1);
 }
 
 #[test]
-fn stale_authorization_never_claims_or_executes_a_direct_job() {
+fn stale_authorization_never_prepares_a_direct_job() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = queued_builder(directory.path());
-    let runtime = runtime(Ok(builder_result()));
-    let mut cycle = context("direct-worker-1", 100);
-    cycle.authorization_valid = false;
-
+    let queue = queue(directory.path());
     assert_eq!(
-        run_direct_worker_once_with(&mut store, &active_policy(), &runtime, cycle).unwrap(),
-        DirectWorkerCycle::AuthorizationBlocked
+        reconcile_direct_queue_once(
+            &mut store,
+            &active_policy(),
+            &queue,
+            "controller",
+            100,
+            30,
+            false
+        )
+        .unwrap(),
+        DirectQueueCycle::AuthorizationBlocked
     );
-    assert!(runtime.tasks.borrow().is_empty());
     let status = store.status(100).unwrap();
     assert_eq!(status.outbox_pending, 1);
     assert_eq!(status.outbox_leased, 0);
+    assert_eq!(status.direct_attempts_running, 0);
 }
 
 #[test]
-fn corrupted_direct_job_is_released_and_never_reaches_the_runtime() {
+fn corrupted_direct_job_never_reaches_the_runtime() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = queued_builder_with(directory.path(), |task| {
         task["model"] = json!("auto");
     });
-    let runtime = runtime(Ok(builder_result()));
-
+    let queue = queue(directory.path());
     assert!(matches!(
-        run_direct_worker_once_with(
+        reconcile_direct_queue_once(
             &mut store,
             &active_policy(),
-            &runtime,
-            context("direct-worker-1", 100),
+            &queue,
+            "controller",
+            100,
+            30,
+            true
         ),
-        Err(DirectWorkerError::InvalidJob)
+        Err(DirectQueueError::InvalidEnvelope)
     ));
+    let runtime = runtime(Ok(builder_result()));
+    assert_eq!(
+        execute_direct_queue_once(&runtime, &queue, 101).unwrap(),
+        DirectQueueCycle::Idle
+    );
     assert!(runtime.tasks.borrow().is_empty());
-    let status = store.status(100).unwrap();
-    assert_eq!(status.outbox_pending, 1);
-    assert_eq!(status.outbox_leased, 0);
-}
-
-fn context(owner: &str, now: u64) -> DirectWorkerCycleContext<'_> {
-    DirectWorkerCycleContext {
-        owner,
-        now,
-        lease_seconds: 30,
-        authorization_valid: true,
-    }
+    assert_eq!(store.status(101).unwrap().direct_attempts_running, 0);
 }
 
 fn runtime(result: Result<WorkerResult, DirectWorkerRuntimeError>) -> FakeRuntime {

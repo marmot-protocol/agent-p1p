@@ -455,29 +455,6 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
     if token.is_empty() {
         return Err(CliError::InvalidArgument("--github-token".into()));
     }
-    let general_app = read_app_identity(
-        Path::new(required(&options, "--github-reviewer-general-app")?),
-        policy.repository.id,
-        "--github-reviewer-general-app",
-    )?;
-    let secperf_app = read_app_identity(
-        Path::new(required(&options, "--github-reviewer-secperf-app")?),
-        policy.repository.id,
-        "--github-reviewer-secperf-app",
-    )?;
-    if general_app.app_id == secperf_app.app_id
-        || general_app.installation_id == secperf_app.installation_id
-    {
-        return Err(CliError::InvalidArgument("--github-reviewer-apps".into()));
-    }
-    let mut general_key = read_secret(
-        Path::new(required(&options, "--github-reviewer-general-key")?),
-        32 * 1024,
-    )?;
-    let mut secperf_key = read_secret(
-        Path::new(required(&options, "--github-reviewer-secperf-key")?),
-        32 * 1024,
-    )?;
     let skills_commit = read_bounded(Path::new(required(&options, "--skills-commit-file")?), 128)?;
     let skills_commit = std::str::from_utf8(&skills_commit)
         .map_err(|_| CliError::InvalidArgument("--skills-commit-file".into()))?
@@ -510,26 +487,6 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         .transpose()?
         .unwrap_or(60);
     let transport = UreqTransport::new(Duration::from_secs(20));
-    let general_token = mint_installation_token(
-        &transport,
-        "https://api.github.com",
-        &general_app.credentials(&general_key),
-        now,
-    );
-    general_key.fill(0);
-    let general_token = general_token
-        .map_err(|error| CliError::Reconciliation(error.to_string()))?
-        .token;
-    let secperf_token = mint_installation_token(
-        &transport,
-        "https://api.github.com",
-        &secperf_app.credentials(&secperf_key),
-        now,
-    );
-    secperf_key.fill(0);
-    let secperf_token = secperf_token
-        .map_err(|error| CliError::Reconciliation(error.to_string()))?
-        .token;
     let reader = GitHubReader::new(
         transport.clone(),
         "https://api.github.com",
@@ -546,22 +503,18 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         10,
     )
     .map_err(|error| CliError::Reconciliation(error.to_string()))?;
-    let general_review_writer = GitHubWriter::new(
-        transport.clone(),
-        "https://api.github.com",
-        &general_token,
-        4 * 1024 * 1024,
-        10,
-    )
-    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
-    let secperf_review_writer = GitHubWriter::new(
-        transport,
-        "https://api.github.com",
-        &secperf_token,
-        4 * 1024 * 1024,
-        10,
-    )
-    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let general_review_writer = AppReviewWriter {
+        options: &options,
+        repository_id: policy.repository.id,
+        general: true,
+        now,
+    };
+    let secperf_review_writer = AppReviewWriter {
+        options: &options,
+        repository_id: policy.repository.id,
+        general: false,
+        now,
+    };
     let mut store = Store::open(required(&options, "--database")?)
         .map_err(|error| CliError::Ledger(error.to_string()))?;
     let workspace_lifecycle = crate::reconcile_workspace_lifecycle_once(&mut store, &policy, now)
@@ -717,6 +670,138 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         "disposition": disposition,
         "dispatch": dispatch,
     }))
+}
+
+struct AppReviewWriter<'a> {
+    options: &'a BTreeMap<String, String>,
+    repository_id: u64,
+    general: bool,
+    now: u64,
+}
+
+impl AppReviewWriter<'_> {
+    fn writer(&self) -> Result<GitHubWriter<UreqTransport>, CliError> {
+        let general = read_app_identity(
+            Path::new(required(self.options, "--github-reviewer-general-app")?),
+            self.repository_id,
+            "--github-reviewer-general-app",
+        )?;
+        let secperf = read_app_identity(
+            Path::new(required(self.options, "--github-reviewer-secperf-app")?),
+            self.repository_id,
+            "--github-reviewer-secperf-app",
+        )?;
+        if general.app_id == secperf.app_id || general.installation_id == secperf.installation_id {
+            return Err(CliError::InvalidArgument("--github-reviewer-apps".into()));
+        }
+        let (app, key_option) = if self.general {
+            (general, "--github-reviewer-general-key")
+        } else {
+            (secperf, "--github-reviewer-secperf-key")
+        };
+        let mut key = read_secret(Path::new(required(self.options, key_option)?), 32 * 1024)?;
+        let transport = UreqTransport::new(Duration::from_secs(20));
+        let token = mint_installation_token(
+            &transport,
+            "https://api.github.com",
+            &app.credentials(&key),
+            self.now,
+        );
+        key.fill(0);
+        let token = token
+            .map_err(|error| CliError::Reconciliation(error.to_string()))?
+            .token;
+        GitHubWriter::new(
+            transport,
+            "https://api.github.com",
+            &token,
+            4 * 1024 * 1024,
+            10,
+        )
+        .map_err(|error| CliError::Reconciliation(error.to_string()))
+    }
+}
+
+impl crate::ReviewWriter for AppReviewWriter<'_> {
+    fn ensure_review(
+        &self,
+        spec: &pip_github::ReviewMutationSpec,
+    ) -> Result<pip_github::MutationResult, pip_github::GitHubError> {
+        // Construction is deliberately credential-free. Only an actual review
+        // publication acquires its lane's short-lived installation token.
+        self.writer()
+            .map_err(|error| pip_github::GitHubError::Transport(error.to_string()))?
+            .ensure_pull_request_review(spec)
+    }
+}
+
+#[cfg(test)]
+mod review_credentials_tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_review_apps_are_rejected_before_key_read_or_network() {
+        let directory = tempfile::tempdir().unwrap();
+        let app = directory.path().join("app.json");
+        fs::write(
+            &app,
+            br#"{"app_id":123,"installation_id":456,"repository_id":789}"#,
+        )
+        .unwrap();
+        let options = BTreeMap::from([
+            (
+                "--github-reviewer-general-app".into(),
+                app.to_str().unwrap().into(),
+            ),
+            (
+                "--github-reviewer-secperf-app".into(),
+                app.to_str().unwrap().into(),
+            ),
+        ]);
+        let writer = AppReviewWriter {
+            options: &options,
+            repository_id: 789,
+            general: true,
+            now: 100,
+        };
+        assert!(
+            matches!(writer.writer(), Err(CliError::InvalidArgument(argument))
+            if argument == "--github-reviewer-apps")
+        );
+    }
+
+    #[test]
+    fn idle_review_publication_does_not_require_app_credentials() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+        let policy = crate::load_repository_policy(include_bytes!(
+            "../../../config/target/repositories/mdk.json"
+        ))
+        .unwrap();
+        let options = BTreeMap::new();
+        let writer = AppReviewWriter {
+            options: &options,
+            repository_id: policy.repository.id,
+            general: true,
+            now: 100,
+        };
+        assert_eq!(
+            crate::publish_reviews_once(
+                &writer,
+                &writer,
+                &policy,
+                &mut store,
+                100,
+                "controller",
+                30,
+                true,
+            )
+            .unwrap(),
+            crate::ReviewPublicationCycle::Idle
+        );
+        // Missing secrets have not been read, but must fail when actually needed.
+        assert!(writer.writer().is_err());
+    }
 }
 
 #[derive(Deserialize)]

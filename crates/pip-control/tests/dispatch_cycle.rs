@@ -96,7 +96,7 @@ impl WorkspacePreparer for FakeWorkspace {
         &self,
         _policy: &pip_control::RepositoryPolicy,
         store: &Store,
-        _dispatches: &[pip_controller::WorkflowDispatch],
+        _dispatches: &[pip_store::DispatchIntent],
     ) -> Result<(), WorkspaceError> {
         assert!(
             store
@@ -579,7 +579,7 @@ fn unexpected_dependencies_prevent_acknowledgment() {
 }
 
 #[test]
-fn recovery_cannot_silently_change_a_frozen_model_or_skills_revision() {
+fn recovery_uses_saved_job_when_release_or_profile_defaults_change() {
     for change_model in [true, false] {
         let directory = tempfile::tempdir().unwrap();
         let mut store = seeded_store(directory.path());
@@ -589,7 +589,7 @@ fn recovery_cannot_silently_change_a_frozen_model_or_skills_revision() {
             dispatch_once_with(
                 &mut store,
                 &active_policy(),
-                first,
+                first.clone(),
                 context("controller-1", 100)
             )
             .is_err()
@@ -606,14 +606,30 @@ fn recovery_cannot_silently_change_a_frozen_model_or_skills_revision() {
         } else {
             retry.skills_repository_commit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
         }
-        let runner = FakeRunner::default();
+        let original = first.tasks.borrow()[0].clone();
+        let frozen = store.dispatch_intents("effect-intake-planner").unwrap();
+        first.fail_show.set(false);
         assert!(matches!(
-            dispatch_once_with(&mut store, &policy, runner.clone(), retry),
-            Err(DispatchCycleError::Store(
-                pip_store::StoreError::IdempotencyConflict { .. }
-            ))
+            dispatch_once_with(&mut store, &policy, first.clone(), retry).unwrap(),
+            DispatchCycleResult::Projected {
+                projection_count: 1,
+                ..
+            }
         ));
-        assert!(runner.commands.borrow().is_empty());
+        assert_eq!(*first.tasks.borrow(), vec![original]);
+        assert_eq!(
+            store.dispatch_intents("effect-intake-planner").unwrap(),
+            frozen
+        );
+        assert_eq!(
+            first
+                .commands
+                .borrow()
+                .iter()
+                .filter(|c| c.args[3] == "create")
+                .count(),
+            1
+        );
     }
 }
 

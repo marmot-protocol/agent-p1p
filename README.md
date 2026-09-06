@@ -7,32 +7,19 @@ Hermes Kanban boards.
 
 ## Status
 
-The repository now contains the locally complete single-repository Rust shadow
-runtime: deterministic workflow and ledger, signed webhook intake plus polling
-recovery, exact worktrees, Hermes-native projections, an isolated direct-Cursor
-executor, controller-only Git publication, exact-head GitHub review/CI gates,
-managed Hermes bootstrap,
-and a signed rollback-safe systemd release. The Python implementation remains
-only as a frozen reference until a Rust canary is authorized and proven.
+Pip is undergoing a lean Rust refactor before completing its first live
+end-to-end shadow issue. Planning has run, but a complete builder/reviewer/final
+review pipeline and human-ready PR are not yet proven.
 
-No live MDK intake or dispatch has been authorized. Host provisioning, exact
-credential identities and scopes, required CI contexts, live Hermes/provider
-compatibility, and one deliberately labeled shadow case are still cutover
-gates. Local completeness is not production evidence.
+The target keeps signed webhooks, an authoritative Rust workflow ledger,
+unmodified Hermes and a narrow Cursor adapter. Operational failures must be
+isolated from issue-work failures, and saved jobs must survive upgrades.
+Automatic merge is deferred; the MDK pilot remains human-merge-only.
 
-The Python implementation is useful as a safety prototype and behavioral
-reference, but it is not the target runtime and must not be installed from the
-current branch. At the migration baseline (`2607004`), upstream CI was red and
-the route-DAG upgrade was incomplete. The existing MDK automation remains a
-shadow, human-merge-only canary.
+See [implementation status](docs/implementation-status.md) for the current
+refactor inventory and dated host evidence. Python is a frozen migration
+reference, not an installable runtime; it will be removed after cutover proof.
 
-The documentation distinguishes three things explicitly:
-
-- **Target architecture:** the generic Rust system we intend to build.
-- **Legacy prototype:** the current Python implementation, including its
-  hard-coded `marmot-protocol/mdk#1240` behavior.
-- **Activation policy:** the operational controls that limit a generic engine
-  to one deliberately tagged canary issue without encoding that issue in code.
 
 ## Documentation
 

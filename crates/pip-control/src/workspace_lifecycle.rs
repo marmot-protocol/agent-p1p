@@ -112,6 +112,7 @@ pub struct WorkspaceLifecycleCycle {
     pub minimum_free_bytes: u64,
     pub retired_case_key: Option<String>,
     pub retired_worktree_path: Option<String>,
+    pub cleanup_error: Option<String>,
 }
 
 #[derive(Debug)]
@@ -219,7 +220,21 @@ pub fn reconcile_workspace_lifecycle_once_with<P: WorkspaceStorageProbe, R: Work
             &policy.branch_prefix,
             case_id,
         )?;
-        let outcome = retirer.retire(&spec)?;
+        let outcome = match retirer.retire(&spec) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                // Cleanup is maintenance, not authorization. Preserve the
+                // candidate and expose the failure without halting healthy work.
+                return Ok(WorkspaceLifecycleCycle {
+                    ready: initial.free_bytes >= policy.workspace_storage.minimum_free_bytes,
+                    free_bytes: initial.free_bytes,
+                    minimum_free_bytes: policy.workspace_storage.minimum_free_bytes,
+                    retired_case_key: None,
+                    retired_worktree_path: None,
+                    cleanup_error: Some(error.to_string()),
+                });
+            }
+        };
         let path = spec.path().to_string_lossy().into_owned();
         store.record_workspace_retirement(&WorkspaceRetirementInput {
             case_key: candidate.case_key.clone(),
@@ -245,6 +260,7 @@ pub fn reconcile_workspace_lifecycle_once_with<P: WorkspaceStorageProbe, R: Work
         minimum_free_bytes: policy.workspace_storage.minimum_free_bytes,
         retired_case_key,
         retired_worktree_path,
+        cleanup_error: None,
     })
 }
 

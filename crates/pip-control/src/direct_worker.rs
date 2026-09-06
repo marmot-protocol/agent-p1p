@@ -10,14 +10,11 @@ use std::time::Duration;
 use std::os::unix::fs::PermissionsExt;
 
 use pip_contracts::{CaseIdentity, ReviewMode, WorkerBinding, WorkerResult, WorkerRole};
-use pip_controller::{
-    DirectTaskSpec, ExecutionKind, IngestError, IngestResult, ingest_worker_result_with_policy,
-};
+use pip_controller::{DirectTaskSpec, ExecutionKind};
 use pip_executor::{
     CursorExecutor, CursorHealthProbe, CursorTask, ProcessRunner, ProviderProbeError,
 };
-use pip_store::{ClaimedEffect, Store, StoreError, StoredCase};
-use serde::Serialize;
+use pip_store::{ClaimedEffect, StoredCase};
 use serde_json::Map;
 use sha2::{Digest, Sha256};
 
@@ -25,28 +22,6 @@ use crate::{PolicyError, RepositoryPolicy};
 
 const RUN_EFFECT: &str = "RUN_DIRECT_WORKER";
 const LEASE_RECOVERY_MARGIN_SECONDS: u64 = 120;
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(tag = "result", rename_all = "snake_case")]
-pub enum DirectWorkerCycle {
-    Idle,
-    AuthorizationBlocked,
-    Ingested {
-        task_id: String,
-        transition_count: u32,
-    },
-    Replayed {
-        task_id: String,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DirectWorkerCycleContext<'a> {
-    pub owner: &'a str,
-    pub now: u64,
-    pub lease_seconds: u64,
-    pub authorization_valid: bool,
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DirectWorkerRuntimeError {
@@ -214,38 +189,9 @@ impl<R: ProcessRunner + Clone> DirectWorkerRuntime for CursorDirectRuntime<R> {
 }
 
 #[derive(Debug)]
-pub enum DirectWorkerError {
-    Store(StoreError),
+pub(crate) enum DirectWorkerError {
     Policy(PolicyError),
-    Ingest(IngestError),
-    Runtime(DirectWorkerRuntimeError),
-    DispatchPaused,
     InvalidJob,
-}
-
-impl fmt::Display for DirectWorkerError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Store(error) => error.fmt(formatter),
-            Self::Policy(error) => error.fmt(formatter),
-            Self::Ingest(error) => error.fmt(formatter),
-            Self::Runtime(error) => error.fmt(formatter),
-            Self::DispatchPaused => {
-                formatter.write_str("repository dispatch is disabled or paused")
-            }
-            Self::InvalidJob => {
-                formatter.write_str("direct worker job has an invalid immutable binding")
-            }
-        }
-    }
-}
-
-impl std::error::Error for DirectWorkerError {}
-
-impl From<StoreError> for DirectWorkerError {
-    fn from(error: StoreError) -> Self {
-        Self::Store(error)
-    }
 }
 
 impl From<PolicyError> for DirectWorkerError {
@@ -254,103 +200,13 @@ impl From<PolicyError> for DirectWorkerError {
     }
 }
 
-impl From<IngestError> for DirectWorkerError {
-    fn from(error: IngestError) -> Self {
-        Self::Ingest(error)
-    }
-}
-
-pub fn run_direct_worker_once_with<R: DirectWorkerRuntime>(
-    store: &mut Store,
-    policy: &RepositoryPolicy,
-    runtime: &R,
-    context: DirectWorkerCycleContext<'_>,
-) -> Result<DirectWorkerCycle, DirectWorkerError> {
-    if !policy.dispatch_enabled || policy.intake.paused {
-        return Err(DirectWorkerError::DispatchPaused);
-    }
-    if !context.authorization_valid {
-        return Ok(DirectWorkerCycle::AuthorizationBlocked);
-    }
-    let Some(claimed) = store.claim_effect_matching(
-        context.owner,
-        context.now,
-        context.lease_seconds,
-        &[RUN_EFFECT],
-    )?
-    else {
-        return Ok(DirectWorkerCycle::Idle);
-    };
-
-    let processed = process_claimed(store, policy, runtime, &claimed, context.now);
-    match processed {
-        Ok((task_id, IngestResult::Applied { transition_count })) => {
-            Ok(DirectWorkerCycle::Ingested {
-                task_id,
-                transition_count,
-            })
-        }
-        Ok((task_id, IngestResult::Replayed)) => {
-            store.acknowledge_effect(&claimed.effect_id, context.owner, context.now)?;
-            Ok(DirectWorkerCycle::Replayed { task_id })
-        }
-        Err(error) => {
-            store.release_effect(&claimed.effect_id, context.owner)?;
-            Err(error)
+impl fmt::Display for DirectWorkerError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Policy(error) => error.fmt(formatter),
+            Self::InvalidJob => formatter.write_str("invalid direct worker job"),
         }
     }
-}
-
-fn process_claimed<R: DirectWorkerRuntime>(
-    store: &mut Store,
-    policy: &RepositoryPolicy,
-    runtime: &R,
-    claimed: &ClaimedEffect,
-    now: u64,
-) -> Result<(String, IngestResult), DirectWorkerError> {
-    let task: DirectTaskSpec = serde_json::from_value(claimed.payload.clone())
-        .map_err(|_| DirectWorkerError::InvalidJob)?;
-    let case = store
-        .case(&claimed.case_key)?
-        .ok_or(DirectWorkerError::InvalidJob)?;
-    let binding = validate_job(claimed, &case, &task, policy)?;
-    let result = if let Some(attempt) = store.completed_direct_attempt(&claimed.effect_id)? {
-        if attempt.case_key != claimed.case_key
-            || attempt.state_revision != claimed.state_revision
-            || attempt.task_id != task.task_id
-        {
-            return Err(DirectWorkerError::InvalidJob);
-        }
-        serde_json::from_value(attempt.result.ok_or(DirectWorkerError::InvalidJob)?)
-            .map_err(|_| DirectWorkerError::InvalidJob)?
-    } else {
-        let attempt_id = store.begin_direct_attempt(claimed, &task.task_id, now)?;
-        match runtime.execute(&task, attempt_id) {
-            Ok(result) => {
-                let stored = serde_json::to_value(&result).map_err(StoreError::from)?;
-                store.complete_direct_attempt(attempt_id, &claimed.lease_owner, now, &stored)?;
-                result
-            }
-            Err(error) => {
-                store.fail_direct_attempt(
-                    attempt_id,
-                    &claimed.lease_owner,
-                    now,
-                    &error.to_string(),
-                )?;
-                return Err(DirectWorkerError::Runtime(error));
-            }
-        }
-    };
-    let workflow_policy = policy.workflow_policy()?;
-    let ingested = ingest_worker_result_with_policy(
-        store,
-        &policy.case_policy(),
-        &workflow_policy,
-        &binding,
-        &result,
-    )?;
-    Ok((task.task_id, ingested))
 }
 
 pub(crate) fn validate_job(

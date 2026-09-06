@@ -47,9 +47,8 @@ pub use direct_queue::{
     reconcile_direct_queue_once,
 };
 pub use direct_worker::{
-    CursorDirectRuntime, DirectWorkerCycle, DirectWorkerCycleContext, DirectWorkerError,
-    DirectWorkerRuntime, DirectWorkerRuntimeError, recommended_direct_lease_seconds,
-    run_direct_worker_once_with,
+    CursorDirectRuntime, DirectWorkerRuntime, DirectWorkerRuntimeError,
+    recommended_direct_lease_seconds,
 };
 pub use dispatch::{
     DispatchCycleContext, DispatchCycleError, DispatchCycleResult, dispatch_once,

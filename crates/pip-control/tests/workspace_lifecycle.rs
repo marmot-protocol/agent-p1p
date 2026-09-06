@@ -154,3 +154,30 @@ fn lifecycle_reports_low_capacity_without_retiring_recent_cases() {
     assert!(cycle.retired_case_key.is_none());
     assert!(retirer.paths.borrow().is_empty());
 }
+
+#[test]
+fn failed_retirement_preserves_history_and_does_not_block_available_storage() {
+    struct FailedRetirer;
+    impl WorkspaceRetirement for FailedRetirer {
+        fn retire(&self, _: &WorktreeRetirementSpec) -> Result<RetirementResult, AllocationError> {
+            Err(AllocationError::InvalidConfiguration)
+        }
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let policy = policy(&directory, 500);
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    store.create_case(&terminal_case(policy.revision)).unwrap();
+    let probe = SequenceProbe {
+        snapshots: RefCell::new(vec![WorkspaceStorageSnapshot {
+            free_bytes: 1_000,
+            distinct_filesystem: true,
+        }]),
+    };
+    let cycle =
+        reconcile_workspace_lifecycle_once_with(&mut store, &policy, 300, &probe, &FailedRetirer)
+            .unwrap();
+    assert!(cycle.ready);
+    assert!(cycle.retired_case_key.is_none());
+    assert!(cycle.cleanup_error.is_some());
+    assert_eq!(store.status(300).unwrap().workspace_retirements, 0);
+}
