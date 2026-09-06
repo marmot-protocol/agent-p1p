@@ -63,10 +63,15 @@ install_version() (
 
 assert_service_release_access() {
   test -z "$(find /opt/pip/releases -type d ! -perm 0755 -print -quit)"
+  # This disposable harness has an empty ledger and no running producers.
+  # Give every UID a read-only probe copy, never access to the real ledger.
+  install -m 0444 /var/lib/pip/ledger.db /run/pip-release-access-probe.db
   for identity in pip-control pip-worker pip-ingress; do
     # Exercise exec as the real service UID, not just root's access checks.
     systemd-run --quiet --wait --pipe --collect --property="User=$identity" \
-      /opt/pip/current/bin/pip-control --help >/dev/null
+      /opt/pip/current/bin/pip-control status \
+      --database /run/pip-release-access-probe.db --now 1787220000 \
+      | jq -e '.ok and .ledger.schema_version == 8' >/dev/null
     runuser -u "$identity" -- test -r /opt/pip/current/SOURCE.COMMIT
     runuser -u "$identity" -- test -r /etc/pip/repositories/mdk.json
     runuser -u "$identity" -- test -r /opt/pip/current/share/pip/skills/planner/SKILL.md
