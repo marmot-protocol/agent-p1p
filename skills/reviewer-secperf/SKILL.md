@@ -1,7 +1,7 @@
 ---
 name: reviewer-secperf
 description: Use when reviewing a Pip PR for security and performance.
-version: 0.7.0
+version: 0.8.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -30,14 +30,10 @@ The Rust direct-provider runtime starts one fresh read-only Cursor Agent invocat
    Pip reviewer role: reviewer-secperf
    ```
    Do not use that marker for any other role. Return the Rust
-   `reviewer-secperf` contract from `references/worker-result-contracts.md` in the loaded `workflow-contract` skill directory (not the target repository). Put confidence, provider limitations, and durable artifact paths under `evidence`. After validating it, call
-   `kanban_complete` with a concise summary and the complete object as
-   `metadata`; Hermes must durably store the contract in the Kanban run
-   metadata. Then return the same object as the entire final response without
-   prose or a code fence.
+   `reviewer-secperf` contract from `references/worker-result-contracts.md` in the loaded `workflow-contract` skill directory (not the target repository). Put confidence, provider limitations, and durable artifact paths under `evidence`. Save and validate the object using the field guide's local validator, then return it as the entire final response without prose or a code fence. The direct runtime captures the response; do not look for Hermes completion tools or update Kanban.
 
 ## Blocking rule
 
 Any security regression, unresolved high-impact performance issue, unauthorized sensitive change, visible model mismatch, stale head, or red CI blocks progression. Fixes require a fresh same-head re-review.
 
-Return blocking findings in the result and complete the Kanban review task so the deterministic remediation child can run. Use Kanban blocked status only when the review itself cannot be performed. On the second review round, explicitly confirm or retain every prior blocker on the current exact head.
+Return blocking findings in the structured result so the controller can schedule remediation. Use a blocked outcome only when the review itself cannot be performed. On subsequent review rounds, explicitly confirm or retain every prior blocker on the current exact head.

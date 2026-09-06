@@ -340,6 +340,21 @@ impl CommonResult {
 }
 
 impl WorkerResult {
+    /// Decode the declared role directly so a malformed field produces its
+    /// actual type error, not an opaque failure of the untagged union.
+    pub fn decode(value: Value) -> Result<Self, serde_json::Error> {
+        let role: WorkerRole =
+            serde_json::from_value(value.get("role").cloned().unwrap_or(Value::Null))?;
+        match role {
+            WorkerRole::Planner => serde_json::from_value(value).map(Self::Planner),
+            WorkerRole::Builder => serde_json::from_value(value).map(Self::Builder),
+            WorkerRole::ReviewerGeneral | WorkerRole::ReviewerSecperf => {
+                serde_json::from_value(value).map(Self::Review)
+            }
+            WorkerRole::FinalReviewer => serde_json::from_value(value).map(Self::Final),
+        }
+    }
+
     pub fn validate(&self) -> Result<(), ContractError> {
         match self {
             Self::Planner(result) => result.validate(),

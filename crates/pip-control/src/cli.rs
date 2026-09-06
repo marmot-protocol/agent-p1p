@@ -32,6 +32,7 @@ pub enum CliError {
     Ledger(String),
     Install(String),
     Reconciliation(String),
+    Contract(String),
     Release(ReleaseError),
     Clock,
 }
@@ -57,6 +58,7 @@ impl fmt::Display for CliError {
             Self::Reconciliation(error) => {
                 write!(formatter, "shadow reconciliation failed: {error}")
             }
+            Self::Contract(error) => write!(formatter, "invalid worker result: {error}"),
             Self::Release(error) => error.fmt(formatter),
             Self::Clock => formatter.write_str("system clock is before the Unix epoch"),
         }
@@ -78,6 +80,7 @@ pub fn run_cli(arguments: impl IntoIterator<Item = String>) -> Result<Value, Cli
     };
     match command {
         "status" => status(&arguments[1..]),
+        "validate-worker-result" => validate_worker_result(&arguments[1..]),
         "verify-release" => verify(&arguments[1..]),
         "seal-release" => seal(&arguments[1..]),
         "derive-public-key" => derive_public_key(&arguments[1..]),
@@ -92,6 +95,21 @@ pub fn run_cli(arguments: impl IntoIterator<Item = String>) -> Result<Value, Cli
         "install-release" => install(&arguments[1..]),
         _ => Err(CliError::InvalidArgument(command.into())),
     }
+}
+
+fn validate_worker_result(arguments: &[String]) -> Result<Value, CliError> {
+    let options = options(arguments, &["--input"], &[])?;
+    let bytes = read_bounded(Path::new(required(&options, "--input")?), 4 * 1024 * 1024)?;
+    let value =
+        serde_json::from_slice(&bytes).map_err(|error| CliError::Contract(error.to_string()))?;
+    let result = pip_contracts::WorkerResult::decode(value)
+        .map_err(|error| CliError::Contract(error.to_string()))?;
+    result
+        .validate()
+        .map_err(|error| CliError::Contract(error.to_string()))?;
+    Ok(
+        json!({"ok":true,"role":result.common().role,"task_id":result.common().task_id,"workflow_authorized":false}),
+    )
 }
 
 fn authorize_builder_retry(arguments: &[String]) -> Result<Value, CliError> {

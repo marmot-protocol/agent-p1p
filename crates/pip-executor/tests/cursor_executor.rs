@@ -246,6 +246,8 @@ fn builder_runs_once_in_fresh_exact_model_mode_and_retains_complete_artifacts() 
     assert!(prompt.contains("# Workflow Contract"));
     assert!(prompt.contains("# Role Contract"));
     assert!(prompt.contains("review-ready structured result contract"));
+    assert!(prompt.contains(artifacts.to_str().unwrap()));
+    assert!(prompt.contains("worker-result.json"));
     assert_eq!(
         serde_json::from_str::<Value>(
             &fs::read_to_string(artifacts.join("run-status.json")).unwrap()

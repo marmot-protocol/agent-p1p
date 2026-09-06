@@ -10,6 +10,46 @@ use pip_store::Store;
 use sha2::{Digest, Sha256};
 
 #[test]
+fn workers_can_validate_results_without_ledger_or_provider_access() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("result.json");
+    let fixtures: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../migration/target-v1/worker-results.json"
+    ))
+    .unwrap();
+    let run = |value: &serde_json::Value| {
+        let bytes = serde_json::to_vec(value).unwrap();
+        fs::write(&path, &bytes).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_pip-control"))
+            .args(["validate-worker-result", "--input", path.to_str().unwrap()])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        output
+    };
+    for value in fixtures["results"].as_array().unwrap() {
+        let output = run(value);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["workflow_authorized"], false);
+    }
+    let mut wrong = fixtures["results"][1].clone();
+    wrong["local_checks"] = serde_json::json!({"passed":true});
+    let output = run(&wrong);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("expected a sequence"));
+    let mut wrong = fixtures["results"][1].clone();
+    wrong["actual_model"] = serde_json::json!("cursor/auto");
+    assert!(!run(&wrong).status.success());
+}
+
+#[test]
 fn status_reads_an_existing_ledger_without_mutating_it() {
     let directory = tempfile::tempdir().unwrap();
     let database = directory.path().join("ledger.db");

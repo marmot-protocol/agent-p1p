@@ -160,7 +160,7 @@ impl<R: ProcessRunner> CursorExecutor<R> {
         }))
         .map_err(|error| CursorExecutionError::InvalidResult(error.to_string()))?
             + "\n";
-        let prompt = render_prompt(task, &task_input);
+        let prompt = render_prompt(task, &task_input, artifact_dir);
         if task_input.len() > self.max_output_bytes
             || prompt.len() > self.max_output_bytes
             || contains_secret(&task_input)
@@ -349,10 +349,14 @@ fn validate_task(task: &CursorTask) -> Result<(), CursorExecutionError> {
     Ok(())
 }
 
-fn render_prompt(task: &CursorTask, task_input: &str) -> String {
+fn render_prompt(task: &CursorTask, task_input: &str, artifact_dir: &Path) -> String {
     format!(
-        "{}\n\n{}\n\n# Immutable Task Input\n\n```json\n{}```\n\n# Result Requirement\n\nReturn only the review-ready structured result contract bound to this exact task. Set requested_model to `{}` and report the model identity visible in the runtime as actual_model. A mismatch must use BLOCKED_UNEXPECTED_MODEL. Do not resume or reuse any prior session.\n",
-        task.workflow_skill, task.role_skill, task_input, task.binding.requested_model,
+        "{}\n\n{}\n\n# Immutable Task Input\n\n```json\n{}```\n\n# Result Requirement\n\nReturn only the review-ready structured result contract bound to this exact task. Set requested_model to `{}` and report the model identity visible in the runtime as actual_model. A mismatch must use BLOCKED_UNEXPECTED_MODEL. Do not resume or reuse any prior session.\n\nRun artifact directory: `{}`. Save your contract there as `worker-result.json`, outside the source checkout, and validate it with `/opt/pip/current/bin/pip-control validate-worker-result --input <absolute-path-to-worker-result.json>` before returning the same JSON object. The direct runtime captures your response; no Hermes completion tool is needed.\n",
+        task.workflow_skill,
+        task.role_skill,
+        task_input,
+        task.binding.requested_model,
+        artifact_dir.display(),
     )
 }
 
@@ -395,8 +399,8 @@ fn parse_envelope(stdout: &[u8]) -> Result<(WorkerResult, Value), CursorExecutio
     }
     let _ = envelope.extra;
     let result = match envelope.result {
-        Value::String(text) => serde_json::from_value(result_from_transcript(&text)?),
-        value @ Value::Object(_) => serde_json::from_value(value),
+        Value::String(text) => WorkerResult::decode(result_from_transcript(&text)?),
+        value @ Value::Object(_) => WorkerResult::decode(value),
         _ => {
             return Err(CursorExecutionError::MalformedEnvelope(
                 "result is neither an object nor encoded object".into(),

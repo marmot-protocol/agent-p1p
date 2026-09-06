@@ -5,9 +5,9 @@ relative to that loaded skill's directory, not the repository being worked on.
 
 **Status:** Canonical for workflow version 3 and contract version 2
 
-The Rust controller accepts a completed worker result only from the latest
-successful durable Hermes run for a controller-owned task projection. The
-stored projection, not the worker result, supplies the immutable assignment.
+The Rust controller accepts results from durable Hermes runs or the direct
+Cursor queue, bound to a controller-owned task. The stored assignment, not
+the worker result, supplies the immutable task identity.
 The controller rejects task, role, profile, case, plan, PR, head, model, or
 skills-commit drift before writing a run or advancing a case.
 
@@ -70,8 +70,13 @@ Additional fields:
   `BLOCKED`, or `BLOCKED_UNEXPECTED_MODEL`;
 - positive `plan_version`;
 - lowercase 40-hex `planned_base_sha`;
-- `root_cause`, `authorized_scope`, `sensitive_scope`, `dependencies`,
-  `open_decisions`, and `plan_artifact`.
+- string `root_cause`, `authorized_scope`, and `plan_artifact`;
+- arrays `sensitive_scope` (category strings), `dependencies` (JSON values),
+  and `open_decisions` (strings). Empty lists mean `[]`, not `null`.
+
+Sensitive categories are `CRYPTOGRAPHY`, `MLS_CGKA`, `KEY_HANDLING`,
+`TRUST_ANCHOR`, `MEMBERSHIP_AUTHORIZATION`, `ADMIN_AUTHORIZATION`, and
+`PUSH_PAYLOAD_CONTEXT`.
 
 Tasks with `storage` schema 1 also require the full plan in
 `evidence.plan_markdown`: nonempty UTF-8 text, at most 16 KiB. This is the
@@ -93,8 +98,13 @@ Additional fields:
   `BLOCKED_UNEXPECTED_MODEL`;
 - positive `plan_version` and `build_round`;
 - nullable `head_sha`;
-- `local_checks`; and
-- `finding_resolutions` with exact finding and resolution-head bindings.
+- `local_checks`: an array of strings describing commands and outcomes, such as
+  `["cargo test -p example: 42 passed", "cargo clippy: passed"]`. Never an object
+  like `{"passed": true}` or a boolean. Report failed checks and limitations
+  honestly; detailed structured command records may go inside `evidence`;
+- `finding_resolutions`: an array (empty for an initial build). Each object has
+  exactly string fields `finding_id`, `resolution_commit`, `resolved_head_sha`,
+  `resolution_summary`, and `tests` as an array of strings.
 
 `REVIEW_READY` requires the lowercase 40-hex local commit on the task's exact
 `assigned_branch` in its `assigned_worktree`. The clean builder process has no
@@ -116,7 +126,14 @@ Additional fields:
   `BLOCKED_UNEXPECTED_MODEL`;
 - positive `plan_version`, `review_round`, and `pr_number`;
 - lowercase 40-hex `reviewed_head_sha`;
-- `blocking_findings`, `suggestions`, and `finding_confirmations`.
+- `blocking_findings`: an array of objects with exactly string fields `id`,
+  `summary`, `defect`, `consequence`, `corrective_direction`, plus
+  `required_evidence` as an array of strings;
+- `suggestions`: an array of objects with exactly string fields `summary` and
+  `rationale`;
+- `finding_confirmations`: an array of objects with exactly string `finding_id`,
+  `status` (`CONFIRMED_RESOLVED` or `STILL_OPEN`), string `reviewed_fix_sha`, and
+  `evidence` as an array of strings. Empty lists are `[]`, not `{}` or `null`.
 
 An approval cannot contain a blocking finding or an open confirmation. The
 controller-owned task binding also carries `review_mode`: `required`,
@@ -135,17 +152,29 @@ Additional fields:
   `BLOCKED_UNEXPECTED_MODEL`;
 - positive `plan_version`, `final_review_round`, and `pr_number`;
 - lowercase 40-hex `reviewed_head_sha`;
-- `residual_uncertainties`; and
-- nonempty `decision_rationale`.
+- `residual_uncertainties`: an array of strings (empty means `[]`); and
+- nonempty string `decision_rationale`.
 
 `READY` is a recommendation, not merge authority. In MDK shadow policy the
 pure state machine maps it to `SHADOW_READY`, where disposition remains held
 for a human.
 
-## Hermes completion envelope
+## Validate before completion
 
-After validating the result locally, call `kanban_complete` once with a concise
+Save the JSON contract outside the source checkout: under `storage.results`
+for Hermes, or the run artifact directory supplied by the direct runtime.
+Run `/opt/pip/current/bin/pip-control validate-worker-result --input /absolute/path/worker-result.json`.
+Correct any field/type errors before submitting. This credential-free command
+checks the actual Rust schema and self-consistency; it does not authorize work,
+accept a job result, validate claimed tests, or grant CI/merge readiness.
+
+## Completion transport
+
+For Hermes tasks, after validation call `kanban_complete` once with a concise
 summary and the complete contract object as run `metadata`. Return the same
 object as the entire final response, without prose or a code fence. Hermes may
 store its own run envelope fields outside `metadata`; do not add those fields
 to the contract object.
+
+For direct Cursor tasks, return the contract as the final JSON object. The direct
+runtime captures it; do not look for Hermes tools or update Kanban yourself.
