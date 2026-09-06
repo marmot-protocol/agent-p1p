@@ -117,15 +117,15 @@ fn hermes_gateway_owns_dispatch_without_controller_credentials_or_ledger_access(
     assert!(service.contains("Environment=HERMES_KANBAN_HOME=/var/lib/pip/hermes"));
     assert!(service.contains("ExecStart=/usr/local/bin/hermes gateway run --external-supervisor"));
     assert!(!service.contains("--no-supervise"));
-    assert!(service.contains("BindPaths=/var/lib/pip/hermes /var/lib/pip/worktrees/hermes-scratch"));
+    assert!(
+        service.contains("BindPaths=/var/lib/pip/hermes /var/lib/pip/worktrees/hermes-scratch")
+    );
     assert!(
         include_str!("../../../scripts/install-rust-control-plane.sh").contains(
             "ensure_directory /var/lib/pip/worktrees/hermes-scratch pip-control pip-control 700"
         )
     );
-    assert!(service.contains(
-        "BindReadOnlyPaths=/var/lib/pip/repositories /var/lib/pip/worktrees"
-    ));
+    assert!(service.contains("BindReadOnlyPaths=/var/lib/pip/repositories /var/lib/pip/worktrees"));
     assert!(!service.contains("LoadCredential="));
     assert!(!service.contains("github.token"));
 }
