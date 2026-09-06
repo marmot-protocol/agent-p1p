@@ -25,6 +25,9 @@ const MAX_ENVELOPE_BYTES: usize = 4 * 1024 * 1024;
 pub enum DirectQueueCycle {
     Idle,
     AuthorizationBlocked,
+    Retained {
+        attempt_id: u64,
+    },
     Prepared {
         attempt_id: u64,
         task_id: String,
@@ -201,11 +204,20 @@ pub fn reconcile_direct_queue_once(
     lease_seconds: u64,
     authorization_valid: bool,
 ) -> Result<DirectQueueCycle, DirectQueueError> {
+    let mut retained = None;
+    for path in queue_files(&queue.results)? {
+        let result = ingest_result(store, policy, queue, &path, now, authorization_valid)?;
+        if matches!(result, DirectQueueCycle::Retained { .. }) {
+            retained = Some(result);
+        } else {
+            return Ok(result);
+        }
+    }
+    if let Some(result) = retained {
+        return Ok(result);
+    }
     if !authorization_valid {
         return Ok(DirectQueueCycle::AuthorizationBlocked);
-    }
-    if let Some(path) = queue_files(&queue.results)?.into_iter().next() {
-        return ingest_result(store, policy, queue, &path, now);
     }
     let Some(claimed) = store.claim_effect_matching(
         owner,
@@ -307,6 +319,7 @@ fn ingest_result(
     queue: &DirectQueue,
     result_path: &Path,
     now: u64,
+    advance: bool,
 ) -> Result<DirectQueueCycle, DirectQueueError> {
     let envelope: ResultEnvelope = read_envelope(result_path)?;
     let attempt_id = envelope.attempt_id();
@@ -384,6 +397,12 @@ fn ingest_result(
             Ok(DirectQueueCycle::Failed { attempt_id })
         }
         ResultEnvelope::Complete { result, .. } => {
+            // Collection is not workflow acceptance. Bind before preserving a
+            // result, including during a pause; only a fresh authorization may
+            // advance the case or publish the observer's disposition.
+            result
+                .validate_binding(&binding)
+                .map_err(|error| DirectQueueError::Ingest(error.to_string()))?;
             let result = if attempt.status == DirectAttemptStatus::Complete {
                 serde_json::from_value(attempt.result.ok_or(DirectQueueError::InvalidEnvelope)?)
                     .map_err(|error| DirectQueueError::Serialization(error.to_string()))?
@@ -399,6 +418,9 @@ fn ingest_result(
                 queue.archive(attempt_id)?;
                 return Ok(DirectQueueCycle::Cleaned { attempt_id });
             };
+            if !advance {
+                return Ok(DirectQueueCycle::Retained { attempt_id });
+            }
             if matches!(
                 binding.review_mode,
                 Some(ReviewMode::Advisory | ReviewMode::Shadow)

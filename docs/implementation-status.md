@@ -1,119 +1,92 @@
 # Pip implementation status
 
-Updated 2026-09-06. This is a work inventory, not an activation or completion claim.
-The target is [the lean architecture](pip-architecture-plan.md).
+Updated 2026-09-07. This inventory distinguishes implementation, deployment and
+live proof. The target is [the lean architecture](pip-architecture-plan.md).
 
-## Current live evidence
+## Latest verified live state
 
-Pirate was checked during this refactor on 2026-09-06:
-- installed source: `c1f70e7d61050e175e9c2723d78d66c2a001086e`;
-- the Cursor argument-boundary repair is installed and execution has resumed;
-- #993 is the sole authorized canary; planner task `t_bf698ea6` completed and
-  plan version 1 was accepted. The first Cursor invocation rejected skill
-  frontmatter as a command-line option before useful work. Attempt 7 is executing
-  on `c1f70e7`, with source edits and Rust compilation observed;
-- #891, #1228 and #1639 are abandoned with their history retained;
-- no completed end-to-end issue or ready PR;
-- Hermes remains upstream commit `29112bef099274229cadff79cdff7bf7b99c4b77`,
-  with no local source modifications.
+Pirate was checked after the `d67f65f43af5e99ef8d6656bb71bd398708cd339`
+installation:
 
-These are dated observations, not guarantees about a later host state.
-Recheck before installation/activation. Conversational Hermes is separate from
-the service-owned execution runtime and must not be interrupted.
+- Signed deployment run `34066131761` and CI `34066131788` passed, including
+  the Linux service-lifecycle suite. Installation preserved the stopped ledger
+  byte-for-byte and preserved the intentionally paused policy.
+- #993 remains the sole labeled canary, with accepted plan version 1. Its
+  retained implementation commit is `05070de3ef5e151bba702f85fd4c9e510f7e0df4`.
+  Attempts 7 and 8 performed useful work but failed result parsing/typing.
+- The supported root retry command preserved failures and the escalation, then
+  granted one additional attempt. Active policy revision 7 was restored.
+  Attempt 9 was observed RUNNING under the normal execution service.
+- No accepted builder result, PR, required review set or final readiness is
+  proven yet. Reported local test failures are not equivalent to green CI.
+- #891, #1228 and #1639 are abandoned with history retained.
+- Hermes remains the upstream installation; Pip has not introduced a fork.
+  Conversational Hermes is separate and must not be interrupted.
 
-## Lean refactor in progress
+These are dated observations, not a promise that a process is still running.
+Inspect the current ledger, services and GitHub evidence before acting.
 
-Implemented and deployed through `cd738ee`:
+## Implemented and deployed
 
-- Replace the long architecture specification with the approved smaller scope.
-  Keep webhooks and polling, Rust workflow authority, unmodified Hermes,
+- One Rust workflow authority, unmodified Hermes, webhook intake plus polling,
   explicit models and human-only merge.
-- Exclude detached review failures from the case work budget while retaining
-  every attempt in history and aggregate status.
-- Report failed workspace retirement without blocking otherwise healthy storage
-  or falsely recording retirement.
-- Remove the alternate in-process direct execution path. Its useful tests now
-  exercise the production controller/inbox/worker/result boundary.
-- Recover dispatch from saved task definitions when release/profile defaults
-  change, rather than reconstructing and conflicting with the original job.
-- Acquire reviewer-App credentials only when publishing the relevant review,
-  not at the beginning of every controller cycle.
-- Permit Node/V8 JIT memory in the execution services, retaining controller and
-  ingress restrictions. The lifecycle fixture must actually execute rather than
-  silently skip a missing Hermes bootstrap marker.
-- Record confirmed direct-runtime non-starts separately from task failures and
-  retry with durable exponential backoff. Replay and restart preserve the delay;
-  an uncertain queue handoff remains fenced rather than authorizing a duplicate.
+- Removed the alternate in-process direct executor and autonomous-merge
+  coordinator/API; moved useful tests onto the production queue boundary.
+- Detached review failures do not consume the case work budget. Cleanup errors
+  do not block otherwise healthy storage. Reviewer credentials are acquired
+  only when publication needs them.
+- Confirmed runtime non-starts have durable exponential backoff, separate from
+  work failures. Uncertain handoffs remain fenced against duplicate execution.
+- Dispatch retries reuse saved task definitions rather than rebuilding them
+  from current release defaults. Full saved-job compatibility remains incomplete.
+- Hermes settings are verified through structured configuration output.
+- Worker sandboxes support Node JIT while preserving controller/ingress
+  restrictions. Native Hermes sees only its required runtime paths and cannot
+  reach the controller ledger through same-user process aliases.
+- Shared Git indexes survive controller inspection under a restrictive umask.
+  Supported builder recovery preserves descendant commits and unfinished edits,
+  with no source reset or failure-history rewrite.
+- Normal upgrades preserve operator policy; only first installation seeds an
+  inert policy. Release permissions are independent of the caller's umask.
+- Cursor receives its retained prompt through file-backed stdin. One strict,
+  bound result may follow progress commentary; ambiguous contracts fail closed.
+- Precise worker field types and a credential-free `validate-worker-result`
+  command catch schema errors before submission. Direct role instructions no
+  longer ask for unavailable Hermes completion tools.
+- Read-only `status --case` and `status --attempt`, plus bounded audited
+  `authorize-builder-retry`, replace handwritten inspection/reset operations.
 
-- Verify effective Hermes profile settings through `config get --json`, not
-  presentation-sensitive YAML text comparisons. Exact model/provider checks stay.
-- Remove the autonomous-merge coordinator and GitHub merge-write API. Current
-  policies must be shadow/human-only; historical state remains readable.
-- Stop setting unnecessary setgid bits on case and artifact directories. Both
-  execution identities already share the same primary group. Preserve
-  `RestrictSUIDSGID=yes` and verify controller preparation inside its sandbox,
-  not only the later worker handoff.
+These changes have Rust regression coverage and signed-release Linux lifecycle
+coverage. They do not by themselves establish end-to-end success.
 
-Deployed additionally through `c1f70e7`:
+## Local work, not yet deployed
 
-- Delimit the Cursor positional prompt with `--` so Markdown frontmatter cannot
-  become command-line options. The regression failed before the fix and passes
-  after it; the installed Cursor accepts the delimiter in an offline probe.
-- Seed paused policy only on first install; validate and preserve existing
-  operator configuration during upgrades/reinstalls. Invalid existing policy
-  stops installation instead of silently replacing state with defaults.
+Direct result collection is being separated from workflow advancement.
+The paused controller can retain an exactly bound completed result without
+credentials, publication, a new task, or a case transition. Resume accepts the
+saved result without rerunning the provider. Tests cover restart, expired
+dispatch lease after retention, malformed bindings, failures and queue traversal.
+Native Hermes collection, cross-case failure isolation and saved-policy
+compatibility still need work; this is not a claim that all pause semantics
+are complete.
 
-Regression tests reproduce the shadow-budget, cleanup and saved-dispatch defects
-before the fixes. The full Rust workspace tests and Clippy pass locally. Linux
-lifecycle verification passed clean install, reinstall, upgrade, rollback,
-restart recovery, two-UID workspace handoff and both execution-service JIT
-boundaries. After the live #993 reproduction, the expanded controller-preparation
-fixture and full Linux lifecycle passed with `RestrictSUIDSGID=yes` retained.
-The permission repair is deployed and dispatched the same retained #993 case.
-The policy-preserving installer passed 329 Rust tests (seven explicitly ignored),
-Clippy and the expanded Linux lifecycle, including preservation of active-policy
-bytes through reinstall, upgrade, rollback and reboot with execution disabled.
-The installer change is now deployed and preserved exact live policy and ledger
-bytes on Pirate. End-to-end proof remains outstanding.
+## Remaining completion gates
 
-Further local changes awaiting release:
-
-- Pass the retained Cursor prompt file through stdin, avoiding Linux's
-  single-argument length bound and keeping prompt content out of process arguments.
-  Large-input regressions, full Rust tests and Clippy pass; installed Cursor
-  accepted both pipe input and a regular stdin file in isolated no-tool probes.
-- Read-only `status --case` and `status --attempt` expose retained history and
-  failure details without handwritten SQL. CLI regression tests and Clippy pass.
-
-## Remaining work toward the active goal
-
-1. Extend confirmed-non-start handling to remaining service/bootstrap failures;
-   direct-runtime probe failures now have bounded backoff without consuming the
-   case's work-failure budget.
-2. Finish failure isolation: one publication/capability failure cannot stall
-   unrelated cases; safe result processing must remain possible during pause.
-3. Complete saved-job recovery through execution/result acceptance and compatible
-   policy/settings upgrades, not just queue reconciliation. Preserve stale-job,
-   revocation and exact-model guards.
-4. Replace full-history prompt replication with bounded role-specific inputs and
-   retained immutable evidence. Remove formatting-sensitive Hermes assumptions.
-5. Simplify storage/maintenance and normal operating commands; retire obsolete
-   runtime paths and defer automatic merge code without losing historical reads.
-6. Finish the authorized live issue through builder, CI, required independent reviewers,
-   remediation if needed, and final review to a human-ready PR.
-7. Recheck exact PR head, required reviews and CI; do not merge.
-8. After the cutover proof, remove the legacy Python runtime and obsolete CI/docs,
-   preserving useful parity fixtures and source history in Git.
-9. Reconcile remaining documentation and remove temporary operational scaffolding.
-   Revoke temporary operator elevation when no longer needed.
+1. Finish one real issue through builder, exact-head CI, all required independent
+   reviews, remediation where needed, and final human-ready disposition.
+2. Finish capability/case failure isolation and safe result collection during
+   pause; extend confirmed-non-start classification where still missing.
+3. Preserve saved job settings/skills through execution and acceptance across
+   upgrades. Apply pause/revocation immediately without rewriting old jobs.
+4. Replace growing full-history prompts with compact role-specific inputs and
+   retained immutable evidence.
+5. Keep storage and ordinary recovery small and supported; remove obsolete paths
+   and operational scaffolding.
+6. After live cutover proof, delete the legacy Python runtime and obsolete
+   CI/docs, retaining useful parity fixtures and history in Git.
+7. Verify the exact PR head, CI and required reviews; reconcile documentation;
+   revoke temporary operator elevation when no longer needed. Do not merge.
 
 Keep the complete goal active until both the slimmed architecture and live PR
-are verified. Tests of adapters, a healthy process, or a successful planner alone
-do not establish an end-to-end success.
-
-## Historical evidence
-
-`docs/evidence/` contains dated deployment and canary records. The older
-[completion audit](completion-audit.md), Python inventory and migration roadmap
-are historical references; their installed-source/activation snapshots are not
-current state. Do not infer permission or recovery commands from those snapshots.
+are verified. See `docs/evidence/` for historical observations, not current
+deployment authority or reusable case-specific commands.

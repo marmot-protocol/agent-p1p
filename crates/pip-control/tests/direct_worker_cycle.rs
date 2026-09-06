@@ -36,6 +36,133 @@ impl DirectWorkerRuntime for FakeRuntime {
 }
 
 #[test]
+fn paused_queue_retains_valid_completed_work_without_advancing_or_rerunning_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = queued_builder(directory.path());
+    let queue = queue(directory.path());
+    let runtime = runtime(Ok(builder_result()));
+    let policy = active_policy();
+    reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 100, 30, true).unwrap();
+    execute_direct_queue_once(&runtime, &queue, 101).unwrap();
+    let case_before = store.case(case_key()).unwrap();
+    for now in [102, 103] {
+        let mut paused = policy.clone();
+        paused.intake.paused = true;
+        paused.dispatch_enabled = false;
+        let policy_path = directory.path().join("policy.json");
+        std::fs::write(&policy_path, serde_json::to_vec(&paused).unwrap()).unwrap();
+        let mut args = vec!["controller-cycle".to_owned()];
+        for (name, value) in [
+            ("--policy", policy_path.to_str().unwrap().to_owned()),
+            ("--database", store.path().to_str().unwrap().to_owned()),
+            (
+                "--direct-queue",
+                directory
+                    .path()
+                    .join("direct-queue")
+                    .to_str()
+                    .unwrap()
+                    .to_owned(),
+            ),
+            ("--now", now.to_string()),
+            ("--owner", "controller".into()),
+            ("--github-token", "/missing/token".into()),
+            ("--github-reviewer-general-app", "/missing/app".into()),
+            ("--github-reviewer-general-key", "/missing/key".into()),
+            ("--github-reviewer-secperf-app", "/missing/app".into()),
+            ("--github-reviewer-secperf-key", "/missing/key".into()),
+            ("--git-askpass", "/missing/askpass".into()),
+            ("--hermes", "/missing/hermes".into()),
+            ("--skills-commit-file", "/missing/commit".into()),
+        ] {
+            args.extend([name.into(), value]);
+        }
+        let report = pip_control::run_cli(args).unwrap();
+        assert_eq!(report["result"], "disabled");
+        assert_eq!(store.status(now).unwrap().direct_attempts_complete, 1);
+        assert_eq!(store.run_count().unwrap(), 0);
+        assert_eq!(store.case(case_key()).unwrap(), case_before);
+    }
+    assert_eq!(runtime.tasks.borrow().len(), 1);
+    drop(store);
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 200, 30, true).unwrap();
+    assert_eq!(store.run_count().unwrap(), 1);
+    assert_eq!(runtime.tasks.borrow().len(), 1);
+}
+
+#[test]
+fn retained_result_does_not_hide_later_queue_errors() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = queued_builder(directory.path());
+    let queue = queue(directory.path());
+    let policy = active_policy();
+    reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 100, 30, true).unwrap();
+    execute_direct_queue_once(&runtime(Ok(builder_result())), &queue, 101).unwrap();
+    std::fs::write(
+        directory.path().join("direct-queue/results/attempt-2.json"),
+        b"not JSON",
+    )
+    .unwrap();
+    assert!(
+        reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 102, 30, false)
+            .is_err()
+    );
+    assert_eq!(store.status(102).unwrap().direct_attempts_complete, 1);
+    assert_eq!(store.run_count().unwrap(), 0);
+}
+
+#[test]
+fn paused_collection_rejects_misbound_results_and_records_failures_without_dispatch() {
+    for malformed in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = queued_builder(directory.path());
+        let queue = queue(directory.path());
+        let policy = active_policy();
+        let result = if malformed {
+            let mut result = builder_result();
+            if let WorkerResult::Builder(builder) = &mut result {
+                builder.common.task_id = "some-other-task".into();
+            }
+            Ok(result)
+        } else {
+            Err(DirectWorkerRuntimeError::Failed("reported failure".into()))
+        };
+        let runtime = runtime(result);
+        reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 100, 30, true)
+            .unwrap();
+        execute_direct_queue_once(&runtime, &queue, 101).unwrap();
+        let case_before = store.case(case_key()).unwrap();
+        let collected =
+            reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 102, 30, false);
+        assert_eq!(collected.is_err(), malformed);
+        assert_eq!(store.status(102).unwrap().direct_attempts_complete, 0);
+        assert_eq!(
+            store.status(102).unwrap().direct_attempts_failed,
+            u64::from(!malformed)
+        );
+        assert_eq!(store.run_count().unwrap(), 0);
+        assert_eq!(store.case(case_key()).unwrap(), case_before);
+        assert_eq!(runtime.tasks.borrow().len(), 1);
+        if !malformed {
+            assert_eq!(
+                reconcile_direct_queue_once(
+                    &mut store,
+                    &policy,
+                    &queue,
+                    "controller",
+                    103,
+                    30,
+                    false
+                )
+                .unwrap(),
+                DirectQueueCycle::AuthorizationBlocked
+            );
+        }
+    }
+}
+
+#[test]
 fn controller_queue_and_credential_free_executor_converge_without_worker_ledger_access() {
     let directory = tempfile::tempdir().unwrap();
     let queue_root = directory.path().join("direct-queue");
@@ -85,7 +212,7 @@ fn controller_queue_and_credential_free_executor_converge_without_worker_ledger_
             false,
         )
         .unwrap(),
-        DirectQueueCycle::AuthorizationBlocked
+        DirectQueueCycle::Retained { attempt_id: 1 }
     );
     assert_eq!(store.run_count().unwrap(), 0);
 

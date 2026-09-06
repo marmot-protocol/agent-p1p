@@ -458,12 +458,50 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         .map(|value| parse_bool(value, "--global-paused"))
         .transpose()?
         .unwrap_or(false);
+    let now = options
+        .get("--now")
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|_| CliError::InvalidArgument("--now".into()))
+        })
+        .transpose()?
+        .map_or_else(current_time, Ok)?;
     if global_paused || policy.intake.paused || !policy.dispatch_enabled {
+        // A dispatch pause does not require credentials or a provider, and must
+        // not strand a completed direct result outside the durable ledger.
+        // A never-bootstrapped inert installation still creates no database.
+        let database = Path::new(required(&options, "--database")?);
+        let direct_worker = if database
+            .try_exists()
+            .map_err(|error| CliError::Filesystem(error.to_string()))?
+        {
+            let queue = crate::DirectQueue::new(required(&options, "--direct-queue")?)
+                .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+            let mut store =
+                Store::open(database).map_err(|error| CliError::Ledger(error.to_string()))?;
+            serde_json::to_value(
+                crate::reconcile_direct_queue_once(
+                    &mut store,
+                    &policy,
+                    &queue,
+                    required(&options, "--owner")?,
+                    now,
+                    1,
+                    false,
+                )
+                .map_err(|error| CliError::Reconciliation(error.to_string()))?,
+            )
+            .map_err(|error| CliError::Reconciliation(error.to_string()))?
+        } else {
+            json!({"result":"not_initialized"})
+        };
         return Ok(json!({
             "ok": true,
             "result": "disabled",
             "repository": policy.repository.full_name(),
             "policy_revision": policy.revision,
+            "direct_worker": direct_worker,
         }));
     }
     let token = read_secret(Path::new(required(&options, "--github-token")?), 1024)?;
@@ -484,15 +522,6 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
     {
         return Err(CliError::InvalidArgument("--skills-commit-file".into()));
     }
-    let now = options
-        .get("--now")
-        .map(|value| {
-            value
-                .parse::<u64>()
-                .map_err(|_| CliError::InvalidArgument("--now".into()))
-        })
-        .transpose()?
-        .map_or_else(current_time, Ok)?;
     let lease_seconds = options
         .get("--lease-seconds")
         .map(|value| {
