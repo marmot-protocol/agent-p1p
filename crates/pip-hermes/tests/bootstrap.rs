@@ -75,6 +75,12 @@ fn bootstrap_creates_only_managed_profiles_and_reprobes_the_board() {
     assert_eq!(outcome.profiles_reconciled, 0);
     let commands = runner.commands.borrow();
     assert_eq!(commands.len(), 16);
+    assert!(
+        commands
+            .iter()
+            .filter(|command| command.args.iter().any(|arg| arg == "config"))
+            .all(|command| command.args.last().map(String::as_str) == Some("--json"))
+    );
     assert_eq!(
         commands[4].args,
         [
@@ -175,6 +181,26 @@ fn bootstrap_creates_only_managed_profiles_and_reprobes_the_board() {
             .unwrap(),
         "# upstream runtime\n"
     );
+    // Structured output is tolerant of formatting, never of model substitution.
+    for wrong_model in [
+        r#"{"default":"another-model","provider":"openai-codex"}"#,
+        r#"{"default":"gpt-5.6-sol","provider":"another-provider"}"#,
+        r#"{"provider":"openai-codex"}"#,
+        "not JSON",
+    ] {
+        let drift = FakeRunner::default();
+        drift.output("hermes 0.9.0\n");
+        drift.output(r#"[{"slug":"pip-mdk"}]"#);
+        drift.output("--workspace --idempotency-key --created-by --max-runtime --max-retries --skill --model --provider --initial-status");
+        drift.output("--external-supervisor");
+        drift.output(wrong_model);
+        assert!(
+            HermesBootstrap::new(drift, "hermes", Duration::from_secs(5), 1024 * 1024)
+                .unwrap()
+                .apply(&spec(&root, &skills))
+                .is_err()
+        );
+    }
     // A collision at an owned link is still refused before any CLI or rewrite.
     fs::remove_file(planner.join("skills/planner")).unwrap();
     fs::create_dir(planner.join("skills/planner")).unwrap();
@@ -260,9 +286,10 @@ fn profile(name: &str, reasoning: &str) -> ProfileBootstrapSpec {
 
 fn profile_outputs(runner: &FakeRunner) {
     for reasoning in ["xhigh", "high", "xhigh"] {
-        runner.output("default: gpt-5.6-sol\nprovider: openai-codex\n");
-        runner.output(&format!("{reasoning}\n"));
-        runner.output("profile\n");
+        // Key order and whitespace are presentation, not an execution binding.
+        runner.output("{\"provider\": \"openai-codex\",\n \"default\": \"gpt-5.6-sol\"}\n");
+        runner.output(&format!("\"{reasoning}\"\n"));
+        runner.output("\"profile\"\n");
     }
 }
 

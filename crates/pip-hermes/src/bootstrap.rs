@@ -228,8 +228,9 @@ impl<R: CommandRunner + Clone> HermesBootstrap<R> {
 
     fn verify_profile(&self, profile: &ProfileBootstrapSpec) -> Result<(), BootstrapError> {
         let model = self.profile_config(profile, "model")?;
-        let expected_model = format!("default: {}\nprovider: {}", profile.model, profile.provider);
-        if model != expected_model {
+        if model.get("default").and_then(Value::as_str) != Some(profile.model.as_str())
+            || model.get("provider").and_then(Value::as_str) != Some(profile.provider.as_str())
+        {
             return Err(BootstrapError::IncompatibleCli(format!(
                 "effective profile configuration ({}/model)",
                 profile.name
@@ -240,7 +241,7 @@ impl<R: CommandRunner + Clone> HermesBootstrap<R> {
             ("terminal.home_mode", "profile"),
         ] {
             let actual = self.profile_config(profile, key)?;
-            if actual != expected {
+            if actual.as_str() != Some(expected) {
                 return Err(BootstrapError::IncompatibleCli(format!(
                     "effective profile configuration ({}/{key})",
                     profile.name
@@ -254,7 +255,7 @@ impl<R: CommandRunner + Clone> HermesBootstrap<R> {
         &self,
         profile: &ProfileBootstrapSpec,
         key: &str,
-    ) -> Result<String, BootstrapError> {
+    ) -> Result<Value, BootstrapError> {
         let output = self.runner.run(&CommandSpec {
             program: self.program.clone(),
             args: vec![
@@ -263,6 +264,7 @@ impl<R: CommandRunner + Clone> HermesBootstrap<R> {
                 "config".into(),
                 "get".into(),
                 key.into(),
+                "--json".into(),
             ],
             timeout: self.timeout,
             max_output_bytes: self.max_output_bytes,
@@ -278,10 +280,8 @@ impl<R: CommandRunner + Clone> HermesBootstrap<R> {
         if output.status != 0 {
             return Err(HermesError::CommandFailed(output.status).into());
         }
-        Ok(std::str::from_utf8(&output.stdout)
-            .map_err(|_| HermesError::InvalidUtf8)?
-            .trim()
-            .to_owned())
+        serde_json::from_slice(&output.stdout)
+            .map_err(|error| BootstrapError::Serialization(error.to_string()))
     }
 
     fn require_help(

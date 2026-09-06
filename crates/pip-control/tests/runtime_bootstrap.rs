@@ -52,9 +52,9 @@ fn policy_bootstrap_manages_only_hermes_roles_with_exact_reasoning() {
     runner.output("--workspace --idempotency-key --created-by --max-runtime --max-retries --skill --model --provider --initial-status\n");
     runner.output("gateway run --external-supervisor\n");
     for reasoning in ["xhigh", "high", "xhigh"] {
-        runner.output("default: gpt-6-astra\nprovider: openai-codex\n");
-        runner.output(&format!("{reasoning}\n"));
-        runner.output("profile\n");
+        runner.output(r#"{"default":"gpt-6-astra","provider":"openai-codex"}"#);
+        runner.output(&format!("\"{reasoning}\"\n"));
+        runner.output("\"profile\"\n");
     }
     let policy = load_repository_policy(include_bytes!(
         "../../../config/target/repositories/mdk.json"
