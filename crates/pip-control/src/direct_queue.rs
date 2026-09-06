@@ -156,6 +156,11 @@ struct WorkEnvelope {
     deny_unknown_fields
 )]
 enum ResultEnvelope {
+    Unavailable {
+        schema_version: u32,
+        attempt_id: u64,
+        error: String,
+    },
     Complete {
         schema_version: u32,
         attempt_id: u64,
@@ -171,15 +176,17 @@ enum ResultEnvelope {
 impl ResultEnvelope {
     const fn attempt_id(&self) -> u64 {
         match self {
-            Self::Complete { attempt_id, .. } | Self::Failed { attempt_id, .. } => *attempt_id,
+            Self::Complete { attempt_id, .. }
+            | Self::Failed { attempt_id, .. }
+            | Self::Unavailable { attempt_id, .. } => *attempt_id,
         }
     }
 
     const fn schema_version(&self) -> u32 {
         match self {
-            Self::Complete { schema_version, .. } | Self::Failed { schema_version, .. } => {
-                *schema_version
-            }
+            Self::Complete { schema_version, .. }
+            | Self::Failed { schema_version, .. }
+            | Self::Unavailable { schema_version, .. } => *schema_version,
         }
     }
 }
@@ -225,8 +232,17 @@ pub fn reconcile_direct_queue_once(
         task: task.clone(),
     };
     if let Err(error) = write_new(&queue.input(attempt_id), &envelope, 0o440) {
-        store.fail_direct_attempt(attempt_id, &claimed.lease_owner, now, &error.to_string())?;
-        store.release_effect(&claimed.effect_id, &claimed.lease_owner)?;
+        // An existing or uninspectable handoff might already have a worker.
+        // Only a confirmed missing message proves that execution never started.
+        if matches!(fs::symlink_metadata(queue.input(attempt_id)), Err(ref e) if e.kind() == std::io::ErrorKind::NotFound)
+        {
+            store.record_direct_unavailability(
+                attempt_id,
+                &claimed.lease_owner,
+                now,
+                &bounded_error(&error.to_string()),
+            )?;
+        }
         return Err(error);
     }
     Ok(DirectQueueCycle::Prepared {
@@ -251,7 +267,7 @@ pub fn execute_direct_queue_once<R: DirectWorkerRuntime>(
             continue;
         }
         let result = if now > work.claimed.lease_until {
-            ResultEnvelope::Failed {
+            ResultEnvelope::Unavailable {
                 schema_version: 1,
                 attempt_id: work.attempt_id,
                 error: "controller lease expired before direct execution".into(),
@@ -262,6 +278,11 @@ pub fn execute_direct_queue_once<R: DirectWorkerRuntime>(
                     schema_version: 1,
                     attempt_id: work.attempt_id,
                     result: Box::new(result),
+                },
+                Err(DirectWorkerRuntimeError::Unavailable(error)) => ResultEnvelope::Unavailable {
+                    schema_version: 1,
+                    attempt_id: work.attempt_id,
+                    error: bounded_error(&error),
                 },
                 Err(error) => ResultEnvelope::Failed {
                     schema_version: 1,
@@ -319,9 +340,20 @@ fn ingest_result(
     let validation_case = validation_case(&work.claimed, &case, &work.task)?;
     let binding = validate_job(&work.claimed, &validation_case, &work.task, policy)
         .map_err(|_| DirectQueueError::InvalidEnvelope)?;
+    let unavailable = matches!(envelope, ResultEnvelope::Unavailable { .. });
     match envelope {
-        ResultEnvelope::Failed { error, .. } => {
+        ResultEnvelope::Failed { error, .. } | ResultEnvelope::Unavailable { error, .. } => {
             let detached_observer = work.claimed.effect_type == "RUN_DIRECT_OBSERVER";
+            if unavailable && !detached_observer {
+                store.record_direct_unavailability(
+                    attempt_id,
+                    &attempt.lease_owner,
+                    now,
+                    &error,
+                )?;
+                queue.archive(attempt_id)?;
+                return Ok(DirectQueueCycle::Failed { attempt_id });
+            }
             if attempt.status == DirectAttemptStatus::Running {
                 store.fail_direct_attempt(
                     attempt_id,

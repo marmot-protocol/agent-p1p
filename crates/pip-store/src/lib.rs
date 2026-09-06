@@ -2091,6 +2091,88 @@ impl Store {
         Ok(attempt)
     }
 
+    /// Record a confirmed non-start and postpone only its job. The diagnostic,
+    /// failed attempt and cooldown commit together; replay cannot extend it.
+    pub fn record_direct_unavailability(
+        &mut self,
+        attempt_id: u64,
+        owner: &str,
+        now: u64,
+        error: &str,
+    ) -> Result<u64> {
+        self.ensure_writable()?;
+        if attempt_id == 0
+            || owner.trim().is_empty()
+            || error.trim().is_empty()
+            || error.len() > 4096
+        {
+            return Err(StoreError::InvalidInput("bounded runtime failure required"));
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let id = format!("direct-unavailable:{attempt_id}");
+        let (case_key, effect_id, attempt_owner): (String, String, String) = tx.query_row(
+            "SELECT case_key, effect_id, lease_owner FROM direct_attempts WHERE attempt_id = ?1",
+            [sql_u64(attempt_id)?],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        if attempt_owner != owner {
+            return Err(StoreError::LeaseLost(id));
+        }
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT payload_json FROM evidence WHERE evidence_id = ?1",
+                [&id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(previous) = previous {
+            let previous: serde_json::Value = serde_json::from_str(&previous)?;
+            if previous["error"].as_str() != Some(error) {
+                return Err(StoreError::IdempotencyConflict { id });
+            }
+            return previous["retry_at"]
+                .as_u64()
+                .ok_or(StoreError::InvalidInput("invalid cooldown"));
+        }
+        let outages: u32 = tx.query_row(
+            "SELECT COUNT(*) FROM evidence WHERE kind = 'DIRECT_RUNTIME_UNAVAILABLE' AND source = ?1",
+            [&effect_id], |row| row.get(0),
+        )?;
+        let delay = (60_u64 * (1_u64 << outages.min(6))).min(3600);
+        let retry_at = now.checked_add(delay).ok_or(StoreError::InvalidInteger)?;
+        let updated = tx.execute(
+            "UPDATE direct_attempts SET status = 'FAILED', completed_at = ?1, error = ?2
+             WHERE attempt_id = ?3 AND lease_owner = ?4 AND status = 'RUNNING' AND started_at <= ?1",
+            params![sql_u64(now)?, error, sql_u64(attempt_id)?, owner],
+        )?;
+        if updated != 1 {
+            return Err(StoreError::LeaseLost(id));
+        }
+        insert_evidence(
+            &tx,
+            &case_key,
+            now,
+            &[EvidenceInput {
+                evidence_id: id.clone(),
+                kind: "DIRECT_RUNTIME_UNAVAILABLE".into(),
+                source: effect_id.clone(),
+                payload: serde_json::json!({"attempt_id": attempt_id, "error": error, "retry_at": retry_at}),
+            }],
+        )?;
+        let updated = tx.execute(
+            "UPDATE outbox SET lease_until = ?1
+             WHERE effect_id = ?2 AND lease_owner = ?3 AND delivered_at IS NULL AND superseded_at IS NULL",
+            params![sql_u64(retry_at)?, effect_id, owner],
+        )?;
+        if updated != 1 {
+            return Err(StoreError::LeaseLost(id));
+        }
+        tx.commit()?;
+        Ok(retry_at)
+    }
+
     pub fn direct_attempt(&self, attempt_id: u64) -> Result<Option<StoredDirectAttempt>> {
         if attempt_id == 0 {
             return Err(StoreError::InvalidInput("attempt id is required"));
@@ -2122,7 +2204,10 @@ impl Store {
             "SELECT COUNT(*) FROM direct_attempts a
              JOIN outbox o ON o.effect_id = a.effect_id
              WHERE a.case_key = ?1 AND a.status = 'FAILED'
-               AND o.effect_type != 'RUN_DIRECT_OBSERVER'",
+               AND o.effect_type != 'RUN_DIRECT_OBSERVER'
+               AND NOT EXISTS (SELECT 1 FROM evidence e
+                   WHERE e.evidence_id = 'direct-unavailable:' || a.attempt_id
+                     AND e.kind = 'DIRECT_RUNTIME_UNAVAILABLE' AND e.case_key = a.case_key)",
             [case_key],
             |row| row.get(0),
         )?;

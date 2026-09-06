@@ -36,16 +36,21 @@ Implemented locally, not yet deployed:
 - Permit Node/V8 JIT memory in the execution services, retaining controller and
   ingress restrictions. The lifecycle fixture must actually execute rather than
   silently skip a missing Hermes bootstrap marker.
+- Record confirmed direct-runtime non-starts separately from task failures and
+  retry with durable exponential backoff. Replay and restart preserve the delay;
+  an uncertain queue handoff remains fenced rather than authorizing a duplicate.
 
 Regression tests reproduce the shadow-budget, cleanup and saved-dispatch defects
 before the fixes. The full Rust workspace tests and Clippy pass locally. Linux
-lifecycle verification is running; deployment and live pipeline proof remain
-outstanding.
+lifecycle verification passed clean install, reinstall, upgrade, rollback,
+restart recovery, two-UID workspace handoff and both execution-service JIT
+boundaries. Deployment and live pipeline proof remain outstanding.
 
 ## Remaining work toward the active goal
 
-1. Separate infrastructure unavailability from task failures, with bounded
-   backoff/readiness checks and no uncontrolled provider retries.
+1. Extend confirmed-non-start handling to remaining service/bootstrap failures;
+   direct-runtime probe failures now have bounded backoff without consuming the
+   case's work-failure budget.
 2. Finish failure isolation: one publication/capability failure cannot stall
    unrelated cases; safe result processing must remain possible during pause.
 3. Complete saved-job recovery through execution/result acceptance and compatible

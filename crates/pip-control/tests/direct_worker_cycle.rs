@@ -205,7 +205,7 @@ fn shadow_reviewer_finishes_after_required_path_advances_without_changing_case_s
 }
 
 #[test]
-fn queued_provider_failure_is_recorded_by_controller_and_releases_the_effect() {
+fn queued_task_failure_is_recorded_by_controller_and_releases_the_effect() {
     let directory = tempfile::tempdir().unwrap();
     let queue_root = directory.path().join("direct-queue");
     for child in ["inbox", "results", "archive"] {
@@ -223,7 +223,7 @@ fn queued_provider_failure_is_recorded_by_controller_and_releases_the_effect() {
         true,
     )
     .unwrap();
-    let runtime = runtime(Err(DirectWorkerRuntimeError::Unavailable("outage".into())));
+    let runtime = runtime(Err(DirectWorkerRuntimeError::Failed("outage".into())));
     assert_eq!(
         execute_direct_queue_once(&runtime, &queue, 101).unwrap(),
         DirectQueueCycle::Executed {
@@ -331,29 +331,126 @@ fn queue(root: &std::path::Path) -> DirectQueue {
 }
 
 #[test]
-fn failed_result_preserves_attempt_and_releases_only_its_job() {
+fn queue_write_failure_only_retries_a_confirmed_missing_handoff() {
+    for handoff_exists in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = queued_builder(directory.path());
+        let queue = queue(directory.path());
+        let inbox = directory.path().join("direct-queue/inbox");
+        if handoff_exists {
+            // A collision is uncertain: never authorize a second writer.
+            std::fs::write(inbox.join("attempt-1.json"), b"existing handoff").unwrap();
+        } else {
+            std::fs::remove_dir(&inbox).unwrap();
+        }
+        assert!(
+            reconcile_direct_queue_once(
+                &mut store,
+                &active_policy(),
+                &queue,
+                "controller",
+                100,
+                30,
+                true,
+            )
+            .is_err()
+        );
+        let status = store.status(101).unwrap();
+        assert_eq!(status.direct_attempts_running, u64::from(handoff_exists));
+        assert_eq!(status.direct_attempts_failed, u64::from(!handoff_exists));
+        assert_eq!(
+            store
+                .failed_direct_attempt_count_for_case(case_key())
+                .unwrap(),
+            0
+        );
+    }
+}
+
+#[test]
+fn unavailable_runtime_backs_off_without_spending_the_case_budget() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = queued_builder(directory.path());
+    let queue = queue(directory.path());
+    let mut policy = active_policy();
+    policy.max_provider_failures = 1;
+    let runtime = runtime(Err(DirectWorkerRuntimeError::Unavailable(
+        "runtime offline".into(),
+    )));
+    reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 100, 30, true).unwrap();
+    execute_direct_queue_once(&runtime, &queue, 101).unwrap();
+    reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 102, 30, true).unwrap();
+    assert_eq!(
+        pip_control::enforce_operational_bounds(&mut store, &policy, 103).unwrap(),
+        pip_control::OperationalBoundsCycle::Idle
+    );
+    assert_eq!(store.status(103).unwrap().direct_attempts_failed, 1);
+    assert_eq!(
+        store
+            .record_direct_unavailability(1, "controller", 104, "runtime offline")
+            .unwrap(),
+        162
+    );
+    assert_eq!(
+        store
+            .immutable_history_for_case(case_key())
+            .unwrap()
+            .evidence
+            .iter()
+            .filter(|e| e.kind == "DIRECT_RUNTIME_UNAVAILABLE")
+            .count(),
+        1
+    );
+    assert!(
+        store
+            .record_direct_unavailability(1, "another-controller", 104, "runtime offline")
+            .is_err()
+    );
+    assert_eq!(
+        reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 110, 30, true)
+            .unwrap(),
+        DirectQueueCycle::Idle
+    );
+    drop(store);
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    assert!(matches!(
+        reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 163, 30, true)
+            .unwrap(),
+        DirectQueueCycle::Prepared { attempt_id: 2, .. }
+    ));
+    assert_eq!(runtime.tasks.borrow().len(), 1);
+    execute_direct_queue_once(&runtime, &queue, 164).unwrap();
+    reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 165, 30, true).unwrap();
+    assert_eq!(
+        store
+            .record_direct_unavailability(2, "controller", 166, "runtime offline")
+            .unwrap(),
+        285
+    );
+    assert_eq!(
+        store
+            .failed_direct_attempt_count_for_case(case_key())
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn lease_expired_before_execution_is_an_outage_not_a_work_failure() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = queued_builder(directory.path());
     let queue = queue(directory.path());
     let policy = active_policy();
-    let runtime = runtime(Err(DirectWorkerRuntimeError::Unavailable(
-        "fixture outage".into(),
-    )));
+    let runtime = runtime(Ok(builder_result()));
     reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 100, 30, true).unwrap();
-    execute_direct_queue_once(&runtime, &queue, 101).unwrap();
+    execute_direct_queue_once(&runtime, &queue, 131).unwrap();
+    reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 132, 30, true).unwrap();
+    assert!(runtime.tasks.borrow().is_empty());
     assert_eq!(
-        reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 102, 30, true)
+        store
+            .failed_direct_attempt_count_for_case(case_key())
             .unwrap(),
-        DirectQueueCycle::Failed { attempt_id: 1 }
-    );
-    let status = store.status(102).unwrap();
-    assert_eq!(status.direct_attempts_failed, 1);
-    assert_eq!(status.outbox_pending, 1);
-    assert_eq!(status.outbox_leased, 0);
-    assert_eq!(store.run_count().unwrap(), 0);
-    assert_eq!(
-        store.case(case_key()).unwrap().unwrap().state,
-        "READY_TO_BUILD"
+        0
     );
 }
 
@@ -387,6 +484,42 @@ fn completed_result_survives_controller_restart_without_rerunning_provider() {
         "cursor-grok-4.6-high-fast"
     );
     assert_eq!(store.status(103).unwrap().direct_attempts_complete, 1);
+}
+
+#[test]
+fn unavailability_transaction_cannot_change_an_attempt_after_lease_loss() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = queued_builder(directory.path());
+    let queue = queue(directory.path());
+    reconcile_direct_queue_once(
+        &mut store,
+        &active_policy(),
+        &queue,
+        "controller",
+        100,
+        30,
+        true,
+    )
+    .unwrap();
+    let attempt = store.direct_attempt(1).unwrap().unwrap();
+    store
+        .release_effect(&attempt.effect_id, "controller")
+        .unwrap();
+    assert!(
+        store
+            .record_direct_unavailability(1, "controller", 102, "runtime offline")
+            .is_err()
+    );
+    assert_eq!(store.status(102).unwrap().direct_attempts_running, 1);
+    assert_eq!(store.status(102).unwrap().direct_attempts_failed, 0);
+    assert!(
+        !store
+            .immutable_history_for_case(case_key())
+            .unwrap()
+            .evidence
+            .iter()
+            .any(|e| e.kind == "DIRECT_RUNTIME_UNAVAILABLE")
+    );
 }
 
 #[test]

@@ -26,6 +26,7 @@ const LEASE_RECOVERY_MARGIN_SECONDS: u64 = 120;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DirectWorkerRuntimeError {
     Unavailable(String),
+    Failed(String),
 }
 
 impl fmt::Display for DirectWorkerRuntimeError {
@@ -34,6 +35,7 @@ impl fmt::Display for DirectWorkerRuntimeError {
             Self::Unavailable(error) => {
                 write!(formatter, "direct worker runtime unavailable: {error}")
             }
+            Self::Failed(error) => write!(formatter, "direct worker execution failed: {error}"),
         }
     }
 }
@@ -174,7 +176,7 @@ impl<R: ProcessRunner + Clone> CursorDirectRuntime<R> {
                 &worktree,
                 &artifact_dir,
             )
-            .map_err(|error| runtime_error(error.to_string()))
+            .map_err(|error| DirectWorkerRuntimeError::Failed(error.to_string()))
     }
 }
 
