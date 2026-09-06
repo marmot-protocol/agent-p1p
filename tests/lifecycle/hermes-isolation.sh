@@ -9,7 +9,7 @@ systemd-run --quiet --unit="$target" --collect --uid=pip-control \
   --property=RuntimeMaxSec=120 /bin/sleep 110
 target_pid=$(systemctl show "$target" -p MainPID --value)
 test "$target_pid" -gt 0
-sed -e "s|^ExecStart=.*|ExecStart=/bin/sh -c 'test ! -r /var/lib/pip/ledger.db \&\& test ! -r /proc/$target_pid/root/var/lib/pip/ledger.db'|" \
+sed -e "s|^ExecStart=.*|ExecStart=/bin/sh -c 'test ! -e /var/lib/pip/direct-queue \&\& test ! -e /var/lib/pip/artifacts \&\& test -w /var/lib/pip/hermes \&\& test -w /var/lib/pip/worktrees/hermes-scratch \&\& test ! -w /var/lib/pip/repositories \&\& test ! -r /var/lib/pip/ledger.db \&\& test ! -r /proc/$target_pid/root/var/lib/pip/ledger.db'|" \
   /work/repo/packaging/systemd/pip-hermes-gateway.service \
   > "/run/systemd/system/$probe"
 install -d -m 0755 "/run/systemd/system/$probe.d"

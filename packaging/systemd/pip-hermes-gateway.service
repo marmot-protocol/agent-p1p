@@ -33,10 +33,12 @@ ProtectKernelLogs=yes
 ProtectKernelModules=yes
 ProtectKernelTunables=yes
 ProtectSystem=strict
-ReadOnlyPaths=/opt/pip/current /var/lib/pip/repositories /var/lib/pip/worktrees
-ReadWritePaths=/var/lib/pip/hermes
-ReadWritePaths=/var/lib/pip/worktrees/hermes-scratch
-InaccessiblePaths=/var/lib/pip/ledger.db /var/lib/pip/artifacts /var/lib/pip/provider-home
+# Expose only native runtime inputs, not the ledger, its future WAL/SHM files,
+# direct queue, artifacts, or other controller state created after startup.
+ReadOnlyPaths=/opt/pip/current
+TemporaryFileSystem=/var/lib/pip:ro
+BindReadOnlyPaths=/var/lib/pip/repositories /var/lib/pip/worktrees
+BindPaths=/var/lib/pip/hermes /var/lib/pip/worktrees/hermes-scratch
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 RestrictNamespaces=yes
 RestrictRealtime=yes

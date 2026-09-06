@@ -107,6 +107,7 @@ fn hermes_gateway_owns_dispatch_without_controller_credentials_or_ledger_access(
 
     assert!(service.contains("User=pip-control"));
     assert!(service.contains("PrivateUsers=yes"));
+    assert!(service.contains("TemporaryFileSystem=/var/lib/pip:ro"));
     assert!(service.contains("MemoryDenyWriteExecute=no"));
     assert!(service.contains("NoNewPrivileges=yes"));
     assert!(service.contains("ProtectSystem=strict"));
@@ -116,16 +117,14 @@ fn hermes_gateway_owns_dispatch_without_controller_credentials_or_ledger_access(
     assert!(service.contains("Environment=HERMES_KANBAN_HOME=/var/lib/pip/hermes"));
     assert!(service.contains("ExecStart=/usr/local/bin/hermes gateway run --external-supervisor"));
     assert!(!service.contains("--no-supervise"));
-    assert!(service.contains("InaccessiblePaths=/var/lib/pip/ledger.db"));
-    assert!(service.contains("ReadWritePaths=/var/lib/pip/hermes"));
-    assert!(service.contains("ReadWritePaths=/var/lib/pip/worktrees/hermes-scratch"));
+    assert!(service.contains("BindPaths=/var/lib/pip/hermes /var/lib/pip/worktrees/hermes-scratch"));
     assert!(
         include_str!("../../../scripts/install-rust-control-plane.sh").contains(
             "ensure_directory /var/lib/pip/worktrees/hermes-scratch pip-control pip-control 700"
         )
     );
     assert!(service.contains(
-        "ReadOnlyPaths=/opt/pip/current /var/lib/pip/repositories /var/lib/pip/worktrees"
+        "BindReadOnlyPaths=/var/lib/pip/repositories /var/lib/pip/worktrees"
     ));
     assert!(!service.contains("LoadCredential="));
     assert!(!service.contains("github.token"));
