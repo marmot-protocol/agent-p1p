@@ -1,6 +1,6 @@
 # Exhausted builder recovery
 
-Use this only after diagnosing and repairing a pre-build execution failure.
+Use this only after diagnosing and repairing a failed builder execution.
 It is not a general retry switch or a substitute for repairing provider errors.
 
 ## Preconditions
@@ -16,9 +16,12 @@ It is not a general retry switch or a substitute for repairing provider errors.
 - Verify the repaired case workspace under both execution identities and the
   worker sandbox. This command does not repair or validate a workspace.
 - Read current ledger evidence for the exact case key, state revision, pending
-  direct builder effect ID, and failed-attempt count. The case must still be
-  `READY_TO_BUILD`, have an accepted plan, no PR/head, no running/completed
-  direct attempts, and only the single unleased pending builder effect.
+  direct builder effect ID, and failed-attempt count. The case must have an
+  accepted plan, no accepted PR/head, and no running/completed direct attempts.
+  It must either be `READY_TO_BUILD` with one unleased pending builder effect,
+  or have just moved from that state to `ESCALATED` specifically because of
+  direct-worker provider failures. In the latter case use the superseded
+  builder effect ID. Other escalations and human holds cannot be reopened.
 - The accepted policy's failure budget must be exhausted, but its original
   elapsed-time deadline must not have expired. Do not backdate recovery or
   extend/change the accepted policy to bypass either check.
@@ -36,7 +39,7 @@ sudo /opt/pip/current/bin/pip-control authorize-builder-retry \
   --direct-queue /var/lib/pip/direct-queue \
   --case 'VERIFIED_CASE_KEY' \
   --expected-revision VERIFIED_STATE_REVISION \
-  --effect-id 'VERIFIED_PENDING_BUILDER_EFFECT_ID' \
+  --effect-id 'VERIFIED_FAILED_BUILDER_EFFECT_ID' \
   --expected-failures VERIFIED_FAILED_COUNT \
   --request-id 'operator-builder-retry-UNIQUE_ID' \
   --reason 'Describe the diagnosed failure, repair, and verified evidence'
@@ -50,7 +53,8 @@ The ledger transaction checks the accepted policy and live state again.
 `Applied` means one immutable event, one state-revision increment, supersession
 of the old pending task, and one new `DISPATCH_BUILDER` effect. `Replayed` means
 that same authorization was already recorded; no further allowance is granted.
-The old plan, task payload, failures, policy revision, and creation time remain.
+The old plan, task payload, failures, escalation, policy revision, and creation
+time remain. The case returns to `READY_TO_BUILD`.
 The effective failure limit for this case becomes its observed failures plus
 one; other cases and repository policy are unchanged.
 
@@ -64,6 +68,11 @@ The controller generates a new revision-bound task with current release skills
 and the existing accepted plan. Another failure reaches the new case-specific
 limit and normal controller reconciliation escalates it. The original case
 deadline can also stop it, including while paused.
+
+Recovery preserves existing builder commits and unfinished edits on the assigned
+branch, provided its head still descends from the accepted base. It does not
+reset source or accept the previous worker's claims. The next worker must finish
+and validate the checkout; publication still requires an exact clean head.
 
 This command never starts services or provider processes. A successful command
 is not evidence of a successful build or PR.

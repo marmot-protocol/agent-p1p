@@ -88,7 +88,7 @@ pub fn authorize_builder_retry(
         ),
         event_id,
         observed_at: ObservedAt::new(now),
-        expected_state: CaseState::ReadyToBuild,
+        expected_state: CaseState::from_str(&case.state).map_err(error)?,
         expected_state_revision: StateRevision::new(
             NonZeroU64::new(request.expected_revision).ok_or("invalid state revision")?,
         ),

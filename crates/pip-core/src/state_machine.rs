@@ -357,7 +357,7 @@ pub fn transition(
             decision(State::Planning, &[Fx::DispatchPlanner])
         }
         (State::ReadyToBuild, Ev::BuilderDispatched) => decision(State::Building, &[]),
-        (State::ReadyToBuild, Ev::BuilderRetryAuthorized) => {
+        (State::ReadyToBuild | State::Escalated, Ev::BuilderRetryAuthorized) => {
             decision(State::ReadyToBuild, &[Fx::DispatchBuilder])
         }
         (State::Building | State::Remediating, Ev::BuildRecorded) => {

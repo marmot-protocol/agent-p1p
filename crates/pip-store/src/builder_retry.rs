@@ -29,8 +29,8 @@ pub(crate) fn validate_retry(
         || authorization.reason.trim().is_empty()
         || authorization.reason.len() > 2000
         || authorization.reason.chars().any(char::is_control)
-        || current.state != "READY_TO_BUILD"
-        || input.next_state != current.state
+        || !matches!(current.state.as_str(), "READY_TO_BUILD" | "ESCALATED")
+        || input.next_state != "READY_TO_BUILD"
         || current.plan_version == 0
         || input.plan_version != current.plan_version
         || input.remediation_round != current.remediation_round
@@ -82,18 +82,38 @@ pub(crate) fn validate_retry(
     if unsigned(failed) != authorization.failed_attempts {
         return Err(invalid());
     }
+    // Only a direct-builder failure-bound escalation is recoverable here.
+    // Scope, elapsed-time, review and other terminal decisions stay held.
+    let escalated = current.state == "ESCALATED";
+    let effect_revision = if escalated {
+        let recoverable: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM events WHERE case_key=?1 AND state_revision=?2
+             AND event_type='OPERATIONAL_BOUND_REACHED' AND previous_state='READY_TO_BUILD'
+             AND next_state='ESCALATED' AND json_extract(payload_json,'$.bound')='PROVIDER_FAILURES'
+             AND json_extract(payload_json,'$.details.source')='direct-worker')",
+            params![current.case_key, sql_u64(current.state_revision)?],
+            |row| row.get(0),
+        )?;
+        if !recoverable {
+            return Err(invalid());
+        }
+        current.state_revision.checked_sub(1).ok_or_else(invalid)?
+    } else {
+        current.state_revision
+    };
     // Check under the same IMMEDIATE transaction as supersession and dispatch.
     let admissible: bool = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM outbox WHERE effect_id=?1 AND case_key=?2 AND state_revision=?3
           AND effect_type='RUN_DIRECT_WORKER' AND json_extract(payload_json,'$.role')='builder'
-          AND delivered_at IS NULL AND superseded_at IS NULL AND lease_owner IS NULL AND lease_until IS NULL)
+          AND delivered_at IS NULL AND (superseded_at IS NOT NULL)=?5 AND lease_owner IS NULL AND lease_until IS NULL)
          AND NOT EXISTS(SELECT 1 FROM direct_attempts WHERE case_key=?2 AND status IN ('RUNNING','COMPLETE'))
-         AND (SELECT COUNT(*) FROM outbox WHERE case_key=?2 AND delivered_at IS NULL AND superseded_at IS NULL)=1
+         AND (SELECT COUNT(*) FROM outbox WHERE case_key=?2 AND delivered_at IS NULL AND superseded_at IS NULL AND effect_type!='ESCALATE')=?6
+         AND NOT EXISTS(SELECT 1 FROM outbox WHERE case_key=?2 AND (lease_owner IS NOT NULL OR lease_until IS NOT NULL))
          AND EXISTS(SELECT 1 FROM direct_attempts WHERE effect_id=?1 AND case_key=?2 AND status='FAILED')
          AND EXISTS(SELECT 1 FROM runs WHERE case_key=?2 AND role='planner')
          AND NOT EXISTS(SELECT 1 FROM events WHERE case_key=?2 AND event_type='BUILDER_RETRY_AUTHORIZED'
              AND json_extract(payload_json,'$.failed_attempts')>=?4)",
-        params![authorization.effect_id,current.case_key,sql_u64(current.state_revision)?,failed],|row|row.get(0))?;
+        params![authorization.effect_id,current.case_key,sql_u64(effect_revision)?,failed,escalated,if escalated {0} else {1}],|row|row.get(0))?;
     if !admissible {
         return Err(invalid());
     }
@@ -118,7 +138,7 @@ impl Store {
         let granted: Option<i64> = self.connection.query_row(
             "SELECT MAX(json_extract(payload_json,'$.failed_attempts')+1) FROM events
              WHERE case_key=?1 AND event_type='BUILDER_RETRY_AUTHORIZED'
-               AND previous_state='READY_TO_BUILD' AND next_state='READY_TO_BUILD'",
+               AND previous_state IN ('READY_TO_BUILD','ESCALATED') AND next_state='READY_TO_BUILD'",
             [case_key],
             |row| row.get(0),
         )?;

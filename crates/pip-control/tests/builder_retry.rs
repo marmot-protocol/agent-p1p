@@ -129,6 +129,63 @@ fn fixture_at(
 }
 
 #[test]
+fn exhausted_builder_can_be_retried_after_automatic_escalation_without_erasing_history() {
+    let (_dir, mut store, paused, accepted, mut request) = fixture();
+    assert!(matches!(
+        enforce_operational_bounds(&mut store, &accepted, 140).unwrap(),
+        OperationalBoundsCycle::Escalated {
+            bound: OperationalBound::ProviderFailures,
+            ..
+        }
+    ));
+    request.expected_revision = 3;
+    let before = store.immutable_history_for_case(CASE).unwrap();
+    assert_eq!(
+        authorize_builder_retry(&mut store, &paused, &request, 141, 0).unwrap(),
+        ApplyResult::Applied
+    );
+    let case = store.case(CASE).unwrap().unwrap();
+    assert_eq!(case.state, "READY_TO_BUILD");
+    assert_eq!(case.state_revision, 4);
+    assert_eq!(store.failed_direct_attempt_count_for_case(CASE).unwrap(), 3);
+    assert_eq!(store.effective_provider_failure_limit(CASE, 3).unwrap(), 4);
+    assert_eq!(
+        store.immutable_history_for_case(CASE).unwrap().runs,
+        before.runs
+    );
+    assert_eq!(
+        authorize_builder_retry(&mut store, &paused, &request, 142, 0).unwrap(),
+        ApplyResult::Replayed
+    );
+    assert_eq!(
+        enforce_operational_bounds(&mut store, &accepted, 143).unwrap(),
+        OperationalBoundsCycle::Idle
+    );
+}
+
+#[test]
+fn retry_cannot_reopen_an_unrelated_escalation() {
+    for (bound, source) in [
+        ("ELAPSED_TIME", "direct-worker"),
+        ("PROVIDER_FAILURES", "hermes-circuit-breaker"),
+        ("REPEATED_FINDINGS", "direct-worker"),
+    ] {
+        let (_dir, mut store, paused, _accepted, mut request) = fixture();
+        store.apply_transition(&TransitionInput {
+            case_key: CASE.into(), expected_revision: 2, next_state: "ESCALATED".into(),
+            remediation_round: 0, plan_version: 1, pr_number: None, head_sha: None, observed_at: 140,
+            event: EventInput { event_id: "different-escalation".into(), event_type: "OPERATIONAL_BOUND_REACHED".into(),
+                payload: json!({"bound":bound,"details":{"source":source},"observed":3,"limit":3}) },
+            run: None, evidence: vec![], findings: vec![], effects: vec![],
+        }, None).unwrap();
+        request.expected_revision = 3;
+        let before = store.status(141).unwrap();
+        assert!(authorize_builder_retry(&mut store, &paused, &request, 141, 0).is_err());
+        assert_eq!(store.status(141).unwrap(), before);
+    }
+}
+
+#[test]
 fn retry_redispatches_exact_model_with_fresh_skills_and_stops_after_another_failure() {
     let (_dir, mut store, paused, accepted, request) = fixture();
     let history = store.immutable_history_for_case(CASE).unwrap();

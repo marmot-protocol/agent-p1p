@@ -1,7 +1,7 @@
 use pip_core::{CaseState, Effect, Event, MergeMode, TransitionContext, transition};
 
 #[test]
-fn operator_retry_only_redispatches_a_ready_builder() {
+fn operator_retry_can_redispatch_a_ready_or_escalated_builder() {
     let context = TransitionContext {
         merge_mode: MergeMode::Shadow,
         remediation_round: 0,
@@ -15,11 +15,14 @@ fn operator_retry_only_redispatches_a_ready_builder() {
     .unwrap();
     assert_eq!(decision.next_state, CaseState::ReadyToBuild);
     assert_eq!(decision.effects, vec![Effect::DispatchBuilder]);
+    assert_eq!(
+        transition(CaseState::Escalated, Event::BuilderRetryAuthorized, context).unwrap(),
+        decision
+    );
     for state in [
         CaseState::Planning,
         CaseState::Building,
         CaseState::Reviewing,
-        CaseState::Escalated,
         CaseState::Completed,
     ] {
         assert!(transition(state, Event::BuilderRetryAuthorized, context).is_err());
