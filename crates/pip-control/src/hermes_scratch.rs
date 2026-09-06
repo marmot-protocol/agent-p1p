@@ -27,7 +27,9 @@ pub fn verify_scratch_runtime_stopped<R: pip_hermes::CommandRunner>(
             "list-units",
             "--state=activating,active,deactivating,reloading",
         ),
-        ("list-unit-files", "--state=enabled,enabled-runtime"),
+        // Older systemd returns status 1 for an empty state-filtered listing.
+        // Inspect the actual unit states instead of accepting a command failure.
+        ("list-unit-files", "--full"),
     ] {
         let mut args = vec![
             command.into(),
@@ -45,9 +47,28 @@ pub fn verify_scratch_runtime_stopped<R: pip_hermes::CommandRunner>(
                 max_output_bytes: 65536,
             })
             .map_err(failure)?;
+        let quiescent = if command == "list-unit-files" {
+            std::str::from_utf8(&output.stdout).is_ok_and(|listing| {
+                listing
+                    .lines()
+                    .filter(|line| !line.trim().is_empty())
+                    .all(|line| {
+                        let fields = line.split_ascii_whitespace().collect::<Vec<_>>();
+                        matches!(fields.len(), 2 | 3)
+                            && matches!(
+                                fields[1],
+                                "disabled" | "static" | "masked" | "masked-runtime"
+                            )
+                    })
+            })
+        } else {
+            output.stdout.iter().all(u8::is_ascii_whitespace)
+        };
         if output.status != 0
             || output.timed_out
-            || !output.stdout.iter().all(u8::is_ascii_whitespace)
+            || output.stdout.len() > 65536
+            || output.stderr.len() > 65536
+            || !quiescent
         {
             return Err("execution units are active, enabled, or uninspectable".into());
         }

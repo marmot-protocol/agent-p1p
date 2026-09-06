@@ -88,9 +88,88 @@ pub fn run_cli(arguments: impl IntoIterator<Item = String>) -> Result<Value, Cli
         "direct-worker-cycle" => direct_worker_cycle(&arguments[1..]),
         "bootstrap-runtime" => bootstrap_runtime(&arguments[1..]),
         "scratch-retire" => scratch_retire(&arguments[1..]),
+        "authorize-builder-retry" => authorize_builder_retry(&arguments[1..]),
         "install-release" => install(&arguments[1..]),
         _ => Err(CliError::InvalidArgument(command.into())),
     }
+}
+
+fn authorize_builder_retry(arguments: &[String]) -> Result<Value, CliError> {
+    let options = options(
+        arguments,
+        &[
+            "--policy",
+            "--database",
+            "--direct-queue",
+            "--case",
+            "--expected-revision",
+            "--effect-id",
+            "--expected-failures",
+            "--request-id",
+            "--reason",
+        ],
+        &[],
+    )?;
+    let uid = rustix::process::geteuid().as_raw();
+    if uid != 0 {
+        return Err(CliError::Reconciliation(
+            "builder retry requires root authorization".into(),
+        ));
+    }
+    let policy = crate::load_repository_policy(&read_bounded(
+        Path::new(required(&options, "--policy")?),
+        1024 * 1024,
+    )?)
+    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    if policy.intake.enabled || !policy.intake.paused || policy.dispatch_enabled {
+        return Err(CliError::Reconciliation(
+            "builder retry requires an inert installed policy".into(),
+        ));
+    }
+    crate::verify_scratch_runtime_stopped(&pip_hermes::ProcessRunner::default())
+        .map_err(CliError::Reconciliation)?;
+    let queue = Path::new(required(&options, "--direct-queue")?);
+    crate::DirectQueue::new(queue).map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    for directory in ["inbox", "results"] {
+        if fs::read_dir(queue.join(directory))
+            .map_err(|error| CliError::Filesystem(error.to_string()))?
+            .next()
+            .is_some()
+        {
+            return Err(CliError::Reconciliation(
+                "direct queue must be drained before authorizing a retry".into(),
+            ));
+        }
+    }
+    let database = Path::new(required(&options, "--database")?);
+    let metadata =
+        fs::symlink_metadata(database).map_err(|error| CliError::Filesystem(error.to_string()))?;
+    if !metadata.is_file() {
+        return Err(CliError::UnsafeInput(database.into()));
+    }
+    // Never create or migrate a database as a side effect of operator recovery.
+    drop(Store::open_read_only(database).map_err(|error| CliError::Ledger(error.to_string()))?);
+    let number = |name: &'static str| -> Result<u64, CliError> {
+        required(&options, name)?
+            .parse()
+            .map_err(|_| CliError::InvalidArgument(name.into()))
+    };
+    let request = crate::BuilderRetryRequest {
+        case_key: required(&options, "--case")?.into(),
+        expected_revision: number("--expected-revision")?,
+        effect_id: required(&options, "--effect-id")?.into(),
+        expected_failures: number("--expected-failures")?,
+        request_id: required(&options, "--request-id")?.into(),
+        reason: required(&options, "--reason")?.into(),
+    };
+    let now = current_time()?;
+    let mut store = Store::open(database).map_err(|error| CliError::Ledger(error.to_string()))?;
+    let result = crate::authorize_builder_retry(&mut store, &policy, &request, now, uid)
+        .map_err(CliError::Reconciliation)?;
+    Ok(
+        json!({"ok":true,"result":format!("{result:?}"),"case_key":request.case_key,"request_id":request.request_id,
+        "additional_attempts":1,"runtime_activated":false,"history_preserved":true}),
+    )
 }
 
 fn scratch_retire(arguments: &[String]) -> Result<Value, CliError> {

@@ -4,6 +4,7 @@
 
 mod authorization;
 mod bounds;
+mod builder_retry;
 mod ci;
 mod cli;
 mod direct_queue;
@@ -38,6 +39,7 @@ pub use authorization::{
 pub use bounds::{
     OperationalBound, OperationalBoundsCycle, OperationalBoundsError, enforce_operational_bounds,
 };
+pub use builder_retry::{BuilderRetryRequest, authorize_builder_retry};
 pub use ci::{CiCycle, CiCycleError, PullRequestSource, reconcile_ci_once};
 pub use cli::{CliError, run_cli, run_git_askpass};
 pub use direct_queue::{

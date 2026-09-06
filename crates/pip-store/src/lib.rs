@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+mod builder_retry;
 mod dispatch_intents;
+pub use builder_retry::BuilderRetryAuthorization;
 pub use dispatch_intents::{CreateReservation, DispatchIntent, DispatchTransport};
 
 const SCHEMA_VERSION: u32 = 8;
@@ -1107,6 +1109,9 @@ impl Store {
                 .expected_revision
                 .checked_add(1)
                 .ok_or(StoreError::InvalidInteger)?;
+            if input.event.event_type == "BUILDER_RETRY_AUTHORIZED" {
+                builder_retry::validate_retry(&transaction, &current, input)?;
+            }
             insert_event(
                 &transaction,
                 EventRecord {

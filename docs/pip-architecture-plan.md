@@ -355,6 +355,20 @@ but are not converted or permission-repaired implicitly on dispatch. An
 in-flight case using the old layout requires a deliberate, history-preserving
 recovery before retrying. Updating the binary does not reset attempt budgets.
 
+For an exhausted, pre-build `READY_TO_BUILD` case, an offline root operator can
+use `authorize-builder-retry` after repairing the execution boundary. With
+execution stopped and direct queues drained, this records
+`BUILDER_RETRY_AUTHORIZED`, supersedes the old pending builder task, and queues
+one fresh builder dispatch in a single ledger transaction. It preserves the
+accepted policy, plan, failed attempts, and original elapsed-time deadline.
+The immutable event gives only that case one additional failure allowance;
+another failure reaches the new bound. Repeating the same request is idempotent
+and grants cannot be stacked against the same failure count. The fresh task
+binds to the dispatching release's skills, without rewriting the old task's
+skill provenance or substituting a model. This does not activate execution,
+authorize GitHub access, or resume an escalated/abandoned case. See the
+[builder recovery runbook](runbooks/builder-recovery.md).
+
 ## 9. Planning contract
 
 The planner establishes:

@@ -107,7 +107,10 @@ pub fn enforce_operational_bounds(
             );
         }
         let provider_failures = store.failed_direct_attempt_count_for_case(&case.case_key)?;
-        let provider_limit = u64::from(policy.max_provider_failures);
+        let provider_limit = store.effective_provider_failure_limit(
+            &case.case_key,
+            u64::from(policy.max_provider_failures),
+        )?;
         if provider_failures >= provider_limit {
             return escalate(
                 store,

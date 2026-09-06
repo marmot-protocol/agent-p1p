@@ -37,6 +37,50 @@ fn offline_retirement_gate_requires_stopped_disabled_execution_units() {
     );
 }
 
+#[test]
+fn offline_gate_inspects_unfiltered_unit_files_without_accepting_command_failures() {
+    struct Runner<'a>(&'a str, i32);
+    impl pip_hermes::CommandRunner for Runner<'_> {
+        fn run(
+            &self,
+            spec: &pip_hermes::CommandSpec,
+        ) -> Result<pip_hermes::CommandOutput, pip_hermes::HermesError> {
+            let files = spec.args[0] == "list-unit-files";
+            if files {
+                assert!(!spec.args.iter().any(|arg| arg.starts_with("--state=")));
+            }
+            Ok(pip_hermes::CommandOutput {
+                status: if files { self.1 } else { 0 },
+                stdout: if files {
+                    self.0.as_bytes().to_vec()
+                } else if spec.args[0] == "show" {
+                    b"0\n".to_vec()
+                } else {
+                    vec![]
+                },
+                stderr: vec![],
+                timed_out: false,
+            })
+        }
+    }
+    for listing in [
+        "pip-controller@.timer disabled enabled\n",
+        "pip-controller@mdk.timer masked -\npip-shadow-reconcile.service static -\n",
+    ] {
+        assert!(pip_control::verify_scratch_runtime_stopped(&Runner(listing, 0)).is_ok());
+    }
+    for (listing, status) in [
+        ("", 1),
+        ("pip-controller@mdk.timer enabled-runtime enabled\n", 0),
+        ("malformed\n", 0),
+        ("pip-controller@mdk.timer unknown -\n", 0),
+    ] {
+        assert!(pip_control::verify_scratch_runtime_stopped(&Runner(listing, status)).is_err());
+    }
+    let oversized = "pip-controller@.timer disabled enabled\n".repeat(2000);
+    assert!(pip_control::verify_scratch_runtime_stopped(&Runner(&oversized, 0)).is_err());
+}
+
 fn setup(state: &str) -> (tempfile::TempDir, RepositoryPolicy, Store, Value) {
     let temp = tempfile::tempdir().unwrap();
     let base = temp.path().canonicalize().unwrap();
