@@ -23,6 +23,8 @@ UMask=0077
 NoNewPrivileges=yes
 PrivateDevices=yes
 PrivateTmp=yes
+# Prevent same-UID /proc/PID/root aliases into controller mount namespaces.
+PrivateUsers=yes
 ProtectClock=yes
 ProtectControlGroups=yes
 ProtectHome=yes

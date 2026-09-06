@@ -106,6 +106,7 @@ fn hermes_gateway_owns_dispatch_without_controller_credentials_or_ledger_access(
     let service = include_str!("../../../packaging/systemd/pip-hermes-gateway.service");
 
     assert!(service.contains("User=pip-control"));
+    assert!(service.contains("PrivateUsers=yes"));
     assert!(service.contains("MemoryDenyWriteExecute=no"));
     assert!(service.contains("NoNewPrivileges=yes"));
     assert!(service.contains("ProtectSystem=strict"));
