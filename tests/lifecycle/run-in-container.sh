@@ -109,6 +109,7 @@ install_version /work/releases/v0
 assert_service_release_access /work/releases/v0
 first_target=$(readlink -f /opt/pip/current)
 bash /source/tests/lifecycle/workspace-handoff.sh
+bash /source/tests/lifecycle/jit-memory.sh
 bash /source/tests/lifecycle/builder-retry.sh
 test -x /opt/pip/current/bin/pip-control
 test "$(stat -c '%U:%G:%a' /var/lib/pip/ledger.db)" = pip-control:pip-control:600

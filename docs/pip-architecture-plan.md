@@ -350,6 +350,15 @@ URL rewrites, upload-pack hooks, and unknown configuration cannot reach the
 authenticated publisher. Normal repository hooks and filesystem monitors are
 also disabled explicitly on controller commands.
 
+The credential-free direct worker permits executable JIT memory because Cursor
+embeds V8, including for its version/authentication/model probes. Its systemd
+unit explicitly sets `MemoryDenyWriteExecute=no`; this is not a host-wide
+exception. `NoNewPrivileges`, namespace restrictions, the read-only system,
+and hidden controller ledger, Hermes authentication, and repository cache
+remain enforced. Lifecycle tests cover the JIT permission boundary separately
+from Git/workspace ownership. Probe failures identify the fixed probe command
+and Unix termination signal without copying authentication output into logs.
+
 Legacy linked worktrees are retained for historical inspection/retirement,
 but are not converted or permission-repaired implicitly on dispatch. An
 in-flight case using the old layout requires a deliberate, history-preserving

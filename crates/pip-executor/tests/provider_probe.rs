@@ -183,3 +183,31 @@ fn bounded_runner_enforces_timeout_output_limit_and_explicit_environment() {
         .unwrap();
     assert_eq!(environment.stdout, b"ONLY_SAFE_FIXTURE=present\n");
 }
+
+#[test]
+#[cfg(unix)]
+fn bounded_runner_preserves_termination_signal() {
+    let output = BoundedProcessRunner
+        .run(&ProcessSpec {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), "kill -TERM $$".into()],
+            cwd: PathBuf::from("/"),
+            environment: BTreeMap::new(),
+            timeout: Duration::from_secs(2),
+            max_output_bytes: 1024,
+        })
+        .unwrap();
+    assert!(!output.timed_out);
+    assert_eq!(output.status, -15);
+}
+
+#[test]
+fn probe_failure_identifies_the_safe_command_and_signal() {
+    let runner = FakeRunner::default();
+    runner.push(-15, "");
+    let error = probe(runner).probe("composer-2.5").unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "provider probe --version terminated by signal 15"
+    );
+}

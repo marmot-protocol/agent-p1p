@@ -9,7 +9,7 @@ use std::thread;
 use std::time::Duration;
 
 #[cfg(unix)]
-use std::os::unix::process::CommandExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use wait_timeout::ChildExt;
 
 #[derive(Clone, Eq, PartialEq)]
@@ -24,6 +24,7 @@ pub struct ProcessSpec {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProcessOutput {
+    /// Normal exit code, or negative Unix termination signal.
     pub status: i32,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
@@ -118,7 +119,16 @@ impl ProcessRunner for BoundedProcessRunner {
             .join()
             .map_err(|_| ProcessError::ReaderPanicked)??;
         Ok(ProcessOutput {
-            status: status.code().unwrap_or(-1),
+            status: status.code().unwrap_or_else(|| {
+                #[cfg(unix)]
+                {
+                    -status.signal().unwrap_or(1)
+                }
+                #[cfg(not(unix))]
+                {
+                    -1
+                }
+            }),
             stdout,
             stderr,
             timed_out,

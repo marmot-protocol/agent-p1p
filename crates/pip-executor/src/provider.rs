@@ -27,7 +27,7 @@ pub enum ProviderProbeError {
     Process(ProcessError),
     TimedOut,
     OutputTooLarge,
-    CommandFailed(i32),
+    CommandFailed { command: String, status: i32 },
     InvalidUtf8,
     IncompatibleCli,
     AuthenticationUnverifiable,
@@ -46,7 +46,14 @@ impl fmt::Display for ProviderProbeError {
             Self::Process(error) => error.fmt(formatter),
             Self::TimedOut => formatter.write_str("provider probe timed out"),
             Self::OutputTooLarge => formatter.write_str("provider probe output exceeded its bound"),
-            Self::CommandFailed(status) => write!(formatter, "provider probe exited with {status}"),
+            Self::CommandFailed { command, status } if *status < 0 => write!(
+                formatter,
+                "provider probe {command} terminated by signal {}",
+                status.unsigned_abs()
+            ),
+            Self::CommandFailed { command, status } => {
+                write!(formatter, "provider probe {command} exited with {status}")
+            }
             Self::InvalidUtf8 => formatter.write_str("provider probe output is not UTF-8"),
             Self::IncompatibleCli => {
                 formatter.write_str("provider CLI lacks the required safe probe commands")
@@ -159,6 +166,8 @@ impl<R: ProcessRunner> CursorHealthProbe<R> {
     }
 
     fn execute(&self, args: Vec<String>) -> Result<ProcessOutput, ProviderProbeError> {
+        // Only our fixed probe arguments; never include auth output or stderr.
+        let command = args.join(" ");
         let output = self.runner.run(&ProcessSpec {
             program: self.program.clone(),
             args,
@@ -176,7 +185,10 @@ impl<R: ProcessRunner> CursorHealthProbe<R> {
             return Err(ProviderProbeError::OutputTooLarge);
         }
         if output.status != 0 {
-            return Err(ProviderProbeError::CommandFailed(output.status));
+            return Err(ProviderProbeError::CommandFailed {
+                command,
+                status: output.status,
+            });
         }
         Ok(output)
     }

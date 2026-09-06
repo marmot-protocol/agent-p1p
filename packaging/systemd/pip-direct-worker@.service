@@ -42,7 +42,9 @@ RestrictRealtime=yes
 RestrictSUIDSGID=yes
 SystemCallArchitectures=native
 LockPersonality=yes
-MemoryDenyWriteExecute=yes
+# Cursor embeds V8 and requires executable JIT memory, including for --version.
+# Keep this exception confined to the credential-free provider worker.
+MemoryDenyWriteExecute=no
 CapabilityBoundingSet=
 AmbientCapabilities=
 StandardOutput=journal
