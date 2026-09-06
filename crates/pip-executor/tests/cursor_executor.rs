@@ -13,6 +13,41 @@ use pip_executor::{
     ProcessRunner, ProcessSpec, ProviderHealth,
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+
+#[test]
+fn direct_prompt_uses_digest_bound_evidence_without_repeating_history() {
+    let tmp = tempfile::tempdir().unwrap();
+    let worktree = tmp.path().join("worktree");
+    fs::create_dir(&worktree).unwrap();
+    let artifacts = tmp.path().join("artifacts");
+    let runner = FakeRunner::default();
+    runner.push(envelope(&results()[1]));
+    let mut input = task(WorkerRole::Builder, "composer-2.5", 1);
+    let bundle = json!({"records": "x".repeat(200_000)});
+    input.immutable_input["immutable_evidence_bundle"] = bundle.clone();
+    executor(runner)
+        .execute(&health("composer-2.5"), &input, &worktree, &artifacts)
+        .unwrap();
+    assert!(fs::read(artifacts.join("prompt.md")).unwrap().len() < 4096);
+    let bytes = fs::read(artifacts.join("immutable-evidence.json")).unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), bundle);
+    let task_input: Value =
+        serde_json::from_slice(&fs::read(artifacts.join("task-input.json")).unwrap()).unwrap();
+    assert!(
+        task_input["input"]
+            .get("immutable_evidence_bundle")
+            .is_none()
+    );
+    let digest: String = Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(
+        task_input["input"]["immutable_evidence_ref"],
+        json!({"schema_version":1,"path":artifacts.join("immutable-evidence.json"),"sha256":digest})
+    );
+}
 
 #[derive(Clone, Default)]
 struct FakeRunner {
@@ -367,6 +402,18 @@ fn secret_input_is_rejected_before_artifacts_and_timeout_remains_incomplete() {
             &unsafe_task,
             &worktree,
             &unsafe_artifacts,
+        ),
+        Err(CursorExecutionError::UnsafeSecretInput)
+    ));
+    assert!(!unsafe_artifacts.exists());
+    unsafe_task.immutable_input =
+        json!({"immutable_evidence_bundle": {"canary": format!("ghp_{}", "a".repeat(30))}});
+    assert!(matches!(
+        executor(runner.clone()).execute(
+            &health("composer-2.5"),
+            &unsafe_task,
+            &worktree,
+            &unsafe_artifacts
         ),
         Err(CursorExecutionError::UnsafeSecretInput)
     ));

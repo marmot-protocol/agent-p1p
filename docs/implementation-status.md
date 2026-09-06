@@ -70,6 +70,14 @@ Native Hermes collection, cross-case failure isolation and saved-policy
 compatibility still need work; this is not a claim that all pause semantics
 are complete.
 
+New managed Hermes tasks and direct Cursor prompts now reference a retained
+SHA-256-bound evidence file instead of embedding the full history. Saved older
+Hermes projections keep their original body. Tests cover 200 KB histories with
+sub-4 KB transport/prompt fixtures, exact artifact bytes, replay, drift, unsafe
+paths and secret rejection. Role guides describe selective evidence reading;
+model choices live in the task binding rather than duplicated skill prose.
+Full Rust tests and Clippy pass locally; live compatibility is not yet proven.
+
 ## Remaining completion gates
 
 1. Finish one real issue through builder, exact-head CI, all required independent

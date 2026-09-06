@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 
 use super::{CommandRunner, CommandSpec, HermesError, TaskSnapshot, valid_id};
 
@@ -26,6 +27,47 @@ pub struct TaskCreateSpec {
     pub max_retries: u32,
     pub priority: u32,
     pub parent_task_ids: Vec<String>,
+}
+
+impl TaskCreateSpec {
+    /// The ledger keeps full inputs. New managed tasks carry large evidence by
+    /// content-bound file reference; saved older tasks retain their exact body.
+    pub fn queue_body(&self) -> Result<Value, ProjectionError> {
+        let mut body = self
+            .body
+            .as_object()
+            .cloned()
+            .ok_or(ProjectionError::InvalidSpec)?;
+        body.insert(
+            "projection_key".into(),
+            Value::String(self.projection_key.clone()),
+        );
+        if let Some(reference) = body.get("immutable_evidence_ref") {
+            let root = body
+                .get("storage")
+                .and_then(|s| s.get("root"))
+                .and_then(Value::as_str)
+                .ok_or(ProjectionError::InvalidSpec)?;
+            let bundle = body
+                .get("immutable_evidence_bundle")
+                .filter(|v| v.is_object())
+                .ok_or(ProjectionError::InvalidSpec)?;
+            let bytes = serde_json::to_vec(bundle).map_err(|_| ProjectionError::InvalidSpec)?;
+            let digest: String = Sha256::digest(&bytes)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            if !root.starts_with('/')
+                || root.split('/').any(|p| matches!(p, "." | ".."))
+                || reference
+                    != &serde_json::json!({"schema_version":1,"path":format!("{root}/immutable-evidence.json"),"sha256":digest})
+            {
+                return Err(ProjectionError::InvalidSpec);
+            }
+            body.remove("immutable_evidence_bundle");
+        }
+        Ok(Value::Object(body))
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -143,22 +185,7 @@ impl<R: CommandRunner> HermesProjector<R> {
 
     fn create(&self, spec: &TaskCreateSpec) -> Result<ProjectionResult, ProjectionError> {
         let max_runtime = hermes_runtime(&spec.max_runtime).ok_or(ProjectionError::InvalidSpec)?;
-        let mut body = spec
-            .body
-            .as_object()
-            .cloned()
-            .ok_or(ProjectionError::InvalidSpec)?;
-        match body.get("projection_key") {
-            Some(Value::String(key)) if key == &spec.projection_key => {}
-            Some(_) => return Err(ProjectionError::InvalidSpec),
-            None => {
-                body.insert(
-                    "projection_key".into(),
-                    Value::String(spec.projection_key.clone()),
-                );
-            }
-        }
-        let body = serde_json::to_string(&Value::Object(body))
+        let body = serde_json::to_string(&spec.queue_body()?)
             .map_err(|error| ProjectionError::MalformedResult(error.to_string()))?;
 
         let mut args = vec![
@@ -307,12 +334,9 @@ fn projection_matches(spec: &TaskCreateSpec, task: &TaskSnapshot) -> bool {
         && task.assignee.as_deref() == Some(spec.assignee.as_str())
         && task.created_by.as_deref() == Some(CONTROLLER_IDENTITY)
         && task_projection_key(task).as_deref() == Some(spec.projection_key.as_str())
-        && serde_json::from_str::<Value>(&task.body).ok().as_ref()
-            == Some(&{
-                let mut body = spec.body.clone();
-                body["projection_key"] = Value::String(spec.projection_key.clone());
-                body
-            })
+        && spec.queue_body().is_ok_and(|body| {
+            serde_json::from_str::<Value>(&task.body).ok().as_ref() == Some(&body)
+        })
         && {
             let (kind, path) = spec
                 .workspace

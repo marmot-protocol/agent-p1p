@@ -8,6 +8,59 @@ use pip_hermes::{
     ProjectionResult, TaskCreateSpec, TaskSnapshot,
 };
 use serde_json::json;
+use sha2::{Digest, Sha256};
+
+#[test]
+fn large_evidence_is_referenced_not_duplicated_in_the_hermes_argument() {
+    let runner = FakeRunner::default();
+    let mut desired = spec();
+    let evidence = json!({"history": "x".repeat(200_000)});
+    let digest: String = Sha256::digest(serde_json::to_vec(&evidence).unwrap())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    desired.body["storage"] = json!({"root":"/scratch/task"});
+    desired.body["immutable_evidence_bundle"] = evidence;
+    desired.body["immutable_evidence_ref"] =
+        json!({"schema_version":1,"path":"/scratch/task/immutable-evidence.json","sha256":digest});
+    let mut observed = task("task-1", &desired.title, &desired.projection_key);
+    let mut compact = desired.body.clone();
+    compact
+        .as_object_mut()
+        .unwrap()
+        .remove("immutable_evidence_bundle");
+    compact["projection_key"] = json!(desired.projection_key);
+    observed.body = compact.to_string();
+    runner.outputs.borrow_mut().push_back(CommandOutput {
+        status: 0,
+        stdout: serde_json::to_vec(&observed).unwrap(),
+        stderr: vec![],
+        timed_out: false,
+    });
+    let projector =
+        HermesProjector::new(runner.clone(), "hermes", Duration::from_secs(2), 4096).unwrap();
+    assert_eq!(
+        projector.project(&desired, &[]).unwrap(),
+        ProjectionResult::Created("task-1".into())
+    );
+    assert!(
+        runner.commands.borrow()[0]
+            .args
+            .iter()
+            .all(|arg| arg.len() < 4096)
+    );
+    assert_eq!(
+        projector.reconcile(&desired, &[observed.clone()]).unwrap(),
+        Some("task-1".into())
+    );
+    let mut drift: serde_json::Value = serde_json::from_str(&observed.body).unwrap();
+    drift["immutable_evidence_ref"]["sha256"] = json!("0".repeat(64));
+    observed.body = drift.to_string();
+    assert_eq!(
+        projector.reconcile(&desired, &[observed]).unwrap_err(),
+        ProjectionError::ProjectionDrift
+    );
+}
 
 #[derive(Clone, Default)]
 struct FakeRunner {

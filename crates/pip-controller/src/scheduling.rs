@@ -614,6 +614,16 @@ fn dispatch(
             "{root}/{}",
             hex_digest(&Sha256::digest(worker_projection_key.as_bytes()))
         );
+        let evidence = serde_json::to_vec(&context.immutable_evidence_bundle)
+            .map_err(|_| DispatchError::InvalidEvidenceBundle)?;
+        body.insert(
+            "immutable_evidence_ref".into(),
+            json!({
+                "schema_version": 1,
+                "path": format!("{root}/immutable-evidence.json"),
+                "sha256": hex_digest(&Sha256::digest(evidence)),
+            }),
+        );
         body.insert("storage".into(), json!({
             "schema_version": 1,
             "root": root,

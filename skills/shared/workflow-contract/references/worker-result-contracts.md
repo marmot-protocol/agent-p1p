@@ -11,8 +11,12 @@ the worker result, supplies the immutable task identity.
 The controller rejects task, role, profile, case, plan, PR, head, model, or
 skills-commit drift before writing a run or advancing a case.
 
-Every controller-owned worker projection also carries
-`immutable_evidence_bundle` schema version 1. It is bound to the task's case
+Every controller-owned worker projection supplies
+`immutable_evidence_bundle` schema version 1, inline or through
+`immutable_evidence_ref` (`schema_version: 1`, absolute `path`, `sha256`). For
+a reference, first verify the file's SHA-256 over its exact bytes (for example
+with `sha256sum`); parse the file as the bundle only after that matches.
+The bundle is bound to the task's case
 and state revision and contains the deterministically ordered immutable ledger
 events, runs, controller evidence, findings, and completed detached review
 observations available when the dispatch
@@ -24,6 +28,14 @@ For final review, the atomically preceding `GITHUB_FINAL_PREFLIGHT` record also
 contains the freshly fetched issue title/body, bounded issue comments and body
 digests, trusted authorization event, PR, complete CI history, published
 reviews, and review threads.
+
+Verify digests using a local program without printing all payloads into the
+conversation. Then inspect relevant records: planners use issue/intake and
+replanning evidence; builders use the accepted plan and applicable findings;
+reviewers use the plan, accepted build, exact-head CI and their prior findings;
+final reviewers also inspect final preflight and the required review set.
+Full history remains available in the artifact. Do not treat absence from a
+short summary as absence from the evidence.
 
 The executable definitions are in `crates/pip-contracts/src/lib.rs`. Valid
 examples for every role are frozen in

@@ -128,6 +128,34 @@ fn setup(state: &str) -> (tempfile::TempDir, RepositoryPolicy, Store, Value) {
 }
 
 #[test]
+fn scratch_retains_exact_evidence_and_rejects_artifact_drift() {
+    let (_temp, policy, store, mut body) = setup("PLANNING");
+    let bundle = json!({"records":"x".repeat(200_000)});
+    let bytes = serde_json::to_vec(&bundle).unwrap();
+    let root = std::path::PathBuf::from(body["storage"]["root"].as_str().unwrap());
+    let path = root.join("immutable-evidence.json");
+    body["immutable_evidence_bundle"] = bundle;
+    let digest: String = Sha256::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    body["immutable_evidence_ref"] = json!({"schema_version":1,"path":path,"sha256":digest});
+    prepare_hermes_scratch(&policy, &store, &body).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+    prepare_hermes_scratch(&policy, &store, &body).unwrap();
+    fs::write(&path, "changed").unwrap();
+    assert!(prepare_hermes_scratch(&policy, &store, &body).is_err());
+    assert_eq!(fs::read_to_string(&path).unwrap(), "changed");
+    fs::remove_file(&path).unwrap();
+    symlink(root.join("results"), &path).unwrap();
+    assert!(prepare_hermes_scratch(&policy, &store, &body).is_err());
+    fs::remove_file(&path).unwrap();
+    body["immutable_evidence_ref"]["path"] = json!(root.join("../outside"));
+    assert!(prepare_hermes_scratch(&policy, &store, &body).is_err());
+    assert!(!path.exists());
+}
+
+#[test]
 fn scratch_replays_without_erasing_results_and_retirement_requires_quiescent_terminal_case() {
     let (_temp, policy, store, body) = setup("COMPLETED");
     prepare_hermes_scratch(&policy, &store, &body).unwrap();

@@ -13,6 +13,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use pip_contracts::{WorkerBinding, WorkerResult, WorkerRole};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::{
     HealthAssurance, ProcessError, ProcessOutput, ProcessRunner, ProcessSpec, ProviderHealth,
@@ -154,9 +155,32 @@ impl<R: ProcessRunner> CursorExecutor<R> {
             return Err(CursorExecutionError::InvalidWorktree);
         }
         let environment = crate::workspace_git_environment(&worktree, self.environment.clone());
+        let mut immutable_input = task.immutable_input.clone();
+        let evidence = immutable_input
+            .as_object_mut()
+            .and_then(|input| input.remove("immutable_evidence_bundle"))
+            .map(|bundle| serde_json::to_vec(&bundle))
+            .transpose()
+            .map_err(|error| CursorExecutionError::InvalidResult(error.to_string()))?;
+        if let Some(bytes) = &evidence {
+            if bytes.len() > self.max_output_bytes
+                || contains_secret(&String::from_utf8_lossy(bytes))
+            {
+                return Err(CursorExecutionError::UnsafeSecretInput);
+            }
+            let digest: String = Sha256::digest(bytes)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            immutable_input["immutable_evidence_ref"] = json!({
+                "schema_version":1,
+                "path":artifact_dir.join("immutable-evidence.json"),
+                "sha256":digest,
+            });
+        }
         let task_input = serde_json::to_string_pretty(&json!({
             "binding": &task.binding,
-            "input": &task.immutable_input,
+            "input": immutable_input,
         }))
         .map_err(|error| CursorExecutionError::InvalidResult(error.to_string()))?
             + "\n";
@@ -176,6 +200,9 @@ impl<R: ProcessRunner> CursorExecutor<R> {
             &json!({"status": "INCOMPLETE"}),
         )?;
         write_artifact(artifact_dir, "task-input.json", task_input.as_bytes())?;
+        if let Some(bytes) = &evidence {
+            write_artifact(artifact_dir, "immutable-evidence.json", bytes)?;
+        }
         write_artifact(artifact_dir, "prompt.md", prompt.as_bytes())?;
 
         let mut args = vec!["--print".into()];

@@ -10,5 +10,6 @@ pip-contracts = { path = "../pip-contracts" }
 pip-core = { path = "../pip-core" }
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 wait-timeout.workspace = true
 tempfile.workspace = true

@@ -198,6 +198,64 @@ fn write_marker(path: &Path, value: &Value) -> Result<(), String> {
     file.sync_all().map_err(failure)
 }
 
+fn retain_evidence(root: &Path, body: &Value, owner: u32) -> Result<(), String> {
+    let Some(reference) = body.get("immutable_evidence_ref") else {
+        return Ok(());
+    };
+    let bundle = body
+        .get("immutable_evidence_bundle")
+        .filter(|v| v.is_object())
+        .ok_or("missing evidence bundle")?;
+    let bytes = serde_json::to_vec(bundle).map_err(failure)?;
+    if bytes.len() > 512 * 1024 + 128 {
+        return Err("oversized evidence artifact".into());
+    }
+    let path = root.join("immutable-evidence.json");
+    let digest: String = Sha256::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    if reference != &json!({"schema_version":1,"path":path,"sha256":digest}) {
+        return Err("evidence reference differs from the frozen input".into());
+    }
+    match OpenOptions::new()
+        .read(true)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .open(&path)
+    {
+        Ok(mut file) => {
+            let meta = file.metadata().map_err(failure)?;
+            if !meta.is_file()
+                || meta.uid() != owner
+                || meta.nlink() != 1
+                || meta.mode() & 0o077 != 0
+                || meta.len() != bytes.len() as u64
+            {
+                return Err("unsafe or changed evidence artifact".into());
+            }
+            let mut saved = Vec::new();
+            Read::by_ref(&mut file)
+                .take(bytes.len() as u64 + 1)
+                .read_to_end(&mut saved)
+                .map_err(failure)?;
+            if saved != bytes {
+                return Err("evidence artifact changed".into());
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let mut staged = tempfile::NamedTempFile::new_in(root).map_err(failure)?;
+            staged.write_all(&bytes).map_err(failure)?;
+            staged.as_file().sync_all().map_err(failure)?;
+            staged.persist_noclobber(&path).map_err(failure)?;
+            fs::File::open(root)
+                .and_then(|directory| directory.sync_all())
+                .map_err(failure)?;
+        }
+        Err(error) => return Err(failure(error)),
+    }
+    Ok(())
+}
+
 pub fn prepare_hermes_scratch(
     policy: &RepositoryPolicy,
     store: &Store,
@@ -242,6 +300,7 @@ pub fn prepare_hermes_scratch(
         }
         real_directory(&path, owner)?;
     }
+    retain_evidence(&root, body, owner)?;
     Ok(())
 }
 

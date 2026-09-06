@@ -1,7 +1,7 @@
 ---
 name: reviewer-secperf
 description: Use when reviewing a Pip PR for security and performance.
-version: 0.8.0
+version: 0.9.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -14,7 +14,7 @@ metadata:
 
 ## Overview
 
-The Rust direct-provider runtime starts one fresh read-only Cursor Agent invocation using the exact policy-bound model. The current MDK workflow runs required `secperf-kimi` with `kimi-k3-max` and shadow `secperf-opus` with `claude-opus-5-thinking-high`. Each instance is independent of the builder, the general lane, and the other security/performance instance. The skill never chooses a model, mode, or fallback.
+The Rust direct-provider runtime starts one fresh read-only Cursor Agent invocation using the exact task-bound model. Each instance is independent of the builder, the general lane, and other security/performance instances. Copy the task's reviewer ID and mode; the skill never chooses a model, mode, or fallback.
 
 ## Workflow
 

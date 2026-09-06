@@ -1,7 +1,7 @@
 ---
 name: final-reviewer
 description: Use for holistic final adjudication of a Pip case.
-version: 0.5.0
+version: 0.6.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -14,11 +14,11 @@ metadata:
 
 ## Overview
 
-Holistically adjudicate the complete case using the exact policy-bound model and reasoning effort; MDK policy revision 6 selects GPT-6 Astra at `xhigh`. Never reinterpret a historical task's model binding using a newer policy. Do not merely repeat the general code review.
+Holistically adjudicate the complete case using the exact task-bound model and reasoning effort. Never reinterpret a historical task's model binding using a newer policy. Do not merely repeat the general code review.
 
 ## Workflow
 
-1. Verify the task's `immutable_evidence_bundle`, including its case/revision binding and root digest. It is the authoritative closed-world history for this adjudication; do not substitute parent summaries or session memory.
+1. Verify the task's evidence bundle (inline or via `immutable_evidence_ref`, as specified by the shared contract), including its case/revision binding and root digest. It is the authoritative closed-world history for this adjudication; do not substitute parent summaries or session memory.
 2. Re-read the original issue and authoritative clarifications recorded in the bundle, then independently refresh the live issue authorization.
 3. Inspect every bundled plan version and identify the active authorized plan and its controller publication evidence.
 4. Inspect the final diff and every bundled build/remediation round.

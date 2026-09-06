@@ -140,6 +140,10 @@ fn hermes_storage_is_projection_scoped_and_direct_tasks_are_unchanged() {
     assert_eq!(storage["cargo_target"], format!("{root}/disposable/target"));
     assert_eq!(storage["results"], format!("{root}/results"));
     assert_eq!(
+        task.body["immutable_evidence_ref"]["path"],
+        format!("{root}/immutable-evidence.json")
+    );
+    assert_eq!(
         task.workspace,
         format!("dir:{}", storage["source"].as_str().unwrap())
     );

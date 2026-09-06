@@ -1,7 +1,7 @@
 ---
 name: planner
 description: Use when validating and planning a pip-ok issue.
-version: 0.8.0
+version: 0.9.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -14,7 +14,7 @@ metadata:
 
 ## Overview
 
-Validate an authorized issue, identify its actual root cause, and produce a versioned implementation plan before code is written. Use the exact policy-bound model and reasoning effort; MDK policy revision 6 selects GPT-6 Astra at `xhigh`. Never reinterpret a historical task's model binding using a newer policy.
+Validate an authorized issue, identify its actual root cause, and produce a versioned implementation plan before code is written. Use the exact task-bound model and reasoning effort. Never reinterpret a historical task's model binding using a newer policy.
 
 ## Workflow
 

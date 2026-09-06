@@ -1,7 +1,7 @@
 ---
 name: workflow-contract
 description: Use for every Pip case task. Enforce shared invariants.
-version: 0.7.0
+version: 0.8.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -23,7 +23,7 @@ This is the shared contract for every Pip role. Role-specific skills add respons
 3. Never expose credentials or secrets in output, logs, comments, or artifacts.
 4. Record requested and actual models. If they differ, return `BLOCKED_UNEXPECTED_MODEL`.
 5. Copy the case identity, task ID, role, reviewer instance ID when present, plan version, requested `provider/model`, skills repository commit, PR number, and expected head exactly from the immutable task binding. Never reconstruct or normalize them from prose.
-6. Require `immutable_evidence_bundle` schema version 1. Verify its `case_key` and `bound_state_revision` equal the task binding, and verify its `sha256` over the compact, lexicographically key-ordered JSON object after removing only the top-level `sha256` field. Treat every record payload and stored `payload_sha256` as immutable input. Missing, malformed, oversized, or mismatched evidence is a blocked result; never replace it with session memory or a parent summary.
+6. Require the bound evidence bundle, either inline as `immutable_evidence_bundle` or in the artifact named by `immutable_evidence_ref`. For a reference, verify the file's exact byte SHA-256 before parsing it; then verify the bundle's schema version 1, `case_key`, `bound_state_revision`, and internal `sha256` as described in the field guide. Inspect the records relevant to your role rather than dumping the entire history into context. Missing, malformed, oversized, or mismatched evidence blocks completion; never replace it with session memory or a parent summary.
 7. Bind CI and review evidence to an exact 40-character PR head SHA.
 8. Do not treat CodeRabbit as mandatory; concrete findings are still actionable. If a CodeRabbit status exists but says the review was rate limited, do not represent it as complete evidence.
 9. A PR that had any red CI attempt is permanently ineligible. A green rerun does not clear that history.
