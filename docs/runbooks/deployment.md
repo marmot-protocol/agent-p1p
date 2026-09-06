@@ -47,8 +47,9 @@ The manifest binds:
 Trusted CI derives `source_commit`; the installer does not accept a free-form
 operator assertion that can disagree with the artifact.
 
-The checked-in `.github/workflows/release.yml` is a manual, protected deployment
-build. It has no operator inputs: a dispatch from `master` checks out the exact
+The checked-in `.github/workflows/release.yml` automatically builds signed
+deployment artifacts on pushes to `master`, with manual dispatch retained for
+rebuilds. It has no operator inputs: each run checks out the exact
 triggering SHA without persisted GitHub credentials and derives the deployment
 identifier as `git-<12-character commit>`. Dispatches from any other branch fail
 closed. The workflow requires the `pip-release` environment and externally
@@ -62,8 +63,17 @@ tar envelope with the exact installer and outer checksums. The installer is
 itself an artifact in the signed manifest; the top-level executable is copied
 byte-for-byte from that verified resource. The signing-key secret is the
 canonical base64 seed itself, not a second base64 encoding.
-Configuring the secret or approving a run is a separate release-operator
-action.
+The `pip-release` environment restricts signing to the `master` branch and has
+no required reviewer or wait timer. CI verification is the build/signing gate;
+JG removed routine human build approvals on 2026-09-06. The key remains an
+environment secret, and no PR-triggered workflow can use this release path.
+Configuring or rotating the secret remains a separate operator action. Anyone
+who can change `master` can change signing code: repository write access is the
+trust boundary, not the fact that this repository is public.
+
+Automatic artifact production does not install onto Pirate, enable intake,
+resume a canary, or authorize a merge. Those live changes remain separately
+scoped operations; MDK still stays in shadow merge mode.
 
 ## Pre-release gates
 

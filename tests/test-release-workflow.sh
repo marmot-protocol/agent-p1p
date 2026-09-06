@@ -13,6 +13,12 @@ fail() {
 }
 
 grep -Fq 'name: Build Pip deployment' "$workflow" || fail "deployment workflow has the wrong operator-facing name"
+grep -Eq '^  push:$' "$workflow" || fail "release builds must run automatically on master pushes"
+grep -Fq 'branches: [master]' "$workflow" || fail "automatic release builds must target only master"
+grep -Eq '^  workflow_dispatch:$' "$workflow" || fail "manual release rebuilds must remain available"
+if grep -Eq '^  (pull_request|pull_request_target|workflow_run):' "$workflow"; then
+    fail "signing workflow must not be triggered by untrusted PR or upstream-run inputs"
+fi
 if grep -Eq '^[[:space:]]+(source_commit|version):[[:space:]]*$' "$workflow"; then
     fail "deployment workflow still requires redundant operator inputs"
 fi
