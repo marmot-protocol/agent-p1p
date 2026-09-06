@@ -42,7 +42,7 @@ fn service_identity_workspace_handoff() {
         "prepare" => {
             let spec = fixture(&root);
             fs::set_permissions(spec.repository(), fs::Permissions::from_mode(0o700)).unwrap();
-            fs::set_permissions(spec.root(), fs::Permissions::from_mode(0o2770)).unwrap();
+            fs::set_permissions(spec.root(), fs::Permissions::from_mode(0o770)).unwrap();
             allocator().allocate(&spec, REMOTE).unwrap();
             fs::write(root.join("base"), spec.base().to_string()).unwrap();
             fs::write(
@@ -170,8 +170,8 @@ fn independent_case_repository_survives_hidden_canonical_metadata() {
         spec.base().to_string()
     );
     assert_eq!(
-        fs::metadata(spec.path()).unwrap().permissions().mode() & 0o2777,
-        0o2770
+        fs::metadata(spec.path()).unwrap().permissions().mode() & 0o7777,
+        0o770
     );
     assert_eq!(
         fs::metadata(spec.path().join("tracked"))

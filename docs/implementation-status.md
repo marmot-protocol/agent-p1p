@@ -5,10 +5,13 @@ The target is [the lean architecture](pip-architecture-plan.md).
 
 ## Current live evidence
 
-Pirate was checked at the start of this refactor:
-- installed source: `978863ce571255ea47697974cef982547940bd45`;
-- controller, direct-worker and webhook-consumer execution timers inactive;
-- existing canary history retained; no completed end-to-end issue or ready PR;
+Pirate was checked during this refactor on 2026-09-06:
+- installed source: `b2a14f63be4de54d0922d2bab8bc05f0d0d782a8`;
+- webhook ingress and consumer active; execution paused after reproducing a
+  controller-side workspace initialization failure under its real sandbox;
+- #993 is the sole authorized canary, in `PLANNING` before planner dispatch;
+- #891, #1228 and #1639 are abandoned with their history retained;
+- no completed end-to-end issue or ready PR;
 - Hermes remains upstream commit `29112bef099274229cadff79cdff7bf7b99c4b77`,
   with no local source modifications.
 
@@ -18,7 +21,7 @@ the service-owned execution runtime and must not be interrupted.
 
 ## Lean refactor in progress
 
-Implemented locally, not yet deployed:
+Implemented and deployed in `b2a14f6`:
 
 - Replace the long architecture specification with the approved smaller scope.
   Keep webhooks and polling, Rust workflow authority, unmodified Hermes,
@@ -40,11 +43,25 @@ Implemented locally, not yet deployed:
   retry with durable exponential backoff. Replay and restart preserve the delay;
   an uncertain queue handoff remains fenced rather than authorizing a duplicate.
 
+Further local changes awaiting verification/release:
+
+- Verify effective Hermes profile settings through `config get --json`, not
+  presentation-sensitive YAML text comparisons. Exact model/provider checks stay.
+- Remove the autonomous-merge coordinator and GitHub merge-write API. Current
+  policies must be shadow/human-only; historical state remains readable.
+- Stop setting unnecessary setgid bits on case and artifact directories. Both
+  execution identities already share the same primary group. Preserve
+  `RestrictSUIDSGID=yes` and verify controller preparation inside its sandbox,
+  not only the later worker handoff.
+
 Regression tests reproduce the shadow-budget, cleanup and saved-dispatch defects
 before the fixes. The full Rust workspace tests and Clippy pass locally. Linux
 lifecycle verification passed clean install, reinstall, upgrade, rollback,
 restart recovery, two-UID workspace handoff and both execution-service JIT
-boundaries. Deployment and live pipeline proof remain outstanding.
+boundaries. After the live #993 reproduction, the expanded controller-preparation
+fixture and full Linux lifecycle passed with `RestrictSUIDSGID=yes` retained.
+The latest Rust suite passed 328 tests (seven explicitly ignored), with Clippy
+clean. The repair still needs release/deployment; end-to-end proof is outstanding.
 
 ## Remaining work toward the active goal
 

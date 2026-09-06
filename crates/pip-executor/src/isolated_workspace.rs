@@ -86,7 +86,7 @@ impl<R: GitRunner> IsolatedWorkspace<R> {
             .tempdir_in(spec.root())
             .map_err(io_error)?;
         let path = temporary.path();
-        self.git(path, &["init", "--quiet", "--template=", "--shared=group"])?;
+        self.git(path, &["init", "--quiet", "--template="])?;
         self.git(
             path,
             &[
@@ -324,7 +324,9 @@ fn share_created_tree(path: &Path) -> Result<(), AllocationError> {
         return Ok(());
     }
     let mode = if metadata.is_dir() {
-        0o2770
+        // Both service identities have the same primary group. Setgid is
+        // unnecessary and intentionally forbidden by their systemd sandboxes.
+        0o770
     } else if metadata.is_file() {
         if metadata.permissions().mode() & 0o111 != 0 {
             0o770

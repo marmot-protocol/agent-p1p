@@ -178,7 +178,7 @@ fn builder_runs_once_in_fresh_exact_model_mode_and_retains_complete_artifacts() 
     #[cfg(unix)]
     {
         assert_eq!(
-            fs::metadata(&artifacts).unwrap().permissions().mode() & 0o777,
+            fs::metadata(&artifacts).unwrap().permissions().mode() & 0o7777,
             0o750
         );
         for entry in fs::read_dir(&artifacts).unwrap() {

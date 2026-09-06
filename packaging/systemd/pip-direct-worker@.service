@@ -20,7 +20,7 @@ Environment=PATH=/usr/local/bin:/usr/bin:/bin
 WorkingDirectory=/var/lib/pip/provider-home
 ExecStart=/opt/pip/current/bin/pip-control direct-worker-cycle --policy /etc/pip/repositories/%i.json --direct-queue /var/lib/pip/direct-queue --cursor cursor-agent --git git --skills-root /opt/pip/current/share/pip/skills
 # Case source and newly created Git/source files must remain accessible to the
-# controller group. Provider-home stays 0700; worker artifacts use 2750/0640.
+# controller group. Provider-home stays 0700; worker artifacts use 0750/0640.
 UMask=0007
 NoNewPrivileges=yes
 PrivateDevices=yes

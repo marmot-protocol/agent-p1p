@@ -16,9 +16,23 @@ test -x "$binary"
 fixture=$(mktemp -d /work/pip-workspace-handoff.XXXXXX)
 chown pip-control:pip-control "$fixture"
 chmod 0710 "$fixture"
-runuser -u pip-control -- env PIP_HANDOFF_ROOT="$fixture" PIP_HANDOFF_PHASE=prepare \
-  /bin/sh -c 'umask 0077; exec "$@"' pip-handoff \
-  "$binary" --ignored --exact service_identity_workspace_handoff --nocapture
+# Preparation must run inside the controller sandbox too. A plain runuser
+# missed Git --shared=group conflicting with RestrictSUIDSGID=yes on Pirate.
+prepare_unit=pip-workspace-prepare-fixture.service
+sed \
+  -e "s|^ExecStart=.*|ExecStart=$binary --ignored --exact service_identity_workspace_handoff --nocapture|" \
+  -e "s|^WorkingDirectory=.*|WorkingDirectory=$fixture|" \
+  -e '/^Environment=/d' \
+  -e '/^LoadCredential=/d' \
+  -e "s|^ReadWritePaths=|ReadWritePaths=$fixture |" \
+  /work/repo/packaging/systemd/pip-controller@.service > "/run/systemd/system/$prepare_unit"
+install -d -m 0755 "/run/systemd/system/$prepare_unit.d"
+printf '[Service]\nEnvironment=PIP_HANDOFF_ROOT=%s PIP_HANDOFF_PHASE=prepare\nPrivateNetwork=yes\n' "$fixture" \
+  > "/run/systemd/system/$prepare_unit.d/fixture.conf"
+systemctl daemon-reload
+systemctl start "$prepare_unit" || { journalctl -u "$prepare_unit" --no-pager; exit 1; }
+test "$(systemctl show "$prepare_unit" -p Result --value)" = success
+test "$(systemctl show "$prepare_unit" -p RestrictSUIDSGID --value)" = yes
 
 # Exercise the installed worker's actual restrictions, not just a shell with
 # a different UID. Replace only the command and fixture-specific paths.
@@ -43,7 +57,7 @@ if systemctl start "$unit"; then
   exit 1
 fi
 test "$(systemctl show "$unit" -p ExecMainStatus --value)" = 200
-chmod 2770 "$fixture/workspaces/repo-123-issue-456-workflow-1"
+chmod 0770 "$fixture/workspaces/repo-123-issue-456-workflow-1"
 systemctl reset-failed "$unit"
 systemctl start "$unit" || { journalctl -u "$unit" --no-pager; exit 1; }
 test "$(systemctl show "$unit" -p Result --value)" = success

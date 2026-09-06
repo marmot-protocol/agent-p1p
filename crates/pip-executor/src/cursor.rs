@@ -416,7 +416,7 @@ fn create_artifact_dir(path: &Path) -> Result<(), CursorExecutionError> {
     }
     fs::create_dir(path).map_err(|error| CursorExecutionError::ArtifactIo(error.to_string()))?;
     #[cfg(unix)]
-    fs::set_permissions(path, fs::Permissions::from_mode(0o2750))
+    fs::set_permissions(path, fs::Permissions::from_mode(0o750))
         .map_err(|error| CursorExecutionError::ArtifactIo(error.to_string()))?;
     sync_directory(path.parent().ok_or(CursorExecutionError::InvalidTask)?)?;
     Ok(())

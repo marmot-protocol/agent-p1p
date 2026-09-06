@@ -574,7 +574,7 @@ fn attempt_artifact_dir(
         fs::create_dir(&task_root)
             .map_err(|error| runtime_error(format!("artifact root unavailable: {error}")))?;
         #[cfg(unix)]
-        fs::set_permissions(&task_root, fs::Permissions::from_mode(0o2750))
+        fs::set_permissions(&task_root, fs::Permissions::from_mode(0o750))
             .map_err(|error| runtime_error(format!("artifact root unavailable: {error}")))?;
     }
     let path = task_root.join(format!("attempt-{attempt_id:05}"));
@@ -596,4 +596,20 @@ fn runtime_error(error: impl Into<String>) -> DirectWorkerRuntimeError {
 
 fn hex_digest(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn artifact_handoff_needs_group_read_not_setgid() {
+        let root = tempfile::tempdir().unwrap();
+        let attempt = attempt_artifact_dir(root.path(), "task-1", 1).unwrap();
+        let mode = fs::metadata(attempt.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o7777, 0o750);
+    }
 }
