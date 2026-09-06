@@ -395,7 +395,7 @@ fn parse_envelope(stdout: &[u8]) -> Result<(WorkerResult, Value), CursorExecutio
     }
     let _ = envelope.extra;
     let result = match envelope.result {
-        Value::String(text) => serde_json::from_str(&text),
+        Value::String(text) => serde_json::from_value(result_from_transcript(&text)?),
         value @ Value::Object(_) => serde_json::from_value(value),
         _ => {
             return Err(CursorExecutionError::MalformedEnvelope(
@@ -405,6 +405,65 @@ fn parse_envelope(stdout: &[u8]) -> Result<(WorkerResult, Value), CursorExecutio
     }
     .map_err(|error| CursorExecutionError::InvalidResult(error.to_string()))?;
     Ok((result, envelope_value))
+}
+
+// Cursor's JSON envelope concatenates assistant progress and final messages.
+// Locate exactly one top-level contract object, preserving its bytes/fields;
+// never repair JSON, choose between competing answers, or weaken task binding.
+// A single linear scan handles braces inside JSON strings without repeatedly
+// parsing suffixes of a potentially large transcript.
+fn result_from_transcript(text: &str) -> Result<Value, CursorExecutionError> {
+    let invalid = || {
+        CursorExecutionError::InvalidResult(
+            "expected exactly one complete worker contract in Cursor transcript".into(),
+        )
+    };
+    let mut found = None;
+    let mut start = 0;
+    let mut depth = 0usize;
+    let mut quoted = false;
+    let mut escaped = false;
+    for (index, byte) in text.bytes().enumerate() {
+        if depth == 0 {
+            if byte == b'{' {
+                start = index;
+                depth = 1;
+            }
+            continue;
+        }
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                quoted = false;
+            }
+            continue;
+        }
+        match byte {
+            b'"' => quoted = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    let value: Value =
+                        serde_json::from_str(&text[start..=index]).map_err(|_| invalid())?;
+                    if value.get("contract_version").is_some() {
+                        if found.is_some() {
+                            return Err(invalid());
+                        }
+                        found = Some(value);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if depth != 0 {
+        return Err(invalid());
+    }
+    found.ok_or_else(invalid)
 }
 
 fn create_artifact_dir(path: &Path) -> Result<(), CursorExecutionError> {

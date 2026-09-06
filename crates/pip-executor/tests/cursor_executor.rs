@@ -59,6 +59,43 @@ fn envelope(result: &Value) -> Vec<u8> {
     .unwrap()
 }
 
+#[test]
+fn cursor_progress_text_may_surround_one_bound_result_but_not_two() {
+    let result = serde_json::to_string(&results()[1]).unwrap();
+    for (text, accepted) in [
+        (
+            format!(
+                "Checking source.{{\"progress\":\"compiled\"}}```json\n{result}\n```Tests finished."
+            ),
+            true,
+        ),
+        (format!("{result}Next reply: {result}"), false),
+        ("No structured result was returned.".into(), false),
+        (
+            format!("{{\"contract_version\":2,\"role\":\"builder\"}}{result}"),
+            false,
+        ),
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        let worktree = tmp.path().join("worktree");
+        fs::create_dir(&worktree).unwrap();
+        let runner = FakeRunner::default();
+        runner.push(
+            serde_json::to_vec(&json!({
+                "type":"result", "subtype":"success", "is_error":false, "result":text
+            }))
+            .unwrap(),
+        );
+        let observed = executor(runner).execute(
+            &health("composer-2.5"),
+            &task(WorkerRole::Builder, "composer-2.5", 1),
+            &worktree,
+            &tmp.path().join("artifacts"),
+        );
+        assert_eq!(observed.is_ok(), accepted, "{observed:?}");
+    }
+}
+
 fn health(model: &str) -> ProviderHealth {
     ProviderHealth {
         provider: "cursor".into(),
