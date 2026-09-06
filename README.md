@@ -40,8 +40,8 @@ reference, not an installable runtime; it will be removed after cutover proof.
   reference-to-Rust migration with exit criteria.
 - [`docs/implementation-status.md`](docs/implementation-status.md) — current
   executable inventory, inert boundaries, and remaining cutover work.
-- [`docs/completion-audit.md`](docs/completion-audit.md) — requirement-by-
-  requirement coverage and the exact external inputs still needed.
+- [`docs/completion-audit.md`](docs/completion-audit.md) — historical coverage
+  audit; use implementation status for current gaps and host evidence.
 - [`docs/worker-result-contracts.md`](docs/worker-result-contracts.md) — exact
   versioned JSON returned by each worker role.
 

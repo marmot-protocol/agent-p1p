@@ -6,10 +6,9 @@ The target is [the lean architecture](pip-architecture-plan.md).
 ## Current live evidence
 
 Pirate was checked during this refactor on 2026-09-06:
-- installed source: `b2a14f63be4de54d0922d2bab8bc05f0d0d782a8`;
-- webhook ingress and consumer active; execution paused after reproducing a
-  controller-side workspace initialization failure under its real sandbox;
-- #993 is the sole authorized canary, in `PLANNING` before planner dispatch;
+- installed source: `cd738eeb15432310c83d0b60efc62287cd013113`;
+- webhook ingress/consumer, controller, direct worker and Hermes dispatcher active;
+- #993 is the sole authorized canary, with planner task `t_bf698ea6` running;
 - #891, #1228 and #1639 are abandoned with their history retained;
 - no completed end-to-end issue or ready PR;
 - Hermes remains upstream commit `29112bef099274229cadff79cdff7bf7b99c4b77`,
@@ -21,7 +20,7 @@ the service-owned execution runtime and must not be interrupted.
 
 ## Lean refactor in progress
 
-Implemented and deployed in `b2a14f6`:
+Implemented and deployed through `cd738ee`:
 
 - Replace the long architecture specification with the approved smaller scope.
   Keep webhooks and polling, Rust workflow authority, unmodified Hermes,
@@ -43,8 +42,6 @@ Implemented and deployed in `b2a14f6`:
   retry with durable exponential backoff. Replay and restart preserve the delay;
   an uncertain queue handoff remains fenced rather than authorizing a duplicate.
 
-Further local changes awaiting verification/release:
-
 - Verify effective Hermes profile settings through `config get --json`, not
   presentation-sensitive YAML text comparisons. Exact model/provider checks stay.
 - Remove the autonomous-merge coordinator and GitHub merge-write API. Current
@@ -54,14 +51,23 @@ Further local changes awaiting verification/release:
   `RestrictSUIDSGID=yes` and verify controller preparation inside its sandbox,
   not only the later worker handoff.
 
+Further local changes awaiting release:
+
+- Seed paused policy only on first install; validate and preserve existing
+  operator configuration during upgrades/reinstalls. Invalid existing policy
+  stops installation instead of silently replacing state with defaults.
+
 Regression tests reproduce the shadow-budget, cleanup and saved-dispatch defects
 before the fixes. The full Rust workspace tests and Clippy pass locally. Linux
 lifecycle verification passed clean install, reinstall, upgrade, rollback,
 restart recovery, two-UID workspace handoff and both execution-service JIT
 boundaries. After the live #993 reproduction, the expanded controller-preparation
 fixture and full Linux lifecycle passed with `RestrictSUIDSGID=yes` retained.
-The latest Rust suite passed 328 tests (seven explicitly ignored), with Clippy
-clean. The repair still needs release/deployment; end-to-end proof is outstanding.
+The permission repair is deployed and dispatched the same retained #993 case.
+The policy-preserving installer passed 329 Rust tests (seven explicitly ignored),
+Clippy and the expanded Linux lifecycle, including preservation of active-policy
+bytes through reinstall, upgrade, rollback and reboot with execution disabled.
+That installer change is not deployed. End-to-end proof remains outstanding.
 
 ## Remaining work toward the active goal
 

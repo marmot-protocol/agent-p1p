@@ -275,4 +275,4 @@ ensure_directory /var/spool/pip-webhooks/processed pip-control pip-control 711
   --state-root /var/lib/pip
 
 installation_complete=true
-echo '{"ok":true,"intake_enabled":false,"dispatch_enabled":false,"timer_state":"preserved"}'
+echo '{"ok":true,"policy_state":"preserved_or_seeded_paused","timer_state":"preserved"}'

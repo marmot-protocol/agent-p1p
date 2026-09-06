@@ -129,6 +129,45 @@ fn assert_public_release_directories(path: &Path) {
 }
 
 #[test]
+fn upgrades_and_reinstalls_preserve_valid_operator_policy() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let layout = layout(sandbox.path());
+    prepare_layout(&layout);
+    let key = STANDARD.encode([19_u8; 32]);
+    let public = verifying_key(&key).unwrap();
+    let v1 = cohort(sandbox.path(), "v1", b"binary-v1\n", "a", &key);
+    let v2 = cohort(sandbox.path(), "v2", b"binary-v2\n", "b", &key);
+    install_release(&v1, &public, &layout, None).unwrap();
+    let path = layout.config_root.join("repositories/mdk.json");
+    let mut policy: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    policy["revision"] = serde_json::json!(123);
+    policy["intake"]["enabled"] = serde_json::json!(true);
+    policy["intake"]["paused"] = serde_json::json!(false);
+    policy["dispatch_enabled"] = serde_json::json!(true);
+    policy["github"]["automation_actor_id"] = serde_json::json!(1);
+    policy["github"]["reviewer_general_actor_id"] = serde_json::json!(2);
+    policy["github"]["reviewer_secperf_actor_id"] = serde_json::json!(3);
+    let accepted = serde_json::to_vec(&policy).unwrap();
+    pip_control::load_repository_policy(&accepted).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::write(&path, &accepted).unwrap();
+    for release in [&v1, &v2, &v2] {
+        install_release(release, &public, &layout, None).unwrap();
+        assert!(
+            fs::read(&path).unwrap() == accepted,
+            "operator policy was overwritten"
+        );
+    }
+    // Invalid existing state is an explicit error, never silently replaced by
+    // packaged defaults. Historical state and the installed release stay put.
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::write(&path, b"invalid policy").unwrap();
+    assert!(install_release(&v1, &public, &layout, None).is_err());
+    assert_eq!(fs::read(&path).unwrap(), b"invalid policy");
+    assert_eq!(current_source(&layout), "b".repeat(40));
+}
+
+#[test]
 fn clean_install_reinstall_and_upgrade_are_content_addressed_and_paused() {
     let sandbox = tempfile::tempdir().unwrap();
     let layout = layout(sandbox.path());

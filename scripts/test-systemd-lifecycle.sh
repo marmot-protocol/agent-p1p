@@ -43,6 +43,7 @@ docker exec "$container" bash -lc '
   mapfile -t expected </work/expected-release-targets
   test "$(readlink -f /opt/pip/current)" = "${expected[1]}"
   test -d "${expected[0]}"
+  sha256sum --check /work/operator-policy.sha256
   test "$(systemctl is-enabled pip-shadow-reconcile.timer || true)" = disabled
   test "$(systemctl is-active pip-shadow-reconcile.timer || true)" = inactive
   test "$(systemctl is-enabled pip-controller@mdk.timer || true)" = disabled

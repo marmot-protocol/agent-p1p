@@ -73,6 +73,29 @@ obsolete execution tests). Human-held disposition and exact-head final-preflight
 tests remain. Historical core/ledger representations are retained for reading
 old state, not exposed as an autonomous execution capability.
 
+## Repair deployment and resumed planner
+
+CI run `34060285413` passed every gate for
+`cd738eeb15432310c83d0b60efc62287cd013113`. The verified cohort has manifest
+`768c98927edcecdc099eb1fae73f593ffa4d647b337dae92c8efb6438c7a1712` and binary
+`346436f19611cb57b05132438edd2912b4f70d9672ba16db8b41dffdc157d989`.
+Installation on Pirate preserved the ledger byte-for-byte. After restoring the
+same approved revision-7 policy, workspace preparation and dispatch succeeded.
+Both the #993 workspace and its private `.git` directory are `pip-control` owned,
+mode `0770`, with the setgid restriction still enabled. Hermes reports planner
+task `t_bf698ea6` running, started at Unix `1788729612`.
+
+No case reset, renewed label cycle, extra planner or provider substitution was
+used. Controller, direct-worker, consumer timers and the dedicated dispatcher
+are active again. This establishes live planning startup, not a completed plan
+or a PR.
+
+The subsequent local installer fix preserves validated operator configuration
+instead of resetting it to seed policy on every upgrade. It passed 329 Rust
+tests and Clippy; the Linux lifecycle retained exact active-policy bytes through
+reinstall, upgrade, injected rollback and reboot while all execution remained
+disabled. It has not yet been deployed.
+
 Still outstanding: complete failure isolation and saved-job upgrade semantics,
 compact worker evidence, normal operations simplification, live PR/review/CI
 proof, and removal of legacy Python after that cutover proof.

@@ -142,12 +142,23 @@ test "$(systemctl is-active pip-webhook-ingress.service || true)" = inactive
 test "$(systemctl is-enabled pip-webhook-consumer@mdk.timer || true)" = disabled
 test "$(systemctl is-active pip-webhook-consumer@mdk.timer || true)" = inactive
 
+# A deployed operator policy is state, not a release artifact. Keep every
+# execution timer disabled while proving active settings survive upgrades.
+jq '.revision += 1000 | .intake.enabled = true | .intake.paused = false |
+    .dispatch_enabled = true | .github.automation_actor_id = 1 |
+    .github.reviewer_general_actor_id = 2 | .github.reviewer_secperf_actor_id = 3' \
+  /etc/pip/repositories/mdk.json > /work/operator-policy.json
+install -o root -g root -m 0444 /work/operator-policy.json /etc/pip/repositories/mdk.json
+sha256sum /etc/pip/repositories/mdk.json > /work/operator-policy.sha256
+
 install_version /work/releases/v0 000
 assert_service_release_access /work/releases/v0
 test "$(readlink -f /opt/pip/current)" = "$first_target"
+sha256sum --check /work/operator-policy.sha256
 
 install_version /work/releases/v1
 assert_service_release_access /work/releases/v1
+sha256sum --check /work/operator-policy.sha256
 second_target=$(readlink -f /opt/pip/current)
 test "$second_target" != "$first_target"
 test -d "$first_target"
@@ -175,6 +186,7 @@ if PATH=/failure-bin:/usr/bin:/bin /work/repo/scripts/install-rust-control-plane
   exit 1
 fi
 test "$(readlink -f /opt/pip/current)" = "$second_target"
+sha256sum --check /work/operator-policy.sha256
 test "$(systemctl is-enabled pip-shadow-reconcile.timer || true)" = disabled
 test "$(systemctl is-active pip-shadow-reconcile.timer || true)" = inactive
 test "$(find /opt/pip/releases -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 2

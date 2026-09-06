@@ -318,7 +318,9 @@ fn install_release_inner(
         }
         inject(fault, InstallFault::AfterRelease)?;
         for policy in &policies {
-            write_atomic(&policy.target, &policy.bytes, 0o444)?;
+            if !exact_file(&policy.target, &policy.bytes) {
+                write_atomic(&policy.target, &policy.bytes, 0o444)?;
+            }
         }
         inject(fault, InstallFault::AfterPolicy)?;
         write_atomic(&service_target, &service_bytes, 0o444)?;
@@ -645,10 +647,21 @@ fn cohort_policies(
                 "fresh-install policy {name} must disable and pause intake and dispatch"
             )));
         }
-        policies.push(CohortPolicy {
-            target: layout.config_root.join("repositories").join(name),
-            bytes,
-        });
+        let target = layout.config_root.join("repositories").join(name);
+        // Packaged policy is a safe first-install seed, not an upgrade override
+        // of accepted models, repository identity, or operational switches.
+        let bytes = match fs::symlink_metadata(&target) {
+            Ok(_) => {
+                let existing = read_regular(&target, 1024 * 1024)?;
+                load_repository_policy(&existing).map_err(|error| {
+                    InstallError::InvalidCohort(format!("existing policy {name}: {error}"))
+                })?;
+                existing
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => bytes,
+            Err(error) => return Err(InstallError::Filesystem(error.to_string())),
+        };
+        policies.push(CohortPolicy { target, bytes });
     }
     if policies.is_empty() {
         return Err(InstallError::InvalidCohort(
