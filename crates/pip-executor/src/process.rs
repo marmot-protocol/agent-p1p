@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -16,6 +17,8 @@ use wait_timeout::ChildExt;
 pub struct ProcessSpec {
     pub program: String,
     pub args: Vec<String>,
+    /// An existing input artifact, or closed stdin when absent.
+    pub stdin_file: Option<PathBuf>,
     pub cwd: PathBuf,
     pub environment: BTreeMap<String, String>,
     pub timeout: Duration,
@@ -74,13 +77,31 @@ impl ProcessRunner for BoundedProcessRunner {
         {
             return Err(ProcessError::InvalidSpec);
         }
+        let stdin = match &spec.stdin_file {
+            Some(path) => {
+                if !path.is_absolute() {
+                    return Err(ProcessError::InvalidSpec);
+                }
+                let input =
+                    File::open(path).map_err(|error| ProcessError::Io(error.to_string()))?;
+                if !input
+                    .metadata()
+                    .map_err(|error| ProcessError::Io(error.to_string()))?
+                    .is_file()
+                {
+                    return Err(ProcessError::InvalidSpec);
+                }
+                Stdio::from(input)
+            }
+            None => Stdio::null(),
+        };
         let mut command = Command::new(&spec.program);
         command
             .args(&spec.args)
             .current_dir(&spec.cwd)
             .env_clear()
             .envs(&spec.environment)
-            .stdin(Stdio::null())
+            .stdin(stdin)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         #[cfg(unix)]

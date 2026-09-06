@@ -7,10 +7,11 @@ The target is [the lean architecture](pip-architecture-plan.md).
 
 Pirate was checked during this refactor on 2026-09-06:
 - installed source: `c1f70e7d61050e175e9c2723d78d66c2a001086e`;
-- the Cursor argument-boundary repair is installed; runtime resumption is being checked;
+- the Cursor argument-boundary repair is installed and execution has resumed;
 - #993 is the sole authorized canary; planner task `t_bf698ea6` completed and
   plan version 1 was accepted. The first Cursor invocation rejected skill
-  frontmatter as a command-line option before useful work;
+  frontmatter as a command-line option before useful work. Attempt 7 is executing
+  on `c1f70e7`, with source edits and Rust compilation observed;
 - #891, #1228 and #1639 are abandoned with their history retained;
 - no completed end-to-end issue or ready PR;
 - Hermes remains upstream commit `29112bef099274229cadff79cdff7bf7b99c4b77`,
@@ -77,6 +78,10 @@ bytes on Pirate. End-to-end proof remains outstanding.
 
 Further local changes awaiting release:
 
+- Pass the retained Cursor prompt file through stdin, avoiding Linux's
+  single-argument length bound and keeping prompt content out of process arguments.
+  Large-input regressions, full Rust tests and Clippy pass; installed Cursor
+  accepted both pipe input and a regular stdin file in isolated no-tool probes.
 - Read-only `status --case` and `status --attempt` expose retained history and
   failure details without handwritten SQL. CLI regression tests and Clippy pass.
 

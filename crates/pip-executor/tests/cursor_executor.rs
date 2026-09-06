@@ -118,7 +118,34 @@ fn executor(runner: FakeRunner) -> CursorExecutor<FakeRunner> {
 }
 
 #[test]
-fn frontmatter_prompt_is_a_positional_argument_not_a_cli_option() {
+fn large_prompt_does_not_depend_on_operating_system_argument_size() {
+    let tmp = tempfile::tempdir().unwrap();
+    let worktree = tmp.path().join("worktree");
+    fs::create_dir(&worktree).unwrap();
+    let runner = FakeRunner::default();
+    runner.push(envelope(&results()[1]));
+    let mut input = task(WorkerRole::Builder, "composer-2.5", 1);
+    input.workflow_skill = "x".repeat(256 * 1024);
+    executor(runner.clone())
+        .execute(
+            &health("composer-2.5"),
+            &input,
+            &worktree,
+            &tmp.path().join("artifacts"),
+        )
+        .unwrap();
+    let commands = runner.commands.borrow();
+    assert!(commands[0].args.iter().all(|arg| arg.len() < 4096));
+    assert!(
+        fs::metadata(tmp.path().join("artifacts/prompt.md"))
+            .unwrap()
+            .len()
+            > 256 * 1024
+    );
+}
+
+#[test]
+fn frontmatter_prompt_is_input_data_not_a_cli_option() {
     let tmp = tempfile::tempdir().unwrap();
     let worktree = tmp.path().join("worktree");
     fs::create_dir(&worktree).unwrap();
@@ -136,11 +163,11 @@ fn frontmatter_prompt_is_a_positional_argument_not_a_cli_option() {
         .unwrap();
     let commands = runner.commands.borrow();
     let args = &commands[0].args;
-    assert!(args.last().unwrap().starts_with("---\n"));
-    assert_eq!(
-        args[args.len() - 2],
-        "--",
-        "prompt must follow the end-of-options delimiter"
+    assert!(!args.iter().any(|arg| arg.starts_with("---\n")));
+    assert!(
+        fs::read_to_string(commands[0].stdin_file.as_ref().unwrap())
+            .unwrap()
+            .starts_with("---\n")
     );
 }
 
@@ -178,7 +205,7 @@ fn builder_runs_once_in_fresh_exact_model_mode_and_retains_complete_artifacts() 
     );
     assert!(command.args.iter().any(|arg| arg == "--force"));
     assert!(!command.args.iter().any(|arg| arg == "--resume"));
-    let prompt = command.args.last().unwrap();
+    let prompt = fs::read_to_string(command.stdin_file.as_ref().unwrap()).unwrap();
     assert!(prompt.contains("# Workflow Contract"));
     assert!(prompt.contains("# Role Contract"));
     assert!(prompt.contains("review-ready structured result contract"));

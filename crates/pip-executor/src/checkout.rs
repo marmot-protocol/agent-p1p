@@ -229,6 +229,7 @@ impl<R: ProcessRunner> CheckoutReconciler<R> {
         let output = self.runner.run(&ProcessSpec {
             program: self.program.clone(),
             args: hardened,
+            stdin_file: None,
             cwd: cwd.to_owned(),
             environment: self.environment.clone(),
             timeout: self.timeout,

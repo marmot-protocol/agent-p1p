@@ -143,6 +143,34 @@ fn provider_outage_then_recovery_requires_a_fresh_exact_model_probe() {
 }
 
 #[test]
+fn bounded_runner_streams_large_input_artifacts_without_shell_or_argument_expansion() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("prompt.md");
+    let bytes = format!("---\n{}\n$(not-a-command)", "λ".repeat(140_000)).into_bytes();
+    std::fs::write(&input, &bytes).unwrap();
+    let mut spec = ProcessSpec {
+        program: "/bin/cat".into(),
+        args: Vec::new(),
+        stdin_file: Some(input.clone()),
+        cwd: directory.path().to_owned(),
+        environment: BTreeMap::new(),
+        timeout: Duration::from_secs(2),
+        max_output_bytes: 512 * 1024,
+    };
+    let output = BoundedProcessRunner.run(&spec).unwrap();
+    assert_eq!(output.status, 0);
+    assert_eq!(output.stdout, bytes);
+    spec.stdin_file = None;
+    assert!(BoundedProcessRunner.run(&spec).unwrap().stdout.is_empty());
+    spec.stdin_file = Some(directory.path().join("missing"));
+    assert!(BoundedProcessRunner.run(&spec).is_err());
+    spec.stdin_file = Some(directory.path().to_owned());
+    assert!(BoundedProcessRunner.run(&spec).is_err());
+    spec.stdin_file = Some(PathBuf::from("relative-prompt.md"));
+    assert!(BoundedProcessRunner.run(&spec).is_err());
+}
+
+#[test]
 fn bounded_runner_enforces_timeout_output_limit_and_explicit_environment() {
     let runner = BoundedProcessRunner;
     let started = Instant::now();
@@ -150,6 +178,7 @@ fn bounded_runner_enforces_timeout_output_limit_and_explicit_environment() {
         .run(&ProcessSpec {
             program: "/bin/sh".into(),
             args: vec!["-c".into(), "sleep 30 & wait".into()],
+            stdin_file: None,
             cwd: PathBuf::from("/"),
             environment: BTreeMap::new(),
             timeout: Duration::from_millis(50),
@@ -163,6 +192,7 @@ fn bounded_runner_enforces_timeout_output_limit_and_explicit_environment() {
         .run(&ProcessSpec {
             program: "/bin/sh".into(),
             args: vec!["-c".into(), "printf %02048d 0".into()],
+            stdin_file: None,
             cwd: PathBuf::from("/"),
             environment: BTreeMap::new(),
             timeout: Duration::from_secs(2),
@@ -175,6 +205,7 @@ fn bounded_runner_enforces_timeout_output_limit_and_explicit_environment() {
         .run(&ProcessSpec {
             program: "/usr/bin/env".into(),
             args: Vec::new(),
+            stdin_file: None,
             cwd: PathBuf::from("/"),
             environment: BTreeMap::from([("ONLY_SAFE_FIXTURE".into(), "present".into())]),
             timeout: Duration::from_secs(2),
@@ -191,6 +222,7 @@ fn bounded_runner_preserves_termination_signal() {
         .run(&ProcessSpec {
             program: "/bin/sh".into(),
             args: vec!["-c".into(), "kill -TERM $$".into()],
+            stdin_file: None,
             cwd: PathBuf::from("/"),
             environment: BTreeMap::new(),
             timeout: Duration::from_secs(2),

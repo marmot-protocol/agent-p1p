@@ -182,21 +182,13 @@ impl<R: ProcessRunner> CursorExecutor<R> {
         if task.binding.role == WorkerRole::Builder {
             args.push("--force".into());
         }
+        // Prompt bytes travel through stdin, not an OS-size-limited argument.
         args.extend([
             "--output-format".into(),
             "json".into(),
             "--model".into(),
             health.model.clone(),
-            // Skill frontmatter starts with `---`; never parse prompt text as options.
-            "--".into(),
-            prompt,
         ]);
-        let artifact_command = args
-            .iter()
-            .take(args.len().saturating_sub(1))
-            .cloned()
-            .chain(["<prompt saved in prompt.md>".into()])
-            .collect::<Vec<String>>();
         write_json(
             artifact_dir,
             "invocation.json",
@@ -206,7 +198,8 @@ impl<R: ProcessRunner> CursorExecutor<R> {
                 "role": task.binding.role,
                 "worktree": worktree,
                 "fresh_session": true,
-                "command": artifact_command,
+                "command": args,
+                "stdin": "prompt.md",
                 "environment_keys": environment.keys().collect::<Vec<_>>(),
             }),
         )?;
@@ -238,6 +231,7 @@ impl<R: ProcessRunner> CursorExecutor<R> {
         let output = self.runner.run(&ProcessSpec {
             program: self.program.clone(),
             args,
+            stdin_file: Some(artifact_dir.join("prompt.md")),
             cwd: worktree.clone(),
             environment,
             timeout: self.timeout,
@@ -323,6 +317,7 @@ impl<R: ProcessRunner> CursorExecutor<R> {
         let output = self.runner.run(&ProcessSpec {
             program: self.git_program.clone(),
             args,
+            stdin_file: None,
             cwd: worktree.to_owned(),
             environment: crate::workspace_git_environment(worktree, self.environment.clone()),
             timeout: Duration::from_secs(30).min(self.timeout),

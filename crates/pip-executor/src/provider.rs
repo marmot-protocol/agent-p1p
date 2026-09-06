@@ -171,6 +171,7 @@ impl<R: ProcessRunner> CursorHealthProbe<R> {
         let output = self.runner.run(&ProcessSpec {
             program: self.program.clone(),
             args,
+            stdin_file: None,
             cwd: self.cwd.clone(),
             environment: self.environment.clone(),
             timeout: self.timeout,

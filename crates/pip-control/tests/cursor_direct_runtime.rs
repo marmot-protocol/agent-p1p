@@ -94,9 +94,7 @@ fn production_runtime_probes_exact_model_reads_canonical_skills_and_retains_arti
     assert_eq!(commands.len(), 5);
     assert_eq!(commands[3].args, ["models"]);
     assert!(
-        commands[4]
-            .args
-            .last()
+        fs::read_to_string(commands[4].stdin_file.as_ref().unwrap())
             .unwrap()
             .contains("# Fixture field guide")
     );

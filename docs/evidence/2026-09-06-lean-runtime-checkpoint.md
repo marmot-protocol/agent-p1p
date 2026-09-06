@@ -133,3 +133,35 @@ active policy retained SHA
 and `root:pip-control 0640` ownership/mode. All seven packaged skill files were
 identical between the two releases. No accepted job, plan or task binding was
 rewritten. No activation-policy replacement script was necessary.
+
+All four execution/consumer components resumed on policy 7. The normal controller
+ingested attempt 6's retained argument-parser failure and prepared attempt 7 at
+Unix `1788731026`. Its Cursor process is running the exact configured Grok model.
+Read-only observations show changes to CLI renderers, shared terminal text
+handling and tests, followed by Rust compilation. The operator did not modify
+the MDK worktree. This is implementation progress, not a completed build.
+
+## Prompt transport, without another protocol
+
+The 86,670-byte builder prompt is below Linux's per-argument size limit, but the
+accepted evidence ceiling is larger. A regression with a 256-KiB prompt reproduced
+the oversized command argument. The executor now attaches its existing
+`prompt.md` artifact as standard input; the other subprocesses retain closed
+stdin. No shell expansion, pipe writer thread, new queue or result schema is
+introduced. The real process-runner test transfers over 280 KiB of UTF-8 bytes
+unchanged through a regular stdin file, and checks absent/invalid input paths.
+
+The full Rust workspace tests and all-target/all-feature Clippy passed. Two
+small no-tool probes under `pip-worker` in an empty diagnostic directory used
+installed Cursor `2026.09.02-c22c1a3` and exact model
+`cursor-grok-4.6-high-fast`. Pipe input returned `PIP_STDIN_BOUNDARY_OK`; regular
+file input returned `PIP_FILE_STDIN_OK`, both in successful JSON envelopes.
+The first untrusted-root invocation stopped at the workspace-trust gate without
+a model result; no trust exception was granted for `/`. The successful probes
+were scoped to the newly created empty diagnostic workspace.
+
+The normal headless/output behavior is described in
+[Cursor's official CLI documentation](https://cursor.com/docs/cli/headless).
+The provider probes establish input transport, not completion of #993 or an
+attestation of the provider's hidden model route. This change is not yet installed;
+the live builder remains on its verified release.
