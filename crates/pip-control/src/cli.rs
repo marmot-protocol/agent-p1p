@@ -614,17 +614,6 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         authorization.is_authorized(),
     )
     .map_err(|error| CliError::Reconciliation(error.to_string()))?;
-    let merge = crate::reconcile_merge_once(
-        &reader,
-        &writer,
-        &policy,
-        &mut store,
-        now,
-        required(&options, "--owner")?,
-        lease_seconds,
-        authorization.is_authorized(),
-    )
-    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     let disposition = crate::consume_disposition_once(
         &writer,
         &policy,
@@ -666,7 +655,7 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         "plan_publication": plan_publication,
         "review_publication": review_publication,
         "final_preflight": final_preflight,
-        "merge": merge,
+        "merge": {"result": "human_only"},
         "disposition": disposition,
         "dispatch": dispatch,
     }))

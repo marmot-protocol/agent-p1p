@@ -146,6 +146,19 @@ fn astra_policy_preserves_effort_other_providers_and_inert_boundaries() {
 }
 
 #[test]
+fn runtime_rejects_autonomous_merge_instead_of_exposing_a_dormant_executor() {
+    for autonomous in [false, true] {
+        let mut value: serde_json::Value = serde_json::from_slice(include_bytes!(
+            "../../../config/target/repositories/mdk.json"
+        ))
+        .unwrap();
+        value["merge"]["mode"] = serde_json::json!("guarded");
+        value["merge"]["autonomous"] = serde_json::json!(autonomous);
+        assert!(load_repository_policy(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
+}
+
+#[test]
 fn policy_rejects_unknown_fields_model_fallback_and_shadow_merge_authority() {
     let bytes = include_bytes!("../../../config/target/repositories/mdk.json");
     let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();

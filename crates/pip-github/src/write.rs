@@ -164,22 +164,6 @@ pub struct ReviewMutationSpec {
     pub event: ReviewEvent,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MergeModePolicy {
-    pub guarded: bool,
-    pub autonomous_merge: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MergeSpec {
-    pub owner: String,
-    pub repository: String,
-    pub pull_request_number: u64,
-    pub expected_head_sha: String,
-    pub commit_title: String,
-    pub method: String,
-}
-
 #[derive(Deserialize)]
 struct UserDto {
     id: u64,
@@ -260,14 +244,6 @@ struct ReviewDto {
     state: String,
     commit_id: String,
     html_url: String,
-}
-
-#[derive(Deserialize)]
-struct MergeDto {
-    merged: bool,
-    sha: Option<String>,
-    #[allow(dead_code)]
-    message: String,
 }
 
 pub struct GitHubWriter<T> {
@@ -545,42 +521,6 @@ impl<T: MutationTransport> GitHubWriter<T> {
             return Err(GitHubError::OwnershipConflict);
         }
         Ok(MutationResult::Created(response.id))
-    }
-
-    pub fn merge_pull_request(
-        &self,
-        spec: &MergeSpec,
-        policy: MergeModePolicy,
-    ) -> Result<MutationResult, GitHubError> {
-        if !policy.guarded || !policy.autonomous_merge {
-            return Err(GitHubError::MutationDisabled);
-        }
-        if !valid_segment(&spec.owner)
-            || !valid_segment(&spec.repository)
-            || spec.pull_request_number == 0
-            || !valid_sha(&spec.expected_head_sha)
-            || spec.commit_title.trim().is_empty()
-            || !matches!(spec.method.as_str(), "merge" | "squash" | "rebase")
-        {
-            return Err(GitHubError::InvalidMutation);
-        }
-        let response: MergeDto = self.mutate_json(
-            "PUT",
-            &format!(
-                "/repos/{}/{}/pulls/{}/merge",
-                spec.owner, spec.repository, spec.pull_request_number
-            ),
-            &json!({
-                "sha": spec.expected_head_sha,
-                "commit_title": spec.commit_title,
-                "merge_method": spec.method,
-            }),
-        )?;
-        let sha = response.sha.ok_or(GitHubError::InvalidIdentity)?;
-        if !response.merged || !valid_sha(&sha) {
-            return Err(GitHubError::InvalidIdentity);
-        }
-        Ok(MutationResult::Merged(sha))
     }
 
     fn get_pages<D: for<'de> Deserialize<'de>>(&self, first: &str) -> Result<Vec<D>, GitHubError> {

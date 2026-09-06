@@ -16,7 +16,6 @@ mod final_preflight;
 mod hermes_scratch;
 mod install;
 mod intake;
-mod merge;
 mod plans;
 mod policy;
 mod release;
@@ -75,7 +74,6 @@ pub use intake::{
     ActiveIntakeError, ActiveIntakeReport, IntakeCandidateResult, WebhookEnvelope,
     WebhookIntakeReport, ingest_webhook, reconcile_intake,
 };
-pub use merge::{MergeCycle, MergeCycleError, MergeSource, MergeWriter, reconcile_merge_once};
 pub use plans::{PlanPublicationCycle, PlanPublicationError, PlanWriter, publish_plan_once};
 pub use policy::{
     GitHubConfiguration, IntakeConfiguration, MergeConfiguration, PolicyError, RepositoryIdentity,

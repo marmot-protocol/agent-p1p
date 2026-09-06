@@ -8,8 +8,8 @@ mod write;
 pub use app_auth::{GitHubAppCredentials, InstallationToken, mint_installation_token};
 
 pub use write::{
-    CommentSpec, GitHubWriter, MergeModePolicy, MergeSpec, MutationRequest, MutationResult,
-    MutationTransport, PullRequestReadySpec, PullRequestSpec, ReviewEvent, ReviewMutationSpec,
+    CommentSpec, GitHubWriter, MutationRequest, MutationResult, MutationTransport,
+    PullRequestReadySpec, PullRequestSpec, ReviewEvent, ReviewMutationSpec,
 };
 
 use std::collections::{BTreeMap, BTreeSet};

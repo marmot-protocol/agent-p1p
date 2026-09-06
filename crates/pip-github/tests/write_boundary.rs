@@ -3,9 +3,8 @@ use std::collections::{BTreeMap, VecDeque};
 use std::rc::Rc;
 
 use pip_github::{
-    CommentSpec, GitHubError, GitHubWriter, MergeModePolicy, MergeSpec, MutationRequest,
-    MutationResult, MutationTransport, PullRequestReadySpec, PullRequestSpec, ReadResponse,
-    ReviewEvent, ReviewMutationSpec,
+    CommentSpec, GitHubError, GitHubWriter, MutationRequest, MutationResult, MutationTransport,
+    PullRequestReadySpec, PullRequestSpec, ReadResponse, ReviewEvent, ReviewMutationSpec,
 };
 
 #[derive(Clone, Default)]
@@ -132,30 +131,6 @@ fn duplicate_or_foreign_comment_ownership_blocks_without_writing() {
         writer(transport).ensure_issue_comment(&comment()),
         Err(GitHubError::OwnershipConflict)
     ));
-}
-
-#[test]
-fn shadow_or_disabled_policy_cannot_send_a_merge_request() {
-    let transport = FakeTransport::default();
-    let merge = MergeSpec {
-        owner: "marmot-protocol".into(),
-        repository: "mdk".into(),
-        pull_request_number: 77,
-        expected_head_sha: "b".repeat(40),
-        commit_title: "Pip shadow result".into(),
-        method: "squash".into(),
-    };
-    assert!(matches!(
-        writer(transport.clone()).merge_pull_request(
-            &merge,
-            MergeModePolicy {
-                guarded: false,
-                autonomous_merge: false,
-            },
-        ),
-        Err(GitHubError::MutationDisabled)
-    ));
-    assert!(transport.requests.borrow().is_empty());
 }
 
 #[test]

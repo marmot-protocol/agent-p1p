@@ -327,7 +327,8 @@ fn validate_policy(policy: &RepositoryPolicy) -> Result<(), PolicyError> {
         && exclusions.is_disjoint(&held)
         && policy.intake.repository_active_limit > 0
         && policy.intake.global_active_limit > 0
-        && !(policy.merge.is_shadow() && policy.merge.autonomous)
+        && policy.merge.is_shadow()
+        && !policy.merge.autonomous
         && matches!(policy.merge.method.as_str(), "merge" | "squash" | "rebase")
         && policy.max_remediation_rounds > 0
         && policy.max_case_elapsed_seconds > 0
