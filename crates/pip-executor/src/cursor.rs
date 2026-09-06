@@ -187,6 +187,8 @@ impl<R: ProcessRunner> CursorExecutor<R> {
             "json".into(),
             "--model".into(),
             health.model.clone(),
+            // Skill frontmatter starts with `---`; never parse prompt text as options.
+            "--".into(),
             prompt,
         ]);
         let artifact_command = args

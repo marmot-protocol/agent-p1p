@@ -7,8 +7,10 @@ The target is [the lean architecture](pip-architecture-plan.md).
 
 Pirate was checked during this refactor on 2026-09-06:
 - installed source: `cd738eeb15432310c83d0b60efc62287cd013113`;
-- webhook ingress/consumer, controller, direct worker and Hermes dispatcher active;
-- #993 is the sole authorized canary, with planner task `t_bf698ea6` running;
+- webhook ingress/consumer remain active; execution timers are stopped for repair;
+- #993 is the sole authorized canary; planner task `t_bf698ea6` completed and
+  plan version 1 was accepted. The first Cursor invocation rejected skill
+  frontmatter as a command-line option before useful work;
 - #891, #1228 and #1639 are abandoned with their history retained;
 - no completed end-to-end issue or ready PR;
 - Hermes remains upstream commit `29112bef099274229cadff79cdff7bf7b99c4b77`,
@@ -53,6 +55,9 @@ Implemented and deployed through `cd738ee`:
 
 Further local changes awaiting release:
 
+- Delimit the Cursor positional prompt with `--` so Markdown frontmatter cannot
+  become command-line options. The regression failed before the fix and passes
+  after it; the installed Cursor accepts the delimiter in an offline probe.
 - Seed paused policy only on first install; validate and preserve existing
   operator configuration during upgrades/reinstalls. Invalid existing policy
   stops installation instead of silently replacing state with defaults.

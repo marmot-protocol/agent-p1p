@@ -99,3 +99,20 @@ disabled. It has not yet been deployed.
 Still outstanding: complete failure isolation and saved-job upgrade semantics,
 compact worker evidence, normal operations simplification, live PR/review/CI
 proof, and removal of legacy Python after that cutover proof.
+
+## Accepted plan and Cursor argument boundary
+
+Hermes completed `t_bf698ea6`; Rust accepted #993 plan version 1 and advanced to
+`READY_TO_BUILD`. Attempt 5 passed provider health but exited with status 1:
+`error: unknown option '---` followed by the packaged skill frontmatter. The
+prompt was 86,670 bytes. No work result was returned. This is recorded as an
+execution failure, not the earlier health-probe unavailability category.
+Execution timers were stopped before further automatic attempts; attempt 6 had
+already been prepared/executed and its durable result is retained for ingestion.
+
+A regression using actual Markdown-frontmatter shape failed because the argument
+before the prompt was the model, not `--`. The minimal fix inserts the standard
+end-of-options delimiter. All five executor tests and the production direct
+runtime test pass. An offline invocation of installed Cursor
+`2026.09.02-c22c1a3` accepts a frontmatter-shaped positional argument after `--`.
+This probe does not claim model execution or successful implementation.

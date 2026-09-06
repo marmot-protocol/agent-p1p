@@ -118,6 +118,33 @@ fn executor(runner: FakeRunner) -> CursorExecutor<FakeRunner> {
 }
 
 #[test]
+fn frontmatter_prompt_is_a_positional_argument_not_a_cli_option() {
+    let tmp = tempfile::tempdir().unwrap();
+    let worktree = tmp.path().join("worktree");
+    fs::create_dir(&worktree).unwrap();
+    let runner = FakeRunner::default();
+    runner.push(envelope(&results()[1]));
+    let mut input = task(WorkerRole::Builder, "composer-2.5", 1);
+    input.workflow_skill = "---\nname: workflow-contract\n---\n# Contract".into();
+    executor(runner.clone())
+        .execute(
+            &health("composer-2.5"),
+            &input,
+            &worktree,
+            &tmp.path().join("artifacts"),
+        )
+        .unwrap();
+    let commands = runner.commands.borrow();
+    let args = &commands[0].args;
+    assert!(args.last().unwrap().starts_with("---\n"));
+    assert_eq!(
+        args[args.len() - 2],
+        "--",
+        "prompt must follow the end-of-options delimiter"
+    );
+}
+
+#[test]
 fn builder_runs_once_in_fresh_exact_model_mode_and_retains_complete_artifacts() {
     let tmp = tempfile::tempdir().unwrap();
     let worktree = tmp.path().join("worktree");
