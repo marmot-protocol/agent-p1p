@@ -115,6 +115,21 @@ It builds three independently signed cohorts from one exact candidate commit,
 then proves clean install, reinstall, upgrade, host-finalization rollback, and
 restart recovery in a privileged systemd container. It asserts that intake,
 dispatch, and the reconciliation timer remain disabled after a fresh install.
+Installs and upgrades run under umask `077`, with reinstall under `000`.
+Transient systemd commands execute the installed binary as each of
+`pip-control`, `pip-worker`, and `pip-ingress`, and verify access to the source
+descriptor, policy, and skills without granting worker/ingress ledger access.
+
+Installed release directories (including the `releases` collection and every
+artifact parent) must be real directories with mode `0755`. The Rust installer
+sets these modes explicitly on newly created directories, independent of the
+operator's umask; signed artifact file modes remain unchanged. Incomplete
+staging trees remain private until copying finishes. Private source cohorts,
+state directories, and credentials are not made public. An existing release
+with directory permission drift is rejected before an idempotent success or
+pointer switch; the installer does not silently repair that tree. Diagnose and
+repair only the exact verified release if this check fails, never recursively
+chmod `/opt/pip` or `/var/lib/pip`.
 
 ## Build and verify commands
 

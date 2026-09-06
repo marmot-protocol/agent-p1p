@@ -1,6 +1,7 @@
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -18,6 +19,113 @@ fn host_state_root_allows_worker_group_traversal_without_directory_listing() {
     assert!(installer.contains("chmod 0710 \"$state_root\""));
     assert!(installer.contains("ensure_directory /var/lib/pip pip-control pip-control 710"));
     assert!(!installer.contains("ensure_directory /var/lib/pip pip-control pip-control 700"));
+}
+
+#[test]
+fn installed_release_permissions_are_independent_of_umask() {
+    const CHILD: &str = "PIP_INSTALL_UMASK_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        // umask is process-global: isolate each mask from parallel Rust tests.
+        for mask in ["077", "000"] {
+            let output = Command::new("sh")
+                .args([
+                    "-c",
+                    "umask \"$1\"; shift; exec \"$@\"",
+                    "pip-umask-test",
+                    mask,
+                ])
+                .arg(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "installed_release_permissions_are_independent_of_umask",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "umask {mask}:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        return;
+    }
+
+    let sandbox = tempfile::tempdir().unwrap();
+    let layout = layout(sandbox.path());
+    prepare_layout(&layout);
+    fs::set_permissions(&layout.state_root, fs::Permissions::from_mode(0o700)).unwrap();
+    let key = STANDARD.encode([47_u8; 32]);
+    let public = verifying_key(&key).unwrap();
+    for (version, source) in [("v1", "a"), ("v2", "b")] {
+        let cohort = cohort(sandbox.path(), version, version.as_bytes(), source, &key);
+        let installed = install_release(&cohort, &public, &layout, None).unwrap();
+        assert_eq!(installed.result, InstallResult::Installed);
+        assert_public_release_directories(&layout.install_root.join("releases"));
+        let release = fs::read_link(layout.install_root.join("current")).unwrap();
+        assert_eq!(mode(&release.join("bin/pip-control")), 0o555);
+        assert_eq!(mode(&release.join("SOURCE.COMMIT")), 0o444);
+        assert_eq!(
+            mode(&release.join("share/pip/config/repositories/mdk.json")),
+            0o444
+        );
+        assert_eq!(mode(&layout.state_root), 0o700);
+        assert_eq!(mode(&layout.state_root.join("ledger.db")), 0o600);
+        assert_eq!(
+            install_release(&cohort, &public, &layout, None)
+                .unwrap()
+                .result,
+            InstallResult::Existing
+        );
+    }
+}
+
+#[test]
+fn reinstall_rejects_directory_permission_drift_without_mutation() {
+    for relative in ["..", "", "bin", "share/pip/config/repositories"] {
+        for bad_mode in [0o700, 0o777] {
+            let sandbox = tempfile::tempdir().unwrap();
+            let layout = layout(sandbox.path());
+            prepare_layout(&layout);
+            let key = STANDARD.encode([49_u8; 32]);
+            let public = verifying_key(&key).unwrap();
+            let cohort = cohort(sandbox.path(), "v1", b"binary-v1", "a", &key);
+            install_release(&cohort, &public, &layout, None).unwrap();
+            let release = fs::read_link(layout.install_root.join("current")).unwrap();
+            let directory = release.join(relative);
+            fs::set_permissions(&directory, fs::Permissions::from_mode(bad_mode)).unwrap();
+            let ledger = fs::read(layout.state_root.join("ledger.db")).unwrap();
+            assert!(
+                install_release(&cohort, &public, &layout, None).is_err(),
+                "accepted {relative:?} mode {bad_mode:o}"
+            );
+            assert_eq!(
+                fs::read_link(layout.install_root.join("current")).unwrap(),
+                release
+            );
+            assert_eq!(
+                fs::read(layout.state_root.join("ledger.db")).unwrap(),
+                ledger
+            );
+            assert_eq!(mode(&directory), bad_mode);
+        }
+    }
+}
+
+fn mode(path: &Path) -> u32 {
+    fs::symlink_metadata(path).unwrap().permissions().mode() & 0o7777
+}
+
+fn assert_public_release_directories(path: &Path) {
+    assert_eq!(mode(path), 0o755, "{}", path.display());
+    for entry in fs::read_dir(path).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_dir() {
+            assert_public_release_directories(&entry.path());
+        }
+    }
 }
 
 #[test]

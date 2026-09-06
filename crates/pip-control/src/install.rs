@@ -1,9 +1,12 @@
 //! Transactional, content-addressed release installation.
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt, chown, symlink};
+use std::os::unix::fs::{
+    DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt, chown, symlink,
+};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
@@ -249,6 +252,7 @@ fn install_release_inner(
     if release_dir.exists() {
         verify_release(&release_dir, &manifest_bytes, signature, public_key)
             .map_err(|error| InstallError::ExistingConflict(release_dir.clone()).with(error))?;
+        verify_installed_directories(&release_dir, &manifest)?;
         if current_link(&current).as_deref() == Some(release_dir.as_path())
             && policies
                 .iter()
@@ -699,7 +703,14 @@ fn install_release_tree(
     source_commit: &str,
 ) -> Result<(), InstallError> {
     let parent = destination.parent().ok_or(InstallError::InvalidLayout)?;
-    fs::create_dir_all(parent).map_err(fs_error)?;
+    match fs::DirBuilder::new().mode(0o755).create(parent) {
+        Ok(()) => {
+            fs::set_permissions(parent, fs::Permissions::from_mode(0o755)).map_err(fs_error)?
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(fs_error(error)),
+    }
+    verify_public_directory(parent)?;
     let staging = parent.join(format!(
         ".installing-{}-{}",
         manifest.binary_sha256,
@@ -708,7 +719,11 @@ fn install_release_tree(
     if staging.exists() {
         return Err(InstallError::ExistingConflict(staging));
     }
-    fs::create_dir(&staging).map_err(fs_error)?;
+    // Keep incomplete artifacts private even when the caller has umask 000.
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&staging)
+        .map_err(fs_error)?;
     let copied = (|| {
         for artifact in &manifest.artifacts {
             let target = staging.join(&artifact.path);
@@ -723,6 +738,13 @@ fn install_release_tree(
             format!("{source_commit}\n").as_bytes(),
             0o444,
         )?;
+        // Only installed release directories are public. Do not change the
+        // process umask or the permissions of state, secrets, or source cohorts.
+        // Publish the staging root last so incomplete trees stay inaccessible.
+        for directory in release_directories(&staging, manifest).iter().rev() {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o755)).map_err(fs_error)?;
+        }
+        verify_installed_directories(&staging, manifest)?;
         Ok(())
     })();
     if let Err(error) = copied {
@@ -730,6 +752,39 @@ fn install_release_tree(
         return Err(error);
     }
     fs::rename(&staging, destination).map_err(fs_error)
+}
+
+fn release_directories(root: &Path, manifest: &ReleaseManifest) -> BTreeSet<PathBuf> {
+    let mut directories = BTreeSet::from([root.to_path_buf()]);
+    // Manifest paths have already passed release verification.
+    for artifact in &manifest.artifacts {
+        for parent in Path::new(&artifact.path).ancestors().skip(1) {
+            directories.insert(root.join(parent));
+        }
+    }
+    directories
+}
+
+fn verify_public_directory(directory: &Path) -> Result<(), InstallError> {
+    let metadata = fs::symlink_metadata(directory).map_err(fs_error)?;
+    if !metadata.is_dir() || metadata.permissions().mode() & 0o7777 != 0o755 {
+        return Err(InstallError::Filesystem(format!(
+            "installed release directory must be a real directory with mode 0755: {}",
+            directory.display()
+        )));
+    }
+    Ok(())
+}
+
+fn verify_installed_directories(
+    root: &Path,
+    manifest: &ReleaseManifest,
+) -> Result<(), InstallError> {
+    verify_public_directory(root.parent().ok_or(InstallError::InvalidLayout)?)?;
+    for directory in release_directories(root, manifest) {
+        verify_public_directory(&directory)?;
+    }
+    Ok(())
 }
 
 #[derive(Clone)]

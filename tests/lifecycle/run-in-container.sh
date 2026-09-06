@@ -46,8 +46,10 @@ verified_values() {
     --public-key /etc/pip-release-public.key
 }
 
-install_version() {
+install_version() (
   local release=$1
+  # Cover both the restrictive operator wrapper and an overly permissive caller.
+  umask "${2:-077}"
   local verified manifest_sha binary_sha
   verified=$(verified_values "$release")
   manifest_sha=$(jq -r .manifest_sha256 <<<"$verified")
@@ -57,6 +59,24 @@ install_version() {
     --public-key /etc/pip-release-public.key \
     --manifest-sha256 "$manifest_sha" \
     --binary-sha256 "$binary_sha" >/dev/null
+)
+
+assert_service_release_access() {
+  test -z "$(find /opt/pip/releases -type d ! -perm 0755 -print -quit)"
+  for identity in pip-control pip-worker pip-ingress; do
+    # Exercise exec as the real service UID, not just root's access checks.
+    systemd-run --quiet --wait --pipe --collect --property="User=$identity" \
+      /opt/pip/current/bin/pip-control --help >/dev/null
+    runuser -u "$identity" -- test -r /opt/pip/current/SOURCE.COMMIT
+    runuser -u "$identity" -- test -r /etc/pip/repositories/mdk.json
+    runuser -u "$identity" -- test -r /opt/pip/current/share/pip/skills/planner/SKILL.md
+  done
+  # Release traversal must not broaden access to mutable control-plane state.
+  if runuser -u pip-worker -- test -r /var/lib/pip/ledger.db \
+    || runuser -u pip-ingress -- test -r /var/lib/pip/ledger.db; then
+    echo 'release installation exposed the private ledger' >&2
+    exit 1
+  fi
 }
 
 # Mirror Pirate's pre-install storage preparation: the operator creates the
@@ -73,6 +93,7 @@ test "$(stat -c '%U:%G:%a' /var/lib/pip)" = root:root:755
 test "$(stat -c '%U:%G:%a' /var/lib/pip/worktrees)" = root:root:770
 
 install_version /work/releases/v0
+assert_service_release_access
 first_target=$(readlink -f /opt/pip/current)
 bash /source/tests/lifecycle/workspace-handoff.sh
 test -x /opt/pip/current/bin/pip-control
@@ -106,10 +127,12 @@ test "$(systemctl is-active pip-webhook-ingress.service || true)" = inactive
 test "$(systemctl is-enabled pip-webhook-consumer@mdk.timer || true)" = disabled
 test "$(systemctl is-active pip-webhook-consumer@mdk.timer || true)" = inactive
 
-install_version /work/releases/v0
+install_version /work/releases/v0 000
+assert_service_release_access
 test "$(readlink -f /opt/pip/current)" = "$first_target"
 
 install_version /work/releases/v1
+assert_service_release_access
 second_target=$(readlink -f /opt/pip/current)
 test "$second_target" != "$first_target"
 test -d "$first_target"
