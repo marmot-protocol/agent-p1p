@@ -116,3 +116,20 @@ end-of-options delimiter. All five executor tests and the production direct
 runtime test pass. An offline invocation of installed Cursor
 `2026.09.02-c22c1a3` accepts a frontmatter-shaped positional argument after `--`.
 This probe does not claim model execution or successful implementation.
+
+CI run `34061478485` passed all gates for
+`c1f70e7d61050e175e9c2723d78d66c2a001086e`. Pirate verified and installed manifest
+`e45e9dda4148d9501f9f176dce584cb6c55150536f10069b2e78b935d045c7f8`, binary
+`cbea5dc499f8eb313860e5251917143c10854b2f019dc1e527fd5446e90f9db7`.
+The first transfer omitted file-mode preservation and verification rejected it
+before installation. Recopying with preserved modes passed full verification.
+The root-owned installer SHA is now
+`2c8b7a5f27190a2a927785deab37d14eb2cc54fb771bc3f0ff551f133f78b421`.
+
+The stopped-runtime ledger retained SHA
+`92163cc7ac7334190219c3479fd55b75173c0f867eeeeb6a402a987070d5864a`;
+active policy retained SHA
+`7125de44f82b4ecd6454198aff44ad9a2f426755678235cd1961d77fdbca23ec`
+and `root:pip-control 0640` ownership/mode. All seven packaged skill files were
+identical between the two releases. No accepted job, plan or task binding was
+rewritten. No activation-policy replacement script was necessary.

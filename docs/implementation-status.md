@@ -6,8 +6,8 @@ The target is [the lean architecture](pip-architecture-plan.md).
 ## Current live evidence
 
 Pirate was checked during this refactor on 2026-09-06:
-- installed source: `cd738eeb15432310c83d0b60efc62287cd013113`;
-- webhook ingress/consumer remain active; execution timers are stopped for repair;
+- installed source: `c1f70e7d61050e175e9c2723d78d66c2a001086e`;
+- the Cursor argument-boundary repair is installed; runtime resumption is being checked;
 - #993 is the sole authorized canary; planner task `t_bf698ea6` completed and
   plan version 1 was accepted. The first Cursor invocation rejected skill
   frontmatter as a command-line option before useful work;
@@ -53,7 +53,7 @@ Implemented and deployed through `cd738ee`:
   `RestrictSUIDSGID=yes` and verify controller preparation inside its sandbox,
   not only the later worker handoff.
 
-Further local changes awaiting release:
+Deployed additionally through `c1f70e7`:
 
 - Delimit the Cursor positional prompt with `--` so Markdown frontmatter cannot
   become command-line options. The regression failed before the fix and passes
@@ -72,7 +72,13 @@ The permission repair is deployed and dispatched the same retained #993 case.
 The policy-preserving installer passed 329 Rust tests (seven explicitly ignored),
 Clippy and the expanded Linux lifecycle, including preservation of active-policy
 bytes through reinstall, upgrade, rollback and reboot with execution disabled.
-That installer change is not deployed. End-to-end proof remains outstanding.
+The installer change is now deployed and preserved exact live policy and ledger
+bytes on Pirate. End-to-end proof remains outstanding.
+
+Further local changes awaiting release:
+
+- Read-only `status --case` and `status --attempt` expose retained history and
+  failure details without handwritten SQL. CLI regression tests and Clippy pass.
 
 ## Remaining work toward the active goal
 

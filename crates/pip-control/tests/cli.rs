@@ -46,6 +46,106 @@ fn status_reads_an_existing_ledger_without_mutating_it() {
 }
 
 #[test]
+fn status_can_inspect_one_case_or_attempt_without_creating_a_ledger() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("ledger.db");
+    let mut store = Store::open(&database).unwrap();
+    store
+        .record_policy(&pip_store::PolicyInput {
+            repository_id: 17,
+            revision: 1,
+            accepted_at: 1,
+            payload: serde_json::json!({"fixture": true}),
+        })
+        .unwrap();
+    store
+        .create_case(&pip_store::NewCase {
+            case_key: "repo:17#2@1".into(),
+            repository_id: 17,
+            issue_number: 2,
+            workflow_version: 1,
+            policy_revision: 1,
+            initial_state: "PLANNING".into(),
+            observed_at: 1,
+            event: pip_store::EventInput {
+                event_id: "authorized".into(),
+                event_type: "ISSUE_AUTHORIZED".into(),
+                payload: serde_json::json!({}),
+            },
+            effects: vec![pip_store::EffectInput {
+                effect_id: "worker".into(),
+                effect_type: "RUN_DIRECT_WORKER".into(),
+                payload: serde_json::json!({}),
+            }],
+        })
+        .unwrap();
+    let claimed = store.claim_effect("operator-test", 2, 60).unwrap().unwrap();
+    let attempt = store.begin_direct_attempt(&claimed, "task-1", 2).unwrap();
+    store
+        .fail_direct_attempt(attempt, "operator-test", 3, "provider exited with 1")
+        .unwrap();
+    drop(store);
+    let before = fs::read(&database).unwrap();
+    let run = |selector: &str, value: &str| {
+        pip_control::run_cli(
+            [
+                "status",
+                "--database",
+                database.to_str().unwrap(),
+                selector,
+                value,
+            ]
+            .map(str::to_owned),
+        )
+    };
+    let case = run("--case", "repo:17#2@1").unwrap();
+    assert_eq!(case["case"]["state"], "PLANNING");
+    assert_eq!(case["history"]["events"][0]["event_id"], "authorized");
+    let failed = run("--attempt", &attempt.to_string()).unwrap();
+    assert_eq!(failed["attempt"]["status"], "FAILED");
+    assert_eq!(failed["attempt"]["error"], "provider exited with 1");
+    assert!(
+        pip_control::run_cli(
+            [
+                "status",
+                "--database",
+                database.to_str().unwrap(),
+                "--case",
+                "repo:17#2@1",
+                "--attempt",
+                "1"
+            ]
+            .map(str::to_owned)
+        )
+        .is_err()
+    );
+    for (selector, value) in [
+        ("--case", "missing"),
+        ("--attempt", "0"),
+        ("--attempt", "-1"),
+        ("--attempt", "999"),
+    ] {
+        assert!(run(selector, value).is_err());
+    }
+    assert_eq!(fs::read(&database).unwrap(), before);
+    let missing = directory.path().join("missing.db");
+    assert!(
+        pip_control::run_cli(
+            [
+                "status",
+                "--database",
+                missing.to_str().unwrap(),
+                "--attempt",
+                "1"
+            ]
+            .map(str::to_owned)
+        )
+        .is_err()
+    );
+    assert!(!missing.exists());
+}
+
+#[test]
 fn verify_release_command_emits_machine_readable_provenance() {
     let directory = tempfile::tempdir().unwrap();
     let release = directory.path().join("release");

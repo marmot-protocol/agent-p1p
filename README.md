@@ -95,6 +95,22 @@ Hermes state, repository cache, or systemd credentials. Neither queue is a
 second workflow database: no completion can release downstream work until the
 control plane validates and commits it.
 
+## Inspecting durable state
+
+Use the installed executable with the ledger owner's privileges:
+
+```sh
+sudo -u pip-control /opt/pip/current/bin/pip-control status --database /var/lib/pip/ledger.db
+sudo -u pip-control /opt/pip/current/bin/pip-control status --database /var/lib/pip/ledger.db --case 'CASE_KEY'
+sudo -u pip-control /opt/pip/current/bin/pip-control status --database /var/lib/pip/ledger.db --attempt ATTEMPT_ID
+```
+
+The selectors are available in source after `c1f70e7`; check the installed release
+before use. They return the exact case/history or attempt/error without writes,
+provider calls or GitHub credentials. Attempt state is the ledger's observation,
+not proof that an operating-system process is currently alive. Inspect systemd
+and the retained attempt logs when an execution outcome is uncertain.
+
 ## Canary policy
 
 The engine must not contain a canary issue number, comment ID, PR number,

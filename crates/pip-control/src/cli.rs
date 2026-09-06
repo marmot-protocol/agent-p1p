@@ -1078,7 +1078,14 @@ fn seal(arguments: &[String]) -> Result<Value, CliError> {
 }
 
 fn status(arguments: &[String]) -> Result<Value, CliError> {
-    let options = options(arguments, &["--database"], &["--now"])?;
+    let options = options(
+        arguments,
+        &["--database"],
+        &["--now", "--case", "--attempt"],
+    )?;
+    if options.contains_key("--case") && options.contains_key("--attempt") {
+        return Err(CliError::Usage("select either --case or --attempt"));
+    }
     let database = required(&options, "--database")?;
     let now = options
         .get("--now")
@@ -1091,6 +1098,28 @@ fn status(arguments: &[String]) -> Result<Value, CliError> {
         .map_or_else(current_time, Ok)?;
     let store =
         Store::open_read_only(database).map_err(|error| CliError::Ledger(error.to_string()))?;
+    if let Some(case_key) = options.get("--case") {
+        let case = store
+            .case(case_key)
+            .map_err(|error| CliError::Ledger(error.to_string()))?
+            .ok_or_else(|| CliError::InvalidArgument("unknown --case".into()))?;
+        let history = store
+            .immutable_history_for_case(case_key)
+            .map_err(|error| CliError::Ledger(error.to_string()))?;
+        return Ok(json!({"ok": true, "observed_at": now, "case": case, "history": history}));
+    }
+    if let Some(attempt_id) = options.get("--attempt") {
+        let attempt_id = attempt_id
+            .parse::<u64>()
+            .ok()
+            .filter(|id| *id > 0)
+            .ok_or_else(|| CliError::InvalidArgument("--attempt".into()))?;
+        let attempt = store
+            .direct_attempt(attempt_id)
+            .map_err(|error| CliError::Ledger(error.to_string()))?
+            .ok_or_else(|| CliError::InvalidArgument("unknown --attempt".into()))?;
+        return Ok(json!({"ok": true, "observed_at": now, "attempt": attempt}));
+    }
     let ledger = store
         .status(now)
         .map_err(|error| CliError::Ledger(error.to_string()))?;
