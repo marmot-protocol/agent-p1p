@@ -77,6 +77,8 @@ fn exact_remote_default_branch_is_fetched_and_resolved_without_repo_configuratio
         "-c".into(),
         "core.hooksPath=/dev/null".into(),
         "-c".into(),
+        "core.fsmonitor=false".into(),
+        "-c".into(),
         "credential.helper=".into(),
     ]));
     assert!(fetch.windows(2).any(|pair| pair == ["fetch", "--no-tags"]));

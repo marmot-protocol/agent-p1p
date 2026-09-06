@@ -323,6 +323,38 @@ The controller allocates or reconciles the repository checkout and exact
 case/head worktree before either executor receives a job. A workspace-root path
 is never treated as an executable task workspace.
 
+New case workspaces are self-contained Git repositories, initialized from the
+exact controller-fetched commit with a fresh Git configuration and the
+policy-bound HTTPS origin. They do not use the private fetch cache as a linked
+worktree's common directory, hard-link its objects, or configure object
+alternates. This intentionally duplicates Git history per active case, on the
+workspace volume, so the direct worker's sandbox can continue hiding the
+canonical repository. Rust build output remains subject to the existing
+workspace capacity and retention policy.
+
+The controller creates case directories as `2770` and source files as
+`0660` (executables `0770`), shared only with the worker's controller group.
+The direct worker uses umask `0007` so its new source/Git files remain usable
+by the controller. Provider-home remains private; worker artifact directories
+are `2750` and artifact files `0640`, allowing controller inspection without
+world access. Provider Git subprocesses receive an exact case-path
+`safe.directory` override, never a global wildcard. Hermes still receives
+read-only source mounts. The shared worker UID is not per-case adversarial
+isolation; those service-account and sandbox boundaries are unchanged.
+
+Before reuse, retirement, or credential-bearing publication, the controller
+rejects external Git metadata and checks local Git configuration with a
+credential-free runner and includes disabled. Only the known case repository
+settings and bounded author identity settings are accepted. Filters, includes,
+URL rewrites, upload-pack hooks, and unknown configuration cannot reach the
+authenticated publisher. Normal repository hooks and filesystem monitors are
+also disabled explicitly on controller commands.
+
+Legacy linked worktrees are retained for historical inspection/retirement,
+but are not converted or permission-repaired implicitly on dispatch. An
+in-flight case using the old layout requires a deliberate, history-preserving
+recovery before retrying. Updating the binary does not reset attempt budgets.
+
 ## 9. Planning contract
 
 The planner establishes:
@@ -547,6 +579,10 @@ emits one recovery event.
   removes at most one worktree per controller cycle, and records the result in
   the authoritative ledger. Branch deletion is a separate lifecycle and is
   not implied by worktree retirement.
+  For a self-contained case repository, retirement first transfers its exact
+  branch into the private canonical cache without force and verifies the SHA;
+  a transfer failure or conflicting branch preserves the workspace. This keeps
+  unpublished local commits after reclaiming source/build output.
 - Controller Git publication ignores worker-controlled hooks, filesystem
   monitors, credential helpers, proxies, and HTTP headers; requires the
   policy-bound push URL; and forces TLS verification before using its

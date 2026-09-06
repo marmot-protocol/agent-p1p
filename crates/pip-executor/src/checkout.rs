@@ -213,6 +213,8 @@ impl<R: ProcessRunner> CheckoutReconciler<R> {
             "-c".into(),
             "core.hooksPath=/dev/null".into(),
             "-c".into(),
+            "core.fsmonitor=false".into(),
+            "-c".into(),
             "credential.helper=".into(),
             "-c".into(),
             "http.proxy=".into(),

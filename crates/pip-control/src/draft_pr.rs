@@ -82,6 +82,23 @@ impl<R: GitRunner> BranchPublisher for GitPublisher<R> {
             local_head,
             expected_remote_head,
         )?;
+        // Metadata now belongs to the shared case boundary, not the private
+        // fetch cache. Validate it with a credential-free runner before the
+        // authenticated publisher performs any repository operation.
+        pip_executor::IsolatedWorkspace::new(
+            pip_executor::ProcessGitRunner,
+            "git",
+            std::time::Duration::from_secs(60),
+            4 * 1024 * 1024,
+        )
+        .and_then(|workspace| {
+            workspace.verify_for_controller(
+                spec.worktree(),
+                spec.branch(),
+                &request.expected_remote_url,
+            )
+        })
+        .map_err(|error| PublicationError::Process(error.to_string()))?;
         self.publish(&spec)
     }
 }

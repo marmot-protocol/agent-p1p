@@ -153,6 +153,7 @@ impl<R: ProcessRunner> CursorExecutor<R> {
         if !worktree.is_dir() {
             return Err(CursorExecutionError::InvalidWorktree);
         }
+        let environment = crate::workspace_git_environment(&worktree, self.environment.clone());
         let task_input = serde_json::to_string_pretty(&json!({
             "binding": &task.binding,
             "input": &task.immutable_input,
@@ -204,7 +205,7 @@ impl<R: ProcessRunner> CursorExecutor<R> {
                 "worktree": worktree,
                 "fresh_session": true,
                 "command": artifact_command,
-                "environment_keys": self.environment.keys().collect::<Vec<_>>(),
+                "environment_keys": environment.keys().collect::<Vec<_>>(),
             }),
         )?;
         write_json(
@@ -236,7 +237,7 @@ impl<R: ProcessRunner> CursorExecutor<R> {
             program: self.program.clone(),
             args,
             cwd: worktree.clone(),
-            environment: self.environment.clone(),
+            environment,
             timeout: self.timeout,
             max_output_bytes: self.max_output_bytes,
         })?;
@@ -321,7 +322,7 @@ impl<R: ProcessRunner> CursorExecutor<R> {
             program: self.git_program.clone(),
             args,
             cwd: worktree.to_owned(),
-            environment: self.environment.clone(),
+            environment: crate::workspace_git_environment(worktree, self.environment.clone()),
             timeout: Duration::from_secs(30).min(self.timeout),
             max_output_bytes: self.max_output_bytes.min(1_048_576),
         })?;
@@ -415,7 +416,7 @@ fn create_artifact_dir(path: &Path) -> Result<(), CursorExecutionError> {
     }
     fs::create_dir(path).map_err(|error| CursorExecutionError::ArtifactIo(error.to_string()))?;
     #[cfg(unix)]
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+    fs::set_permissions(path, fs::Permissions::from_mode(0o2750))
         .map_err(|error| CursorExecutionError::ArtifactIo(error.to_string()))?;
     sync_directory(path.parent().ok_or(CursorExecutionError::InvalidTask)?)?;
     Ok(())
@@ -447,11 +448,13 @@ fn write_artifact(
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
-    options.mode(0o600);
+    options.mode(0o640);
     let mut file = options
         .open(&temporary)
         .map_err(|error| CursorExecutionError::ArtifactIo(error.to_string()))?;
     let result = (|| {
+        file.set_permissions(fs::Permissions::from_mode(0o640))
+            .map_err(|error| CursorExecutionError::ArtifactIo(error.to_string()))?;
         file.write_all(content)
             .map_err(|error| CursorExecutionError::ArtifactIo(error.to_string()))?;
         file.sync_all()

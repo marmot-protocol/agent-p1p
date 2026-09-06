@@ -138,6 +138,11 @@ fn builder_runs_once_in_fresh_exact_model_mode_and_retains_complete_artifacts() 
     let command = &runner.commands.borrow()[0];
     assert_eq!(command.program, "/opt/pip/bin/agent");
     assert_eq!(command.cwd, worktree.canonicalize().unwrap());
+    assert_eq!(command.environment["GIT_CONFIG_KEY_0"], "safe.directory");
+    assert_eq!(
+        command.environment["GIT_CONFIG_VALUE_0"],
+        worktree.canonicalize().unwrap().to_str().unwrap()
+    );
     assert!(
         command
             .args
@@ -160,6 +165,12 @@ fn builder_runs_once_in_fresh_exact_model_mode_and_retains_complete_artifacts() 
     assert!(artifacts.join("task-input.json").is_file());
     assert!(artifacts.join("prompt.md").is_file());
     assert!(artifacts.join("invocation.json").is_file());
+    let invocation: Value =
+        serde_json::from_slice(&fs::read(artifacts.join("invocation.json")).unwrap()).unwrap();
+    assert_eq!(
+        invocation["environment_keys"],
+        json!(command.environment.keys().collect::<Vec<_>>())
+    );
     assert!(artifacts.join("model-verification.json").is_file());
     assert!(artifacts.join("stdout.log").is_file());
     assert!(artifacts.join("stderr.log").is_file());
@@ -168,12 +179,12 @@ fn builder_runs_once_in_fresh_exact_model_mode_and_retains_complete_artifacts() 
     {
         assert_eq!(
             fs::metadata(&artifacts).unwrap().permissions().mode() & 0o777,
-            0o700
+            0o750
         );
         for entry in fs::read_dir(&artifacts).unwrap() {
             assert_eq!(
                 entry.unwrap().metadata().unwrap().permissions().mode() & 0o777,
-                0o600
+                0o640
             );
         }
     }

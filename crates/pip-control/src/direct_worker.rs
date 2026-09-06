@@ -716,7 +716,7 @@ fn attempt_artifact_dir(
         fs::create_dir(&task_root)
             .map_err(|error| runtime_error(format!("artifact root unavailable: {error}")))?;
         #[cfg(unix)]
-        fs::set_permissions(&task_root, fs::Permissions::from_mode(0o700))
+        fs::set_permissions(&task_root, fs::Permissions::from_mode(0o2750))
             .map_err(|error| runtime_error(format!("artifact root unavailable: {error}")))?;
     }
     let path = task_root.join(format!("attempt-{attempt_id:05}"));

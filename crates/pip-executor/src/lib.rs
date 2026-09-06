@@ -4,12 +4,14 @@
 
 mod checkout;
 mod cursor;
+mod isolated_workspace;
 mod process;
 mod provider;
 mod publication;
 
 pub use checkout::{CheckoutError, CheckoutReconciler};
 pub use cursor::{CursorExecutionError, CursorExecutor, CursorTask};
+pub use isolated_workspace::{IsolatedWorkspace, workspace_git_environment};
 mod worktree;
 
 pub use process::{

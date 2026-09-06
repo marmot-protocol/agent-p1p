@@ -77,6 +77,8 @@ fn direct_worker_template_has_provider_state_but_no_controller_credentials() {
     let timer = include_str!("../../../packaging/systemd/pip-direct-worker@.timer");
 
     assert!(service.contains("User=pip-worker"));
+    assert!(service.contains("Group=pip-control"));
+    assert!(service.contains("UMask=0007"));
     assert!(service.contains("RequiresMountsFor=/var/lib/pip/worktrees"));
     assert!(service.contains("ConditionPathIsMountPoint=/var/lib/pip/worktrees"));
     assert!(service.contains("Environment=HOME=/var/lib/pip/provider-home"));

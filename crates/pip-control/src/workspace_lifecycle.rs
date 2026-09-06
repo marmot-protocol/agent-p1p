@@ -90,6 +90,17 @@ impl GitWorkspaceRetirement {
 
 impl WorkspaceRetirement for GitWorkspaceRetirement {
     fn retire(&self, spec: &WorktreeRetirementSpec) -> Result<RetirementResult, AllocationError> {
+        // Standalone case repositories have no registration in the private
+        // cache. Keep legacy linked-worktree retirement for preserved history.
+        if spec.path().join(".git").is_dir() {
+            return pip_executor::IsolatedWorkspace::new(
+                ProcessGitRunner,
+                "git",
+                Duration::from_secs(60),
+                4 * 1024 * 1024,
+            )?
+            .retire(spec);
+        }
         self.retirer.retire(spec)
     }
 }

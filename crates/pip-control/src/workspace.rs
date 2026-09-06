@@ -8,8 +8,8 @@ use std::time::Duration;
 use pip_contracts::WorkerResult;
 use pip_core::{CaseId, GitSha, IssueNumber, RepositoryId, WorkflowVersion};
 use pip_executor::{
-    AllocationError, BoundedProcessRunner, CheckoutError, CheckoutReconciler, ProcessGitRunner,
-    WorktreeAllocator, WorktreeSpec, sanitized_environment,
+    AllocationError, BoundedProcessRunner, CheckoutError, CheckoutReconciler, IsolatedWorkspace,
+    ProcessGitRunner, WorktreeSpec, sanitized_environment,
 };
 use pip_store::{ClaimedEffect, Store, StoreError, StoredCase};
 
@@ -146,13 +146,13 @@ impl WorkspacePreparer for GitWorkspacePreparer {
             case_id,
             expected_head,
         )?;
-        let allocator = WorktreeAllocator::new(
+        let allocator = IsolatedWorkspace::new(
             ProcessGitRunner,
             "git",
             Duration::from_secs(60),
             4 * 1024 * 1024,
         )?;
-        allocator.allocate(&spec)?;
+        allocator.allocate(&spec, &expected_remote)?;
         reconciler.verify_worktree(spec.path(), spec.branch(), expected_head)?;
         Ok(())
     }

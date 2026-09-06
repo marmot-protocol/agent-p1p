@@ -74,6 +74,7 @@ test "$(stat -c '%U:%G:%a' /var/lib/pip/worktrees)" = root:root:770
 
 install_version /work/releases/v0
 first_target=$(readlink -f /opt/pip/current)
+bash /source/tests/lifecycle/workspace-handoff.sh
 test -x /opt/pip/current/bin/pip-control
 test "$(stat -c '%U:%G:%a' /var/lib/pip/ledger.db)" = pip-control:pip-control:600
 test "$(stat -c '%U:%G:%a' /var/lib/pip)" = pip-control:pip-control:710
