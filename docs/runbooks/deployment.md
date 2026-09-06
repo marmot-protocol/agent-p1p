@@ -1,567 +1,165 @@
-# Target deployment and rollback runbook
+# Deployment and recovery
 
-**Status:** Executable Rust release and lifecycle runbook; production activation remains unauthorized
+This runbook describes the Rust installation boundary, not permission to act on
+a host. Check [implementation status](../implementation-status.md) and live
+state before changes. Historical evidence is under ../evidence/; old numbered
+activation scripts are not the normal deployment interface.
 
-This runbook defines the evidence and ordering the Rust implementation must
-satisfy. The release builder, pinned installer, and disposable-systemd harness
-are executable. A passing harness does not authorize installation on a live
-host or MDK activation.
+## Normal release path
 
-The legacy `scripts/install-control-plane.sh` is not the target installer.
+A push to master automatically runs .github/workflows/release.yml. Rust tests,
+Clippy and the disposable systemd lifecycle gate must pass before the separate
+signing job can access its protected environment secret. There is no routine
+human approval gate for building releases. PR workflows cannot use this path.
 
-## Release artifacts
+The artifact is named pip-FULL_SOURCE_COMMIT. Its envelope contains:
 
-A release cohort contains:
+- pip-release.tar.gz, with the binary, canonical skills, policy seed, units,
+  signed manifest and signature;
+- the exact installer, also covered by the signed manifest;
+- SHA256SUMS for transfer checking.
 
-- the `pip-control` Rust binary for the target triple;
-- canonical skills and language-neutral contracts;
-- systemd units or deterministic unit templates;
-- configuration schemas and database migration metadata;
-- an immutable release manifest; and
-- a verifiable signature/attestation for that manifest.
+The signed manifest binds the source commit, binary and resource digests.
+Outer checksums alone are not authenticity proof. The permanent trust anchor
+on Pirate is /etc/pip-release-public.key; its reviewable source is
+config/release-public.key. Do not generate a fresh signing key for an ordinary
+upgrade. Key provisioning or rotation is a separate operator action.
 
-The cohort contains the non-dispatching shadow unit plus inactive controller,
-direct-worker, and Hermes-gateway templates. The installer installs these unit
-files but never enables or starts them. Installed code is not activation
-authority.
+Building an artifact does not deploy it, select an issue, enable work or merge
+a PR. Live authority remains separate.
 
-The manifest binds:
+## Verify before installation
 
-```json
-{
-  "release_format": 1,
-  "version": "...",
-  "source_commit": "40 lowercase hex",
-  "cargo_lock_sha256": "64 lowercase hex",
-  "target": "...",
-  "rust_toolchain": "...",
-  "binary_sha256": "64 lowercase hex",
-  "resources_sha256": "64 lowercase hex",
-  "workflow_version": 3,
-  "contract_version": 2,
-  "built_at": "RFC3339 timestamp",
-  "builder_identity": "..."
-}
-```
+Download the artifact for one successful run and verify its exact source.
+Extract and transfer it with file modes preserved; for example, scp -p
+preserves modes while a plain copy may not. Verify on the destination host
+with an already-trusted executable and the permanent public key:
 
-Trusted CI derives `source_commit`; the installer does not accept a free-form
-operator assertion that can disagree with the artifact.
-
-The checked-in `.github/workflows/release.yml` automatically builds signed
-deployment artifacts on pushes to `master`, with manual dispatch retained for
-rebuilds. It has no operator inputs: each run checks out the exact
-triggering SHA without persisted GitHub credentials and derives the deployment
-identifier as `git-<12-character commit>`. Dispatches from any other branch fail
-closed. The workflow requires the `pip-release` environment and externally
-provisioned `PIP_RELEASE_SIGNING_KEY_BASE64` secret. The corresponding public
-trust anchor is the reviewable `config/release-public.key` file; it is not a
-secret. The workflow runs the Rust and disposable systemd gates without access
-to the protected environment. Only after both verification jobs pass can the
-protected job materialize the base64-encoded
-32-byte signing seed, build and verify the cohort, and upload its deterministic
-tar envelope with the exact installer and outer checksums. The installer is
-itself an artifact in the signed manifest; the top-level executable is copied
-byte-for-byte from that verified resource. The signing-key secret is the
-canonical base64 seed itself, not a second base64 encoding.
-The `pip-release` environment restricts signing to the `master` branch and has
-no required reviewer or wait timer. CI verification is the build/signing gate;
-JG removed routine human build approvals on 2026-09-06. The key remains an
-environment secret, and no PR-triggered workflow can use this release path.
-Configuring or rotating the secret remains a separate operator action. Anyone
-who can change `master` can change signing code: repository write access is the
-trust boundary, not the fact that this repository is public.
-
-Automatic artifact production does not install onto Pirate, enable intake,
-resume a canary, or authorize a merge. Those live changes remain separately
-scoped operations; MDK still stays in shadow merge mode.
-
-## Pre-release gates
-
-All gates bind to the exact release commit:
-
-1. formatting and lint;
-2. unit and property tests for the pure state machine;
-3. contract, store, migration, and adapter tests;
-4. offline end-to-end restart/replay simulations;
-5. release build from the locked dependency graph;
-6. artifact/manifest digest verification;
-7. disposable-systemd clean install;
-8. idempotent reinstall;
-9. upgrade from the last supported release;
-10. injected-failure rollback at every mutation stage;
-11. service restart and database recovery;
-12. non-dispatching live reconciliation smoke; and
-13. review of the exact manifest and cohort digests.
-
-Passing local tests does not imply these lifecycle gates or live shadow evidence
-passed.
-
-The signed `ab16528` artifact was additionally verified using both actual
-published releases and a private copy of Pirate's schema-7 ledger in a
-network-disabled Debian 13 systemd container. See the
-[schema-8 upgrade/recovery evidence](../evidence/2026-09-05-schema8-release-recovery.md).
-Published Ubuntu-built binaries require at least the observed `GLIBC_2.39`
-symbol version; the Debian-12 CI harness builds its own binary and does not
-prove those published artifacts can run on Debian 12. Validate the actual
-artifact on the intended host baseline.
-
-The disposable lifecycle gate is:
-
-```bash
-scripts/test-systemd-lifecycle.sh
-```
-
-It builds three independently signed cohorts from one exact candidate commit,
-then proves clean install, reinstall, upgrade, host-finalization rollback, and
-restart recovery in a privileged systemd container. It asserts that intake,
-dispatch, and the reconciliation timer remain disabled after a fresh install.
-Installs and upgrades run under umask `077`, with reinstall under `000`.
-Transient systemd commands execute the installed binary as each of
-`pip-control`, `pip-worker`, and `pip-ingress`, and verify access to the source
-descriptor, policy, and skills without granting worker/ingress ledger access.
-
-Installed release directories (including the `releases` collection and every
-artifact parent) must be real directories with mode `0755`. The Rust installer
-sets these modes explicitly on newly created directories, independent of the
-operator's umask; signed artifact file modes remain unchanged. Incomplete
-staging trees remain private until copying finishes. Private source cohorts,
-state directories, and credentials are not made public. An existing release
-with directory permission drift is rejected before an idempotent success or
-pointer switch; the installer does not silently repair that tree. Diagnose and
-repair only the exact verified release if this check fails, never recursively
-chmod `/opt/pip` or `/var/lib/pip`.
-
-## Build and verify commands
-
-Create an offline Ed25519 signing key outside the repository, mode `0600`, and
-derive its public key with a trusted local build:
-
-```bash
-target/release/pip-control derive-public-key \
-  --signing-key /secure/release-signing.key
-```
-
-Store the emitted public key in a separate root-owned file. Build only from a
-clean reviewed checkout:
-
-```bash
-scripts/build-rust-release.sh \
-  --output /staging/pip-release \
-  --version 0.1.0 \
-  --built-at 2026-08-20T12:00:00Z \
-  --builder-identity reviewed-builder \
-  --signing-key /secure/release-signing.key \
-  --public-key /secure/release-public.key
-```
-
-Before privilege escalation, use a trusted `pip-control` binary to verify the
-cohort and retain its JSON output:
-
-```bash
-pip-control verify-release \
+~~~sh
+sudo /opt/pip/current/bin/pip-control verify-release \
   --release-root /staging/pip-release/root \
   --manifest /staging/pip-release/release-manifest.json \
   --signature /staging/pip-release/release-manifest.sig \
-  --public-key /secure/release-public.key
-```
+  --public-key /etc/pip-release-public.key
+~~~
 
-The output includes the signed source commit plus exact manifest and binary
-SHA-256 values. Those two digests are mandatory inputs to the root installer;
-the installer copies the cohort into root-only staging and checks them again
-before it executes the staged binary.
+The JSON result supplies the manifest and binary SHA-256 values. Check the
+source commit against the selected run. A mode, digest or signature failure is
+a stop, not an invitation to bypass verification.
 
-## Host prerequisites
+Copy only the verified cohort's installer to the root-owned executable path,
+then verify that copy's digest against the signed resource before running it.
+For the first host install, establish the trusted verifier/public-key bootstrap
+explicitly; do not assume an unverified downloaded executable can verify itself.
 
-- Supported Linux/systemd version and architecture.
-- A compatible Hermes executable, verified through capability probes rather
-  than an assumed version string alone. Pip supplies its own isolated gateway
-  unit and does not reuse a personal gateway.
-- Required provider CLIs and exact configured models available.
-- Root-owned credential files with documented mode and size bounds.
-- Dedicated no-login `pip-control` and `pip-worker` identities. Only the
-  former can open the ledger; only the latter receives direct-provider state.
-- Sufficient disk for a new release, database snapshot, and rollback release.
-- A real mount at `/var/lib/pip/worktrees`, backed by dedicated workspace
-  storage rather than the operating-system filesystem. The checked-in MDK
-  policy requires at least 500 GiB free and retains terminal worktrees for
-  86,400 seconds.
+## Upgrade an existing host
 
-On Pirate, `/mnt/raid0` is the intended NVMe workspace filesystem. Prepare a
-bind mount before installing Pip. Because the service identities do not exist
-yet, the bootstrap directories begin as root-owned. The installer adopts only
-the exact empty layout below after verifying the ownership, modes, mount point,
-and distinct filesystem; it rejects any extra entry or existing worktree:
+1. Record installed source, current release target, active policy and service
+   states. Inspect ledger attempts and actual worker processes independently.
+2. Stop new dispatch. Let active workers finish, or use an explicitly authorized
+   termination/recovery procedure. Do not kill a running Hermes child merely
+   to upgrade Pip.
+3. Quiesce the controller and consumer before taking a consistent ledger
+   snapshot. Isolated ingress may continue spooling verified deliveries.
+4. Run the verified root-owned installer with the digests from verification:
 
-```bash
-sudo install -d -m 0755 /mnt/raid0/pip
-sudo install -d -m 0770 /mnt/raid0/pip/worktrees
-sudo install -d -m 0755 /var/lib/pip
-sudo install -d -m 0770 /var/lib/pip/worktrees
-sudo mount --bind /mnt/raid0/pip/worktrees /var/lib/pip/worktrees
-findmnt --target /var/lib/pip/worktrees
-```
-
-Do not make the bind mount persistent until the source/target paths and
-ownership have passed the installation probe. The controller, direct worker,
-and Hermes gateway units all require this exact mount point; a plain directory
-on `/` is deliberately insufficient. Before activation, add a reviewed
-`/etc/fstab` bind-mount entry and prove an unmount/mount cycle without enabling
-any Pip unit. Pirate's `/mnt/raid0` is RAID0 and therefore capacity storage,
-not redundant storage; the authoritative ledger remains outside it and GitHub
-remains the remote source of branch/PR state.
-
-The active runtime uses a dedicated service-owned Hermes root at
-`/var/lib/pip/hermes`, with both `HERMES_HOME` and `HERMES_KANBAN_HOME`
-pointing there. The compatible Hermes gateway/dispatcher and every managed
-profile used by Pip must observe that same root. Personal operator state under
-`~/.hermes` is not an acceptable production dependency.
-
-### Pinned Hermes install on Pirate
-
-The Hermes compatibility snapshot verified on 2026-09-03 is release
-`v2026.8.31` (Hermes Agent `v0.21.0`), peeled commit
-`29112bef099274229cadff79cdff7bf7b99c4b77`. The installer at that exact commit
-has SHA-256
-`85ef536d455e51ab67aa74d79272efd49fe717597dbaadfd3cca179a905f4706`.
-Re-verify both values before a later installation rather than silently moving
-the pin.
-
-Install root-owned Hermes code separately from Pip's service-owned runtime
-state. In particular, do not point the upstream installer at
-`/var/lib/pip/hermes`: it creates initial configuration and ownership that Pip's
-strict bootstrap must treat as unmanaged. Use a credential-free installation
-home instead, skip interactive setup, bundled skills, browser components, and
-the separately downloaded Computer Use driver:
-
-```bash
-test "$(sha256sum /home/jeff/hermes-install-v2026.8.31.sh | awk '{print $1}')" = \
-  85ef536d455e51ab67aa74d79272efd49fe717597dbaadfd3cca179a905f4706
-
-sudo env HERMES_HOME=/var/lib/hermes-bootstrap \
-  /home/jeff/hermes-install-v2026.8.31.sh \
-  --branch v2026.8.31 \
-  --commit 29112bef099274229cadff79cdff7bf7b99c4b77 \
-  --skip-setup \
-  --skip-browser \
-  --skip-computer-use \
-  --no-skills \
-  --non-interactive
-
-test "$(sudo git -C /usr/local/lib/hermes-agent rev-parse HEAD)" = \
-  29112bef099274229cadff79cdff7bf7b99c4b77
-sudo env HERMES_HOME=/var/lib/hermes-bootstrap /usr/local/bin/hermes --version
-sudo env HERMES_HOME=/var/lib/hermes-bootstrap \
-  /usr/local/bin/hermes kanban create --help | \
-  grep -E -- '--workspace|--idempotency-key|--initial-status'
-sudo env HERMES_HOME=/var/lib/hermes-bootstrap \
-  /usr/local/bin/hermes gateway run --help | grep -- '--external-supervisor'
-```
-
-The verified Kanban boundary identifies boards by immutable `slug`, accepts
-typed `worktree:<path>` workspaces, exposes task identity and ownership in
-`kanban list --json`, and exposes completed attempt outcome, profile, and
-metadata in the `kanban show --json` `runs` array. Pip probes the required CLI
-flags before creating its board or any managed profile. Its custom systemd unit
-runs the gateway with `--external-supervisor`, so Hermes exits back to systemd
-for restart rather than spawning its own replacement.
-
-Credentials and provider secrets are provisioned outside this repository and
-outside the release manifest. An active repository requires three distinct
-GitHub identities: the controller/PR author, `reviewer-general`, and
-`reviewer-secperf`. The controller currently uses the dedicated machine-account
-token delivered as `github.token`. Each reviewer uses a separate private GitHub
-App. The controller receives that App's metadata plus PEM key through systemd
-credentials, creates an RS256 JWT with bounded clock skew/lifetime, and mints a
-repository-scoped installation token for that controller cycle. Reviewer tokens
-are never persisted as configuration or placed in worker profiles, prompts,
-task metadata, or environments. Git branch publication invokes the signed
-`pip-control` binary as askpass and gives Git the controller credential-file
-path, never a token value in argv or environment.
-
-Each reviewer metadata file is non-secret JSON and must bind the installation
-to the policy's numeric repository ID:
-
-```json
-{
-  "app_id": 123456,
-  "installation_id": 987654,
-  "repository_id": 1055628515
-}
-```
-
-Provision these as
-`/etc/pip/github-reviewer-general.app.json` and
-`/etc/pip/github-reviewer-secperf.app.json`. Provision the corresponding
-private keys as `github-reviewer-general.pem` and
-`github-reviewer-secperf.pem`, root-owned and mode `0600`. The two App IDs and
-installation IDs must be distinct. The controller rejects unknown metadata
-fields, zero IDs, repository drift, duplicate reviewer Apps, unsafe PEM modes,
-invalid RSA keys, failed token responses, and non-201 token endpoints before it
-opens the ledger.
-
-## Install ordering
-
-1. Resolve the exact signed release cohort.
-2. Verify manifest signature and immutable source identity.
-3. Verify every artifact digest before privilege escalation and again from the
-   root-owned staging copy.
-4. Probe host, Hermes, provider, filesystem, credential, and identity
-   prerequisites without mutation.
-   The filesystem probe must confirm `/var/lib/pip/worktrees` is a mount point,
-   resides on a different device from the ledger, and satisfies the policy's
-   free-space reserve.
-5. Quiesce dispatch and wait for or explicitly handle active leases.
-6. Snapshot:
-   - active release target;
-   - ledger and migration version;
-   - unit files and service/timer state;
-   - installed policy and resource links;
-   - Hermes profile markers/capabilities; and
-   - pending outbox/active-case summary.
-7. Install into a new root-owned content-addressed release directory.
-8. Run offline binary/resource/config probes from that exact directory.
-9. Back up the ledger and apply migrations transactionally.
-10. Install policy, unit, wrapper, and skill-link changes.
-11. Atomically switch the current release pointer.
-12. Leave the installed gateway, controller, direct-worker, and shadow timers
-    stopped unless their prior state was already enabled during an upgrade.
-13. Validate identity, ownership, socket, database, and read/write boundaries.
-14. Run non-dispatching GitHub/Hermes reconciliation and compare expected state.
-15. Restore only the prior enabled/active policy state. Never infer activation
-    from the presence of a board or label.
-
-Failure after mutation begins invokes rollback.
-
-The reviewed operator invocation is:
-
-```bash
-sudo scripts/install-rust-control-plane.sh \
+~~~sh
+sudo /usr/local/sbin/pip-install-release \
   --cohort /staging/pip-release \
-  --public-key /secure/release-public.key \
-  --manifest-sha256 MANIFEST_SHA_FROM_VERIFY_OUTPUT \
-  --binary-sha256 BINARY_SHA_FROM_VERIFY_OUTPUT
-```
+  --public-key /etc/pip-release-public.key \
+  --manifest-sha256 MANIFEST_SHA_FROM_VERIFICATION \
+  --binary-sha256 BINARY_SHA_FROM_VERIFICATION
+~~~
 
-The installer serializes with a host lock, validates or creates the isolated
-service identity, refuses unsafe directory state, installs a content-addressed
-release, uses SQLite online backup for rollback, preserves the timer's prior
-enabled/active state on upgrade, and leaves a fresh timer disabled. Its root
-transaction does not enable intake or dispatch.
+5. Verify installed provenance, ledger/history continuity, policy bytes and
+   ownership, and service access. Reconcile managed Hermes profiles only when
+   the release requires it and the runtime is quiescent.
+6. Resume only the previously authorized work. Check service results and finite
+   next timer firings, then follow the same case through ordinary reconciliation.
 
-## Rollback ordering
+The installer serializes with a host lock, copies the cohort into root-only
+staging, checks the pinned digests again, and installs a content-addressed
+release under /opt/pip/releases/. It backs up the ledger through SQLite, switches
+/opt/pip/current atomically, and restores installation snapshots on failure.
 
-1. Stop new dispatch and route consumers.
-2. Stop the failed control service.
-3. Restore unit, policy, wrapper, and resource-link snapshots.
-4. Restore the previous release pointer atomically.
-5. Restore the database only when the migration contract says downgrade is not
-   forward-readable; never overwrite new evidence casually.
-6. Reload systemd.
-7. Restore the prior enabled/active state.
-8. Reconcile without dispatch and verify ledger/board/GitHub agreement.
-9. Retain the failed release, logs, manifest, and snapshot until investigation
-   completes.
+Since source 0dcf1f9, a valid existing operator policy is preserved byte-for-byte;
+the signed paused seed is written only on first install. Invalid existing
+configuration stops installation instead of being replaced by defaults.
+Enabled/active unit state is preserved at installer entry. If the operator
+stopped services for maintenance, resumption is a separate explicit step.
 
-Rollback must not delete a worker, branch, PR, database, or release whose
-ownership is uncertain.
+Current job definitions must not be rewritten to match a release. Model,
+profile, policy-revision or skill-content changes require compatibility proof;
+the remaining frozen-job gaps are tracked in implementation status. Keep
+releases needed for rollback or retained assignments. Never reset the ledger,
+delete an attempt, or relabel an issue merely to make an upgrade proceed.
 
-## Generic MDK canary activation
+## First-install prerequisites
 
-This section is a future authorized procedure. It must not be followed until
-the remaining cutover gaps in
-[`../implementation-status.md`](../implementation-status.md) are closed and
-the active unit has passed its own install/rollback lifecycle tests.
+- Compatible Linux/systemd, architecture and libc for the actual artifact.
+  The published Ubuntu-built artifact and a binary built inside a Debian
+  lifecycle fixture are different compatibility evidence.
+- Dedicated no-login control and worker identities, validated or created by the
+  installer. The worker cannot open the ledger or controller credentials.
+- Upstream Hermes code installed separately from its service-owned state.
+  Do not fork Hermes or point its installer at Pip's managed runtime directory.
+- Exact configured provider models, authenticated outside the repository.
+  Never silently substitute an available model for the requested one.
+- A mounted workspace filesystem with the configured free-space reserve;
+  verify its boot persistence before allowing work.
+- Canonical repository caches with only policy-bound remotes. A no-checkout
+  clone intentionally has absent working files; ordinary dirty-worktree output
+  is not by itself corruption of that cache.
 
-The binary contains no canary issue. The installed MDK policy starts paused:
+Pirate currently uses /var/lib/pip/worktrees bound to /mnt/raid0/pip/worktrees.
+The latter is RAID0 capacity storage, not redundancy. The ledger is outside
+that mount. Policies specify storage reserves and terminal-workspace retention;
+never delete active work or unpreserved commits.
 
-```yaml
-repository:
-  id: 1055628515
-  owner: marmot-protocol
-  name: mdk
-  default_branch: master
-board: pip-mdk
-intake:
-  label: pip-ok
-  enabled: false
-  paused: true
-  held_issue_numbers: []
-  repository_active_limit: 1
-  global_active_limit: 1
-dispatch_enabled: false
-github:
-  automation_actor_id: 292420120
-  reviewer_general_actor_id: 323997422
-  reviewer_secperf_actor_id: 323998100
-merge:
-  mode: shadow
-  autonomous: false
-  method: squash
-max_remediation_rounds: 3
-max_case_elapsed_seconds: 86400
-max_provider_failures: 3
-max_hermes_attempts: 1
-max_repeated_finding_fingerprint: 2
-required_ci_contexts:
-  - Required CI
-workspace_storage:
-  require_distinct_filesystem: true
-  minimum_free_bytes: 536870912000
-  terminal_retention_seconds: 86400
-```
+Managed service state lives at /var/lib/pip/hermes. Both HERMES_HOME and
+HERMES_KANBAN_HOME point there. Conversational/personal Hermes is separate and
+must not be stopped or reconfigured by a Pip deployment.
 
-After reviewed release installation, but before enabling any timer:
+Pip probes supported Hermes CLI capabilities and verifies profile configuration
+through config get --json. Its dedicated gateway uses --external-supervisor.
+Historical version pins are evidence snapshots, not a requirement to maintain
+a fork or prohibit future upstream upgrades.
 
-1. Provision `/var/lib/pip/repositories/mdk` as a real checkout owned by
-   `pip-control`, with exactly one `origin` URL matching
-   `https://github.com/marmot-protocol/mdk.git`.
+## Credentials and publication
 
-   For the public MDK canary, the initial checkout is:
+The controller/PR author and two semantic review lanes use separate GitHub
+identities. On Pirate the author uses a machine-account token, while each lane
+uses a private GitHub App. Root-owned credential files reach the controller
+through systemd LoadCredential. App metadata binds app/installation/repository
+IDs; reviewer tokens are minted only when that capability is needed.
 
-   ```bash
-   sudo -u pip-control env \
-     HOME=/var/lib/pip \
-     GIT_CONFIG_GLOBAL=/dev/null \
-     GIT_CONFIG_NOSYSTEM=1 \
-     GIT_TERMINAL_PROMPT=0 \
-     git -c core.hooksPath=/dev/null \
-       -c credential.helper= \
-       -c http.proxy= \
-       -c http.extraHeader= \
-       -c http.sslVerify=true \
-       clone --no-checkout --origin origin \
-       https://github.com/marmot-protocol/mdk.git \
-       /var/lib/pip/repositories/mdk
-   ```
-2. Provision the service-owned Hermes auth file and direct-provider state
-   outside the release. Do not copy tokens into policy or profiles.
-3. Run the exact installed bootstrap as `pip-control`:
+Workers do not get GitHub credentials. Builders commit locally. The controller
+uses the verified askpass executable, policy-bound remote and exact head lease
+to publish. Git hooks, credential helpers, URL rewrites and other repository
+configuration cannot alter credential-bearing publication.
 
-   ```bash
-   sudo -u pip-control env \
-     HOME=/var/lib/pip/hermes/home \
-     HERMES_HOME=/var/lib/pip/hermes \
-     HERMES_KANBAN_HOME=/var/lib/pip/hermes \
-     /opt/pip/current/bin/pip-control bootstrap-runtime \
-       --policy /etc/pip/repositories/mdk.json \
-       --hermes-root /var/lib/pip/hermes \
-       --skills-root /opt/pip/current/share/pip/skills \
-       --auth-source /var/lib/pip/hermes/auth.json \
-       --hermes /usr/local/bin/hermes
-   ```
+Keep provider credentials in their own runtime state, never in policies, task
+bodies, Git remotes, source files or release manifests.
 
-4. Retain the JSON capability/bootstrap output and verify every effective
-   profile binding plus board visibility from the service-owned root.
-5. Verify all three numeric GitHub actor IDs against live account/App evidence,
-   and verify `Required CI` is still the active GitHub Actions-sourced status
-   check in the MDK default-branch ruleset. Empty or drifted required contexts
-   are not acceptable canary policy.
-6. Provision `/etc/pip/github-webhook.secret` as a root-owned `0600` file.
-   The installer creates a no-login `pip-ingress` identity and this spool
-   boundary:
+## Canary and rollback
 
-   ```text
-   /var/spool/pip-webhooks                         root:root              0711
-     receipts/                                    pip-ingress:pip-control 2750
-     pending/                                     pip-ingress:pip-control 2770
-     processed/                                   pip-control:pip-control 0711
-   ```
+For a new canary, verify the current issue, scope, authorizing label actor,
+repository/model bindings, empty or expected queue, storage and service health.
+Authorize only the chosen issue through the generic label workflow. Maintain
+the current bounded concurrency and human-only merge policy. A board's existence
+does not authorize work.
 
-   `pip-webhook-ingress.service` receives only the webhook secret through
-   `LoadCredential`. It cannot read the GitHub token, ledger, repository,
-   Hermes root, provider state, or worker queues. The receiver binds only to
-   loopback and atomically acknowledges validated raw requests into the
-   delivery-ID-addressed spool:
+On an installation failure, inspect the retained release/ledger/unit snapshots
+and failure report before retrying. Preserve new evidence; do not restore an
+old database casually after workers or consumers have resumed. Stop an uncertain
+worker only after establishing its identity, not from a PID alone.
 
-   ```bash
-   pip-control webhook-serve \
-     --listen 127.0.0.1:8787 \
-     --spool /var/spool/pip-webhooks \
-     --webhook-secret /run/credentials/INGRESS/github-webhook.secret
-   ```
+Report installed source, ledger case/attempt state, real execution observations,
+PR head, CI, required reviews and final disposition separately. A successful
+installation or running process is not an end-to-end success.
 
-   It accepts only `POST /github` with one each of `X-GitHub-Delivery`,
-   `X-GitHub-Event`, and `X-Hub-Signature-256`, JSON content, a valid HMAC, and
-   at most 4 MiB of raw body. Authenticated `issues` events are durably spooled.
-   An authenticated GitHub `ping` is answered with `204 No Content` without
-   creating a receipt or workflow input; all other event types fail closed.
-   Requests have a ten-second deadline and four-request concurrency bound. It
-   has no GitHub token, ledger, repository, Hermes, or provider access.
-
-   `pip-webhook-consumer@mdk.timer` runs a separate `pip-control` oneshot at a
-   bounded rate. Each invocation reads at most one canonical pending envelope,
-   verifies its base64 encoding and SHA-256 digest, revalidates the HMAC, and
-   re-reads the exact issue from GitHub. It commits the immutable delivery and
-   intake result before atomically renaming the `pending/` directory entry into
-   `processed/`; the immutable `receipts/` hard link remains in place. GitHub
-   outages and crashes leave the item pending; a retry converges through ledger
-   delivery-ID replay protection.
-   The consumer's systemd writable sandbox names the common spool root so the
-   hard link remains on one mount. Directory ownership and modes above still
-   prevent the controller identity from modifying `receipts/`.
-
-   For a manual diagnostic, the equivalent direct boundary remains:
-
-   ```bash
-   pip-control webhook-intake \
-     --policy /etc/pip/repositories/mdk.json \
-     --database /var/lib/pip/ledger.db \
-     --github-token /run/credentials/INGRESS/github.token \
-     --webhook-secret /run/credentials/INGRESS/github-webhook.secret \
-     --payload /run/pip-webhooks/DELIVERY.raw \
-     --delivery-id X_GITHUB_DELIVERY \
-     --event X_GITHUB_EVENT \
-     --signature X_HUB_SIGNATURE_256
-   ```
-
-   The paths and header placeholders are ingress-specific; never substitute a
-   decoded/re-encoded payload. Do not enable either webhook unit until the
-   secret, trusted TLS forwarding path, service-identity probes, and active
-   repository policy are ready. The periodic controller remains the
-   missed-delivery reconciler.
-7. Run non-dispatching GitHub, Hermes, and direct-provider health/recovery
-   probes.
-
-Only after those checks and separate activation authorization:
-
-1. Verify the legacy pipeline will not intake the selected issue.
-2. Select one ordinary, repository-local, non-sensitive issue suitable for the
-   planner to validate; do not encode it in policy.
-3. Confirm no other open MDK issue currently satisfies Pip intake policy.
-4. Enable repository intake and dispatch with both active limits set to one.
-5. Start `pip-webhook-ingress.service` and `pip-hermes-gateway.service`, then
-   enable the `pip-webhook-consumer@mdk.timer`, `pip-controller@mdk.timer`, and
-   `pip-direct-worker@mdk.timer` units.
-6. Have a trusted actor apply `pip-ok` to that one issue.
-7. Observe the generic intake path create exactly one case and planner task.
-8. Keep merge mode `shadow` and autonomous merge false throughout the trial.
-
-If another issue becomes eligible, concurrency prevents its activation but the
-operator should remove the unintended authorization and record the discrepancy.
-
-## Canary evidence report
-
-Report separately:
-
-- installed manifest/source/binary identity;
-- service and resource health;
-- current immutable case revision and state;
-- active or completed task/run identities;
-- exact PR head, CI, and review evidence;
-- discrepancies, retries, escalations, and provider health;
-- final shadow recommendation; and
-- publication/merge state.
-
-Do not describe a shadow recommendation as merge-ready publication, and do not
-describe current green checks as proof that historical or other-head gates
-passed.
-
-## Deactivation
-
-1. Disable intake and dispatch in policy.
-2. Reconcile and verify no task can be newly activated.
-3. Preserve active task evidence and choose explicit finish/terminate handling.
-4. Snapshot ledger, policies, installed manifest, units, profiles, and board.
-5. Stop/disable services only after the snapshot is verified.
-6. Do not remove the board, case database, release directories, branches, or PRs
-   without separate explicit approval.
+The repeatable Linux gate is scripts/test-systemd-lifecycle.sh. It covers fresh
+install, reinstall, upgrade, injected rollback, reboot recovery, actual
+service-identity workspace handoff, JIT requirements and policy preservation.
+Run it for executable lifecycle changes, and still verify the actual signed
+artifact on its intended host.

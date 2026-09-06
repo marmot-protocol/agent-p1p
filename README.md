@@ -27,7 +27,7 @@ reference, not an installable runtime; it will be removed after cutover proof.
   canonical target architecture and invariants.
 - [`docs/current-python-canary.md`](docs/current-python-canary.md) — accurate
   inventory of the legacy Python prototype and its gaps.
-- [`docs/control-flow.md`](docs/control-flow.md) — target event, state, task,
+- [`docs/control-flow.md`](docs/control-flow.md) — workflow and source map,
   review-loop, and recovery flow.
 - [`docs/adr/0001-rust-control-plane.md`](docs/adr/0001-rust-control-plane.md) —
   decision to implement the target runtime in Rust.
@@ -36,8 +36,8 @@ reference, not an installable runtime; it will be removed after cutover proof.
   are projections of committed intent.
 - [`docs/runbooks/deployment.md`](docs/runbooks/deployment.md) — target build,
   provenance, install, rollback, and canary-activation contract.
-- [`docs/migration-roadmap.md`](docs/migration-roadmap.md) — incremental Python
-  reference-to-Rust migration with exit criteria.
+- [`docs/migration-roadmap.md`](docs/migration-roadmap.md) — remaining cutover,
+  simplification and Python-retirement gates.
 - [`docs/implementation-status.md`](docs/implementation-status.md) — current
   executable inventory, inert boundaries, and remaining cutover work.
 - [`docs/completion-audit.md`](docs/completion-audit.md) — historical coverage

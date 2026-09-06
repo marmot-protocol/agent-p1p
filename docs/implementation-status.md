@@ -99,8 +99,7 @@ Further local changes awaiting release:
    retained immutable evidence. Remove formatting-sensitive Hermes assumptions.
 5. Simplify storage/maintenance and normal operating commands; retire obsolete
    runtime paths and defer automatic merge code without losing historical reads.
-6. Verify release and real service-identity execution, then select/authorize one
-   issue and run planner, builder, CI, required independent reviewers,
+6. Finish the authorized live issue through builder, CI, required independent reviewers,
    remediation if needed, and final review to a human-ready PR.
 7. Recheck exact PR head, required reviews and CI; do not merge.
 8. After the cutover proof, remove the legacy Python runtime and obsolete CI/docs,
