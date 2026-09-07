@@ -13,8 +13,8 @@ passed required CI and received independent App reviews: general requested
 changes; security/performance approved. Builder attempt 14 produced an accepted
 remediation at `625bb4299187139461a64fd6eb5337ea35804261`.
 
-Signed Pip `8d3dde498fe60da1b4be9b5f2728610e6cdedcdb` is installed on Pirate.
-Its normal publication action pushed that exact commit and updated the existing
+Signed Pip `8ca4e7422e49269aa8c8720791d1ac5ccd76fb29` is installed on Pirate.
+The earlier `8d3dde4` publication action pushed that exact MDK commit and updated the existing
 PR, preserving accepted history. Fresh GitHub CI run `34104104224` passed; the
 case is `FINAL_REVIEW`, revision 26. Native task `t_d2cdf42a` and direct attempt
 15 passed required general and Kimi re-reviews; App approvals `5130401272` and
@@ -24,12 +24,14 @@ both PR commits are unsigned. Signing/publication identity needs correction;
 replacement commits require fresh CI and reviews. The holistic final reviewer
 has not started. The PR is still draft; no merge occurred.
 
-Controller-only signing and audited publication-only recovery are now implemented
-through source `36e3a66e67fb53676e957690408967f246862ba1`. CI `34125632649` and
-signed deployment build `34125632730` passed, including actual Linux signing
-credentials/sandbox and root/queue/service-state recovery checks. Pirate still
-runs `8d3dde4`; the approved new signing key is not yet registered on GitHub.
-Source acceptance is not signed live publication or completion of the final gate.
+Controller-only signing, audited publication-only recovery and case isolation
+are installed through `8ca4e74`. CI `34129502446` and signed deployment
+`34129502489` passed, including actual Linux signing credentials/sandbox and
+root/queue/service-state recovery checks. Pirate's schema 8 to 10 upgrade
+preserved all data in 14 existing tables and the active policy bytes. Resumed
+format-2 controller cycles succeed but still report `PR_MERGE_STATE:blocked`.
+The approved new signing key is not yet registered on GitHub. Installation is
+not signed live publication or completion of the final gate.
 
 Live acceptance gates (partially satisfied):
 
@@ -51,11 +53,11 @@ Live acceptance gates (partially satisfied):
 | Dynamic bounded workflow; human-only merge | Live remediation is exercised. Alternate in-process direct execution and autonomous-merge coordinator/API were removed. Final readiness remains unproven live. |
 | Policy-defined repositories, identities and exact models | Configured reviewer instances executed live without intentional substitution. Repository-scoped effect claiming is installed with cross-repository regression tests; multi-repository live operation is not proven. |
 | Independent required and comparison reviews | Required and shadow results accepted independently; comparisons do not consume work-failure allowance. Required pending jobs have priority. An already-running comparison can still delay the serial worker. |
-| Failure isolation and ordinary recovery | Completed-result collection precedes GitHub access. Confirmed non-start backoff and bounded audited retry exist. New source scopes checks, acceptance and effects by case before selection; regression tests cover unavailable peers, malformed retained results and required-work priority across cases. Deployment/live proof, shared capability/startup isolation and ordinary pause/resume remain incomplete. |
+| Failure isolation and ordinary recovery | Completed-result collection precedes GitHub access. Confirmed non-start backoff and bounded audited retry exist. Installed code scopes checks, acceptance and effects by case before selection; regression tests cover unavailable peers, malformed retained results and required-work priority across cases. Healthy live cycles pass; live fault-injection proof, shared capability/startup isolation and ordinary pause/resume remain incomplete. |
 | Immutable jobs across upgrades | Saved dispatch definitions are reused. Full preservation of actual execution settings and skill content across upgrades remains incomplete. Restrictive controls must still apply immediately. |
-| Compact evidence with durable provenance | Installed exports deduplicate accepted event/run payloads and provide role-specific indexes. Undeployed schema-10 storage retains each distinct input bundle once per frozen batch and references its exact jobs from persisted projections/outbox messages. Legacy records remain untouched. Rust tests, adapter compatibility, corruption/replay tests, Clippy and Linux release validation pass; deployment and live proof remain gates. |
-| Safe workers and storage | Real service-identity builder execution and controlled publication work; managed storage and credential isolation are installed. Fresh native re-review ran tests successfully in its scratch layout. The direct adapter now assigns short private per-execution temporary storage, with real socket/permission/cleanup regression tests; deployment and live-provider proof remain pending. Cleanup must remain independent of unrelated work. |
-| Small packaging and operating surface | Signed install/rollback, policy preservation and schema-8 ordered migrations are verified. Remove obsolete operational scaffolding; normal operation must not require case-specific shell scripts. |
+| Compact evidence with durable provenance | Installed exports deduplicate accepted event/run payloads and provide role-specific indexes. Schema-10 storage retains each distinct input bundle once per frozen batch and references its exact jobs from persisted projections/outbox messages. The live upgrade preserved legacy records. Rust tests, adapter compatibility, corruption/replay tests, Clippy and Linux release validation pass; a new live dispatch remains unproven. |
+| Safe workers and storage | Real service-identity builder execution and controlled publication work; managed storage and credential isolation are installed. Fresh native re-review ran tests successfully in its scratch layout. The installed direct adapter assigns short private per-execution temporary storage, with real socket/permission/cleanup regression tests; a live-provider run under this release remains pending. Cleanup must remain independent of unrelated work. |
+| Small packaging and operating surface | Signed install/rollback, active-policy preservation and ordered migrations through schema 10 are verified. Remove obsolete operational scaffolding; normal operation must not require case-specific shell scripts. |
 | Retire legacy Pip Python | Pending complete live cutover proof. Keep upstream Hermes and useful small probes/fixtures; remove the obsolete Pip runtime, packaging and CI rather than maintaining two implementations. |
 | Final handoff | Pending exact-head readiness verification, documentation reconciliation and removal of temporary operator elevation. Never merge automatically. |
 
@@ -66,10 +68,10 @@ Linux service lifecycle tests. Installing that cohort preserved the stopped
 ledger and paused policy byte-for-byte. These checks prove this deployment, not
 the entire workflow or all architecture rows above.
 
-A subsequent local review-publication change lets either accepted lane publish
+A subsequent installed review-publication change lets either accepted lane publish
 when the other App is unavailable, without accepting partial ledger evidence.
 Its regression test, full Rust suite and Clippy passed; source `240ff50` is
-pushed, but that change is not installed in this snapshot.
+pushed and included in `8ca4e74`; a live App-outage replay remains unproven.
 
 Historical installation, rollback, ingress and sandbox observations remain in
 [`docs/evidence/`](evidence/). Re-read current code, ledger, service state, exact

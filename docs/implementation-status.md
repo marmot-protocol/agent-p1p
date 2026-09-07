@@ -8,11 +8,13 @@ experiments remain in Git history and [evidence/](evidence/).
 
 ## Live checkpoint
 
-Pirate was rechecked and runs `8d3dde498fe60da1b4be9b5f2728610e6cdedcdb`, ledger
-schema 8. CI `34103318222` and signed deployment `34103318326` passed; installation
-preserved the stopped ledger and paused policy byte-for-byte. The dedicated
-controller, direct-worker and webhook-consumer timers are active. No `pip-worker`
-process was running at inspection. Refresh this dated evidence before mutation.
+Pirate was rechecked and runs `8ca4e7422e49269aa8c8720791d1ac5ccd76fb29`, ledger
+schema 10. CI `34129502446` and signed deployment `34129502489` passed. Installation
+preserved all data in the 14 existing ledger tables and the active policy bytes;
+only schema metadata/constraints changed. The dedicated controller, direct-worker
+and webhook-consumer timers are active, with repeated firings and finite next
+runs verified. No `pip-worker` process was running at inspection. Refresh this
+dated evidence before mutation. See the [deployment evidence](evidence/2026-09-07-case-isolation-deployment.md).
 Conversational Hermes is separate and untouched; Hermes remains upstream.
 
 MDK #993 produced draft [PR #1726](https://github.com/marmot-protocol/mdk/pull/1726),
@@ -61,25 +63,26 @@ thinking/high. Use exact policy/provider identifiers, never substitute models.
 
 These are partial gates, not end-to-end or complete lean-architecture acceptance.
 
-## Source implemented, not deployed
+## Recent deployed changes and remaining live proof
 
-All rows below are descendants of the installed release. Source tests do not
-prove installation, Pirate migration or a live provider run.
+The changes below are included in the installed release. Installation and healthy
+idle reconciliation do not prove every outage/replay path or a live provider run.
 
 | Change | Source | Remaining live proof or scope |
 |---|---|---|
 | Independent controller phase reporting | `07a0cd9` | Live outage drill; extended by the case-scoped source changes below |
 | Attempt both accepted review-lane publications independently | `240ff50` | App-outage replay; acceptance still requires both required lanes |
-| One installer unit list instead of repeated operations | `5ca4ae3` | Installation of the newer cohort |
-| Case-scoped finding IDs, immutable schema-9 migration | `165af50` | Pirate migration with history preserved |
-| One evidence bundle per frozen batch, exact job references, schema 10 | `8345aad` | Live dispatch; historical rows stay unchanged and handoff files still carry bounded inputs |
+| One installer unit list instead of repeated operations | `5ca4ae3` | Installed; current services resumed successfully |
+| Case-scoped finding IDs, immutable schema-9 migration | `165af50` | Pirate migration verified with all existing table data preserved |
+| One evidence bundle per frozen batch, exact job references, schema 10 | `8345aad` | Schema installed; new live dispatch remains unproven; historical rows stay unchanged |
 | Short private per-execution TMPDIR and cleanup | `a8bdb4c` | Live Cursor/provider execution |
-| One authorization snapshot for decision and evidence; unrelated revocations survive an outage | `6917c81` | Extended by case-scoped advancement below; installation remains pending |
-| Human-readable plans, reviews and PR descriptions | `1676a39` | Deployment; existing GitHub text has not been rewritten |
-| Controller signing, retained source commits and exact source/published-head binding | `b326a0a` | Key registration, deployment, signed publication and fresh CI/reviews |
-| Audited publication-only recovery of an accepted unsigned build | `36e3a66` | Deployment and live recovery |
+| One authorization snapshot for decision and evidence; unrelated revocations survive an outage | `6917c81` | Installed with case-scoped advancement; live outage drill remains |
+| Human-readable plans, reviews and PR descriptions | `1676a39` | Installed; existing GitHub text has not been rewritten |
+| Controller signing, retained source commits and exact source/published-head binding | `b326a0a` | Installed; key registration, signed publication and fresh CI/reviews remain |
+| Audited publication-only recovery of an accepted unsigned build | `36e3a66` | Installed; live recovery remains |
+| Case-scoped advancement, result selection and required-work scheduling | `8ca4e74` | Healthy format-2 cycles observed; live peer-outage drill remains |
 
-The next source checkpoint replaces the repository-wide advancement veto with
+The installed controller replaces the repository-wide advancement veto with
 explicit case selection for authorization, bounds, takeover, result acceptance,
 CI, publication and dispatch. SQL selects ownership before leasing or decoding
 projection payloads; direct collection selects the durable attempt's case before
@@ -90,26 +93,19 @@ Active `controller-cycle` reports use format 2: per-case observations in `cases`
 and shared queue selection in `direct_dispatch`; paused reports are unchanged.
 This adds no schema or service. Local regression tests cover cross-case selection,
 authorization outages, healthy CI advancement, required-work priority and retained
-malformed evidence. It is not deployed; global storage/queue capability failures,
-startup credential dependencies and already-running comparisons remain separate
+malformed evidence. Global storage/queue capability failures, startup credential
+dependencies and already-running comparisons remain separate
 limitations, not evidence of complete failure isolation.
 
-Signing integration `b326a0aff27c0ae1d46b94b95bb6d7aa6e2e3446` passed CI
-`34123194095` and deployment build `34123194049`, including
-`CONTROLLER_SIGNING_CREDENTIAL_SANDBOX_OK` under the real Linux service sandbox.
-Recovery `36e3a66e67fb53676e957690408967f246862ba1` passed local publication,
-builder/review recovery, CLI, signed final-preflight, state-machine and all-target
-Clippy checks. CI `34125632649` and signed deployment `34125632730` both passed,
-including the real root/queue/service-state checks, controller signing sandbox,
-two-identity workspace handoff and install/reinstall/upgrade/rollback/restart gates.
-The cohort is staged on Pirate at
-`/home/jeff/.cache/pip-deployments/36e3a66e67fb53676e957690408967f246862ba1/run-34125632730/pip-release`.
-Both local and already-installed Pirate verifiers accepted all 26 artifacts with
-the permanent trust anchor: manifest
-`16dce33b09a5b6b8fdbd2d27953c9052e872c1b6a29fad8b7c1caeb24297b652`, binary
-`8a77497903d1e76e9fd2ad4663076c91e9ab6e856a74e1210244a88c4fb16327`.
-This is verified staging, **not installation**; no service, policy or canary head
-was changed by staging.
+The installed cohort passed Linux root/queue/service-state checks, controller
+signing credentials/sandbox, two-identity workspace handoff and
+install/reinstall/upgrade/rollback/restart gates. The full Rust suite passed on
+the exact source in CI; final local direct-worker tests and all-target/all-feature
+Clippy passed as well. Its 26 artifacts verified locally
+and through Pirate's already-installed verifier/permanent trust anchor before
+installation. Manifest: `00e3b092ccbef83d546c2f98c96a9c371cf96a4c40fe4eea90b963412913ade4`;
+binary: `381a7dcdb4033de42ac0a1da1a4ed04f39701c5097f6cd583f59ccbfcade8e4b`.
+These checks do not prove signed live publication or completion of the canary.
 
 Human-facing GitHub text now shows verdict, reviewer/model, findings, suggestions,
 reported checks and limitations. Structured results stay in the ledger, not JSON
@@ -150,17 +146,16 @@ publisher results are rejected. See [the recovery runbook](runbooks/builder-reco
 
 ## Next gates
 
-1. Register the approved signing key; reverify the staged cohort before installation.
-2. Install while paused with a fresh stopped-state backup. Verify schema 8 to 10
-   and semantic history preservation; inspect partially published effects.
-3. Authorize signed republication of the accepted canary, then exercise fresh CI,
+1. Register the approved signing key; the signing/recovery code is now installed.
+2. Quiesce normally, take a fresh backup and authorize signed republication of
+   the accepted canary. Then resume and exercise fresh CI,
    required reviews, final holistic review and human readiness. Reinspect actual
    mergeability; do not assume signatures were the only blocker or relax
    `blocked` blindly. Never merge automatically.
-4. Finish the [lean architecture gates](completion-audit.md): case/capability
+3. Finish the [lean architecture gates](completion-audit.md): case/capability
    isolation, immutable actual settings/skills, nonblocking comparisons, ordinary
    pause/resume, compact live dispatch and obsolete operational-path removal.
-5. After live cutover proof, remove legacy Pip Python/runtime packaging/CI, keeping
+4. After live cutover proof, remove legacy Pip Python/runtime packaging/CI, keeping
    useful fixtures and upstream Hermes. Reconcile docs and revoke temporary sudo
    when no longer needed. Keep the full goal active until both the live PR and
    architecture requirements are verified.
