@@ -130,6 +130,15 @@ from Python into Rust in preparation for legacy runtime removal after cutover.
 
 ## Remaining completion gates
 
+Further local simplification keeps schema 8 unchanged while replacing eight
+repeated migration blocks with one ordered, individually transactional loop.
+Repository-scoped effect selection now precedes leasing in every policy-owned
+consumer. A regression reproduced foreign-repository dispatch before the fix;
+dispatch, restart/lease isolation, the full Rust suite and Clippy now pass.
+These changes still need signed deployment. They do not yet isolate every
+failed case within one repository: authorization and phase errors can still
+stop an otherwise unrelated active cycle.
+
 1. Finish one real issue through builder, exact-head CI, all required independent
    reviews, remediation where needed, and final human-ready disposition.
 2. Finish capability/case failure isolation and safe result collection during

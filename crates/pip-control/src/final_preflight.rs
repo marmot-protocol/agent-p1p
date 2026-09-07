@@ -124,8 +124,13 @@ pub fn reconcile_final_preflight_once<S: FinalPreflightSource>(
     if !authorization_valid {
         return Ok(FinalPreflightCycle::AuthorizationBlocked);
     }
-    let Some(claimed) =
-        store.claim_effect_matching(owner, observed_at, lease_seconds, &[OBSERVE_EFFECT])?
+    let Some(claimed) = store.claim_repository_effect_matching(
+        policy.repository.id,
+        owner,
+        observed_at,
+        lease_seconds,
+        &[OBSERVE_EFFECT],
+    )?
     else {
         return Ok(FinalPreflightCycle::Idle);
     };

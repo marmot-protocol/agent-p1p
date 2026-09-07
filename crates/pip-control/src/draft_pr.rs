@@ -221,8 +221,13 @@ pub fn publish_draft_pull_request_once_with<W: DraftPullRequestWriter, P: Branch
         .github
         .automation_actor_id
         .ok_or(DraftPullRequestError::MissingAutomationActor)?;
-    let Some(claimed) =
-        store.claim_effect_matching(owner, now, lease_seconds, &[PUBLISH_EFFECT])?
+    let Some(claimed) = store.claim_repository_effect_matching(
+        policy.repository.id,
+        owner,
+        now,
+        lease_seconds,
+        &[PUBLISH_EFFECT],
+    )?
     else {
         return Ok(DraftPullRequestCycle::Idle);
     };

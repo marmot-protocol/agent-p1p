@@ -99,8 +99,13 @@ pub fn consume_disposition_once<W: DispositionWriter>(
     } else {
         LOCAL_EFFECTS.to_vec()
     };
-    let Some(claimed) =
-        store.claim_effect_matching(owner, now, lease_seconds, allowed.as_slice())?
+    let Some(claimed) = store.claim_repository_effect_matching(
+        policy.repository.id,
+        owner,
+        now,
+        lease_seconds,
+        allowed.as_slice(),
+    )?
     else {
         return Ok(if authorization_valid {
             DispositionCycle::Idle

@@ -168,7 +168,8 @@ fn dispatch_once_inner<R: CommandRunner + Clone>(
     }
     let skills_repository_commit = GitSha::from_str(context.skills_repository_commit)
         .map_err(|_| DispatchCycleError::InvalidSkillsCommit)?;
-    let Some(claimed) = store.claim_effect_matching(
+    let Some(claimed) = store.claim_repository_effect_matching(
+        policy.repository.id,
         context.owner,
         context.now,
         context.lease_seconds,

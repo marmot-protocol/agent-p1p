@@ -226,13 +226,22 @@ pub fn reconcile_direct_queue_once(
         return Ok(DirectQueueCycle::Idle);
     }
     // Comparisons use spare queue capacity, never priority over required work.
-    let claimed =
-        match store.claim_effect_matching(owner, now, lease_seconds, &["RUN_DIRECT_WORKER"])? {
-            Some(claimed) => Some(claimed),
-            None => {
-                store.claim_effect_matching(owner, now, lease_seconds, &["RUN_DIRECT_OBSERVER"])?
-            }
-        };
+    let claimed = match store.claim_repository_effect_matching(
+        policy.repository.id,
+        owner,
+        now,
+        lease_seconds,
+        &["RUN_DIRECT_WORKER"],
+    )? {
+        Some(claimed) => Some(claimed),
+        None => store.claim_repository_effect_matching(
+            policy.repository.id,
+            owner,
+            now,
+            lease_seconds,
+            &["RUN_DIRECT_OBSERVER"],
+        )?,
+    };
     let Some(claimed) = claimed else {
         return Ok(DirectQueueCycle::Idle);
     };

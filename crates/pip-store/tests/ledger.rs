@@ -80,6 +80,61 @@ fn transition() -> TransitionInput {
 }
 
 #[test]
+fn effect_claims_are_repository_scoped_before_leasing_and_across_restart() {
+    let (directory, mut store) = open();
+    let first = new_case();
+    let mut other = first.clone();
+    other.repository_id += 1;
+    other.case_key = "repo:984322#1240@1".into();
+    other.event.event_id = "event-other".into();
+    other.effects[0].effect_id = "aaa-other-effect".into();
+    other.effects[0].payload = json!({"case_key":other.case_key});
+    store.create_case(&other).unwrap();
+    store.create_case(&first).unwrap();
+    let now = first.observed_at + 1;
+    let types = ["DISPATCH_PLANNER"];
+    let before = store.status(now).unwrap();
+    assert!(
+        store
+            .claim_repository_effect_matching(0, "worker", now, 30, &types)
+            .is_err()
+    );
+    assert!(
+        store
+            .claim_repository_effect_matching(123, "worker", now, 30, &types)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(store.status(now).unwrap(), before);
+    let claim = store
+        .claim_repository_effect_matching(first.repository_id, "first", now, 30, &types)
+        .unwrap()
+        .unwrap();
+    assert_eq!(claim.case_key, first.case_key);
+    assert_eq!(store.status(now).unwrap().outbox_leased, 1);
+    drop(store);
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    let second = store
+        .claim_repository_effect_matching(other.repository_id, "second", now, 30, &types)
+        .unwrap()
+        .unwrap();
+    assert_eq!(second.case_key, other.case_key);
+    assert!(
+        store
+            .claim_repository_effect_matching(
+                first.repository_id,
+                "competitor",
+                now + 1,
+                30,
+                &types
+            )
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(store.status(now).unwrap().outbox_leased, 2);
+}
+
+#[test]
 fn migration_creates_hardened_authoritative_schema() {
     let (_directory, store) = open();
     assert_eq!(store.schema_version().unwrap(), 8);

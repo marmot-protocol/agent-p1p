@@ -119,8 +119,13 @@ pub fn publish_reviews_once<G: ReviewWriter, S: ReviewWriter>(
         .github
         .reviewer_secperf_actor_id
         .ok_or(ReviewPublicationError::MissingReviewActor)?;
-    let Some(claimed) =
-        store.claim_effect_matching(owner, now, lease_seconds, &[PUBLISH_EFFECT])?
+    let Some(claimed) = store.claim_repository_effect_matching(
+        policy.repository.id,
+        owner,
+        now,
+        lease_seconds,
+        &[PUBLISH_EFFECT],
+    )?
     else {
         return Ok(ReviewPublicationCycle::Idle);
     };

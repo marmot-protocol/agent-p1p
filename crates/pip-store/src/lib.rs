@@ -1824,7 +1824,7 @@ impl Store {
         now: u64,
         lease_seconds: u64,
     ) -> Result<Option<ClaimedEffect>> {
-        self.claim_effect_inner(owner, now, lease_seconds, None)
+        self.claim_effect_inner(owner, now, lease_seconds, None, None)
     }
 
     pub fn claim_effect_matching(
@@ -1834,19 +1834,26 @@ impl Store {
         lease_seconds: u64,
         effect_types: &[&str],
     ) -> Result<Option<ClaimedEffect>> {
-        let unique = effect_types
-            .iter()
-            .copied()
-            .collect::<std::collections::BTreeSet<_>>();
-        if effect_types.is_empty()
-            || unique.len() != effect_types.len()
-            || effect_types.iter().any(|value| value.trim().is_empty())
-        {
-            return Err(StoreError::InvalidInput(
-                "unique nonempty effect types are required",
-            ));
-        }
-        self.claim_effect_inner(owner, now, lease_seconds, Some(effect_types))
+        self.claim_effect_inner(owner, now, lease_seconds, Some(effect_types), None)
+    }
+
+    /// Scope selection before leasing: a repository controller must never
+    /// consume or delay another repository's work in the shared ledger.
+    pub fn claim_repository_effect_matching(
+        &mut self,
+        repository_id: u64,
+        owner: &str,
+        now: u64,
+        lease_seconds: u64,
+        effect_types: &[&str],
+    ) -> Result<Option<ClaimedEffect>> {
+        self.claim_effect_inner(
+            owner,
+            now,
+            lease_seconds,
+            Some(effect_types),
+            Some(repository_id),
+        )
     }
 
     fn claim_effect_inner(
@@ -1855,12 +1862,27 @@ impl Store {
         now: u64,
         lease_seconds: u64,
         effect_types: Option<&[&str]>,
+        repository_id: Option<u64>,
     ) -> Result<Option<ClaimedEffect>> {
         self.ensure_writable()?;
-        if owner.trim().is_empty() || lease_seconds == 0 {
+        if owner.trim().is_empty() || lease_seconds == 0 || repository_id == Some(0) {
             return Err(StoreError::InvalidInput(
-                "owner and positive lease are required",
+                "owner, positive lease and valid repository scope are required",
             ));
+        }
+        if let Some(types) = effect_types {
+            let unique = types
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>();
+            if types.is_empty()
+                || unique.len() != types.len()
+                || types.iter().any(|value| value.trim().is_empty())
+            {
+                return Err(StoreError::InvalidInput(
+                    "unique nonempty effect types are required",
+                ));
+            }
         }
         let lease_until = now
             .checked_add(lease_seconds)
@@ -1874,9 +1896,14 @@ impl Store {
                  FROM outbox
                  WHERE delivered_at IS NULL AND superseded_at IS NULL
                    AND (lease_until IS NULL OR lease_until < ?1)
+                   AND (?2 IS NULL OR case_key IN
+                       (SELECT case_key FROM cases WHERE repository_id = ?2))
                  ORDER BY created_at, effect_id",
             )?;
-            let mut rows = statement.query([sql_u64(now)?])?;
+            let mut rows = statement.query(params![
+                sql_u64(now)?,
+                repository_id.map(sql_u64).transpose()?
+            ])?;
             let mut found = None;
             while let Some(row) = rows.next()? {
                 let effect_type: String = row.get(3)?;

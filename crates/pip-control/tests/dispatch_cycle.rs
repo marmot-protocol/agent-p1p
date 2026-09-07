@@ -179,6 +179,38 @@ fn production_dispatch_boundary_prepares_workspace_before_any_hermes_command() {
 }
 
 #[test]
+fn repository_dispatch_cannot_claim_or_project_another_repositories_work() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = seeded_store(directory.path());
+    let mut other = active_policy();
+    other.repository.id += 1;
+    let runner = FakeRunner::default();
+    let before = store.status(100).unwrap();
+    assert_eq!(
+        dispatch_once_with(
+            &mut store,
+            &other,
+            runner.clone(),
+            context("other-controller", 100)
+        )
+        .unwrap(),
+        DispatchCycleResult::Idle
+    );
+    assert!(runner.commands.borrow().is_empty());
+    assert_eq!(store.status(100).unwrap(), before);
+    assert!(matches!(
+        dispatch_once_with(
+            &mut store,
+            &active_policy(),
+            runner,
+            context("owner-controller", 100)
+        )
+        .unwrap(),
+        DispatchCycleResult::Projected { .. }
+    ));
+}
+
+#[test]
 fn planner_dispatch_freezes_intent_and_projects_only_worker_then_acks_outbox() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = seeded_store(directory.path());
