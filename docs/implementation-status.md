@@ -5,50 +5,28 @@ live proof. The target is [the lean architecture](pip-architecture-plan.md).
 
 ## Latest verified live state
 
-The subsequent signed `16ee6649e3cf5afffea7ba20417cc782ee0ce618` release
-passed CI `34090500812` and deployment gates `34090500817` and was installed
-on Pirate with the paused policy and ledger byte-for-byte preserved. The
-root-authorized review retry then moved #993 from `ESCALATED` revision 12 to
-`WAITING_CI` revision 13, preserving the PR/head and all five case-local failed
-attempts (nine failures across all cases). No new model attempt started:
-same-head CI re-observation collided with the old evidence ID. Execution was
-stopped/disabled again and the paused seed policy restored; ingress stays up.
-The follow-up regression distinguishes CI observation generations without
-replacing the earlier exact-head snapshot. Historical native collection also
-needed its saved accepted policy rather than today's model settings; that fix
-is committed separately. Both follow-ups require deployment and live proof.
-The general review remains preserved in Hermes and a root-only recovery copy.
+Pirate runs signed `2efc26539f0662dbbd0c79c4a64f068b66fd5004`, verified by
+CI `34091529650` and deployment `34091529622`, including Linux lifecycle tests.
+Installation preserved the stopped ledger and paused policy byte-for-byte.
 
-Earlier observations explaining the current PR and review state:
-
-Pirate was checked after the `e6f7eec4d92a26d7e141591c285fcbcdc350154c`
-installation:
-
-- Signed deployment run `34087957423` and CI `34087957390` passed, including
-  the Linux service-lifecycle suite. Installation preserved the stopped ledger
-  byte-for-byte and preserved the active revision-7 policy. Execution was
-  quiesced for installation and then resumed; conversational Hermes was untouched.
-- #993 remains the sole labeled canary, with accepted plan version 1. Its
-  retained implementation commit is `05070de3ef5e151bba702f85fd4c9e510f7e0df4`.
-  Attempts 7 and 8 performed useful work but failed result parsing/typing.
-- The supported root retry command preserved failures and the escalation, then
-  granted one additional attempt. Active policy revision 7 was restored.
-  Attempt 9 completed and was accepted through the normal controller.
-- Draft PR [MDK #1726](https://github.com/marmot-protocol/mdk/pull/1726) exists
-  at that exact head. Its required GitHub CI passed. Full status-history parsing
-  was corrected without discarding historical failures; the controller accepted
-  CI and transitioned to `REVIEWING`, dispatching one native and two direct
-  reviewer jobs. Cursor attempt 10 then stopped at its noninteractive workspace
-  trust prompt, before a review result. The aggregate failure bound escalated
-  the case. The native general review `t_6b15c1cd` subsequently completed with
-  `REQUEST_CHANGES`: daemon error writers still emit unsanitized terminal
-  controls. Its evidence also reproduces an overlong assigned Unix socket path.
-  That result remains in Hermes, not yet accepted into the escalated case.
-  Execution services/timers are now stopped and disabled; webhook ingress stays
-  active. Required reviews and final readiness are not proven yet.
+- #993 is the sole labeled canary, with accepted plan 1 and builder attempt 9.
+  Draft [MDK #1726](https://github.com/marmot-protocol/mdk/pull/1726) remains at
+  `05070de3ef5e151bba702f85fd4c9e510f7e0df4`, with required GitHub CI green.
+- The supported review retry preserved the build, five case-local failed
+  attempts and prior escalation. Fresh same-head CI now retains a separate
+  observation and advanced the case to `REVIEWING` revision 14.
+- Paused collection retained completed general review `t_6b15c1cd` in the
+  ledger without a case transition; repeat collection was an idempotent no-op.
+  That old-generation result is evidence, not an accepted current review. It
+  found unsanitized daemon error writers; its root-only recovery copy remains.
+- After restoring active policy 7, general task `t_9bb53a26` started in upstream
+  Hermes with the short scratch layout. Cursor is executing required Kimi
+  attempt 11 with `--trust`; shadow attempt 12 is queued behind it. Ledger
+  `RUNNING` means leased, not necessarily an executing provider process.
+  Required review completion, remediation and final readiness remain unproven.
 - #891, #1228 and #1639 are abandoned with history retained.
 - Hermes remains the upstream installation; Pip has not introduced a fork.
-  Conversational Hermes is separate and must not be interrupted.
+  Conversational Hermes was untouched. Pip execution timers and ingress are active.
 
 These are dated observations, not a promise that a process is still running.
 Inspect the current ledger, services and GitHub evidence before acting.
@@ -96,9 +74,9 @@ dispatch lease after retention, malformed bindings, failures and queue traversal
 Native Hermes collection now has local coverage for the same pause/restart
 behavior using the existing immutable evidence table, not another workflow
 database. A broken direct queue does not prevent native collection while paused.
-Native collection is deployed but historical-policy collection needs its follow-up.
-Active-cycle/cross-case failure isolation
-and saved-policy compatibility still need work; not all pause semantics are done.
+Historical-policy collection is deployed and proven on the retained live review.
+Active-cycle/cross-case failure isolation and saved-policy execution compatibility
+still need work; not all pause semantics are done.
 Collection also retains late completions from held/superseded work as evidence
 without advancing those cases. Cursor now requests `--trust` for the assigned
 workspace without adding `--force` to reviewers. These follow-up changes have
@@ -109,12 +87,17 @@ path: `authorize-review-retry` preserves the accepted PR/head/build and creates
 fresh CI observation, not a builder rerun or approval. Short scratch schema-2
 paths now pass a real Unix-socket allocation test while old schema-1 paths stay
 unchanged. These changes have local Rust/Clippy and signed Linux lifecycle
-coverage and are installed. The recovery was applied to #993; fresh CI exposed
-the observation-ID collision noted above, before any new reviewer execution.
+coverage and are installed. The recovery and fresh same-head CI succeeded on #993.
 Native result ingestion now also accepts a reviewer after peer-only
 `REVIEW_RECORDED` revisions. A regression joins both real-shaped review
 contracts through final-review state; intervening CI/retry generations still
 fence older work. This ordering fix is installed but still awaits live proof.
+
+Local queue backpressure now keeps only one outstanding handoff for the serial
+Cursor service, rather than starting leases for jobs waiting behind it. Existing
+multi-job queues still drain; an expired uncertain handoff cannot be replaced.
+Regression tests cover restart, blocked admission, lease expiry and resumption
+after reconciliation. This follow-up is not installed on the running reviewers.
 
 New managed Hermes tasks and direct Cursor prompts now reference a retained
 SHA-256-bound evidence file instead of embedding the full history. Saved older

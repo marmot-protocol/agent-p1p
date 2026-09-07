@@ -219,6 +219,12 @@ pub fn reconcile_direct_queue_once(
     if !authorization_valid {
         return Ok(DirectQueueCycle::AuthorizationBlocked);
     }
+    // This queue has one serial worker. Do not start another job's lease while
+    // it can only wait, or replace an uncertain handoff after its lease expires.
+    // Existing multi-job queues drain normally through result reconciliation.
+    if !queue_files(&queue.inbox)?.is_empty() {
+        return Ok(DirectQueueCycle::Idle);
+    }
     let Some(claimed) = store.claim_effect_matching(
         owner,
         now,

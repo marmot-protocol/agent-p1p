@@ -36,6 +36,62 @@ impl DirectWorkerRuntime for FakeRuntime {
 }
 
 #[test]
+fn serial_worker_leases_only_one_job_until_its_handoff_is_reconciled() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut required = shadow_task();
+    required.task_id = required.task_id.replace("secperf-opus", "secperf-kimi");
+    required.title = format!("Run secperf-kimi for {}", case_key());
+    required.priority = 50;
+    required.profile = "reviewer-secperf-kimi".into();
+    required.model = "kimi-k3-max".into();
+    required.body["reviewer_id"] = json!("secperf-kimi");
+    required.body["review_mode"] = json!("required");
+    required.body["model"] = json!("kimi-k3-max");
+    required.body["requested_model"] = json!("cursor/kimi-k3-max");
+    let mut store = queued_shadow_review_with(
+        directory.path(),
+        vec![EffectInput {
+            effect_id: "effect-dispatch-reviewers:direct:secperf-kimi".into(),
+            effect_type: "RUN_DIRECT_WORKER".into(),
+            payload: serde_json::to_value(required).unwrap(),
+        }],
+    );
+    let queue = queue(directory.path());
+    let policy = active_policy();
+    assert!(matches!(
+        reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 100, 30, true,)
+            .unwrap(),
+        DirectQueueCycle::Prepared { attempt_id: 1, .. }
+    ));
+    drop(store);
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    for now in [101, 132] {
+        assert_eq!(
+            reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", now, 30, true,)
+                .unwrap(),
+            DirectQueueCycle::Idle
+        );
+        assert_eq!(store.status(now).unwrap().direct_attempts_running, 1);
+    }
+    let runtime = runtime(Ok(builder_result()));
+    execute_direct_queue_once(&runtime, &queue, 132).unwrap();
+    assert!(
+        runtime.tasks.borrow().is_empty(),
+        "expired handoff cannot run a model"
+    );
+    assert!(matches!(
+        reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 133, 30, true,)
+            .unwrap(),
+        DirectQueueCycle::Failed { attempt_id: 1 }
+    ));
+    assert!(matches!(
+        reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 134, 30, true,)
+            .unwrap(),
+        DirectQueueCycle::Prepared { attempt_id: 2, .. }
+    ));
+}
+
+#[test]
 fn paused_queue_retains_valid_completed_work_without_advancing_or_rerunning_it() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = queued_builder(directory.path());
@@ -458,7 +514,7 @@ fn queue(root: &std::path::Path) -> DirectQueue {
 }
 
 #[test]
-fn queue_write_failure_only_retries_a_confirmed_missing_handoff() {
+fn unavailable_or_occupied_queue_never_leases_new_work() {
     for handoff_exists in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let mut store = queued_builder(directory.path());
@@ -470,27 +526,47 @@ fn queue_write_failure_only_retries_a_confirmed_missing_handoff() {
         } else {
             std::fs::remove_dir(&inbox).unwrap();
         }
-        assert!(
-            reconcile_direct_queue_once(
-                &mut store,
-                &active_policy(),
-                &queue,
-                "controller",
-                100,
-                30,
-                true,
-            )
-            .is_err()
+        let result = reconcile_direct_queue_once(
+            &mut store,
+            &active_policy(),
+            &queue,
+            "controller",
+            100,
+            30,
+            true,
         );
+        if handoff_exists {
+            assert_eq!(result.unwrap(), DirectQueueCycle::Idle);
+        } else {
+            assert!(result.is_err());
+        }
         let status = store.status(101).unwrap();
-        assert_eq!(status.direct_attempts_running, u64::from(handoff_exists));
-        assert_eq!(status.direct_attempts_failed, u64::from(!handoff_exists));
+        assert_eq!(status.direct_attempts_running, 0);
+        assert_eq!(status.direct_attempts_failed, 0);
         assert_eq!(
             store
                 .failed_direct_attempt_count_for_case(case_key())
                 .unwrap(),
             0
         );
+        if handoff_exists {
+            std::fs::remove_file(inbox.join("attempt-1.json")).unwrap();
+        } else {
+            std::fs::create_dir(&inbox).unwrap();
+        }
+        assert!(matches!(
+            reconcile_direct_queue_once(
+                &mut store,
+                &active_policy(),
+                &queue,
+                "controller",
+                102,
+                30,
+                true,
+            )
+            .unwrap(),
+            DirectQueueCycle::Prepared { attempt_id: 1, .. }
+        ));
     }
 }
 
@@ -823,6 +899,15 @@ fn direct_task() -> DirectTaskSpec {
 }
 
 fn queued_shadow_review(root: &std::path::Path) -> Store {
+    queued_shadow_review_with(root, vec![])
+}
+
+fn queued_shadow_review_with(root: &std::path::Path, mut effects: Vec<EffectInput>) -> Store {
+    effects.push(EffectInput {
+        effect_id: "effect-dispatch-reviewers:direct:secperf-opus".into(),
+        effect_type: "RUN_DIRECT_OBSERVER".into(),
+        payload: serde_json::to_value(shadow_task()).unwrap(),
+    });
     let mut store = Store::open(root.join("ledger.db")).unwrap();
     let policy = active_policy();
     store
@@ -869,11 +954,7 @@ fn queued_shadow_review(root: &std::path::Path) -> Store {
                 run: None,
                 evidence: Vec::new(),
                 findings: Vec::new(),
-                effects: vec![EffectInput {
-                    effect_id: "effect-dispatch-reviewers:direct:secperf-opus".into(),
-                    effect_type: "RUN_DIRECT_OBSERVER".into(),
-                    payload: serde_json::to_value(shadow_task()).unwrap(),
-                }],
+                effects,
             },
             None,
         )
