@@ -1,121 +1,65 @@
 # Pip completion audit
 
-**Snapshot date:** 2026-09-04
+Snapshot: 2026-09-07. **Not complete.** The approved target is
+[pip-architecture-plan.md](pip-architecture-plan.md); detailed dated observations
+are in [implementation-status.md](implementation-status.md). The earlier
+phase-based audit is retained in Git history, not a second target.
 
-**Decision:** The deterministic Rust workflow and controller are installed on
-Pirate as an inert, single-repository shadow deployment. Native reviewer-App
-authentication is implemented. The isolated webhook ingress is installed and
-publicly reachable through the authenticated forwarding boundary; its consumer
-and every execution path remain disabled. Policy revision 3 and its
-policy-defined reviewer set and protected-CI release are installed, but the
-system is not ready for active work until the authorization gate below is
-satisfied, and it is not
-ready for Phase 10 multi-repository expansion until the Phase 9 MDK canary is
-accepted.
+## Live issue gate
 
-This audit maps the canonical architecture and migration roadmap to executable
-evidence. `Implemented locally` means source plus tests exist. It does not mean
-the behavior ran with live service identities, credentials, providers, or an
-authorized issue.
+MDK #993 has accepted plan 1 and draft
+[PR #1726](https://github.com/marmot-protocol/mdk/pull/1726). The initial build
+passed required CI and received independent App reviews: general requested
+changes; security/performance approved. Builder attempt 14 produced an accepted
+remediation at `625bb4299187139461a64fd6eb5337ea35804261`.
 
-## Architecture coverage
+Signed Pip `8d3dde498fe60da1b4be9b5f2728610e6cdedcdb` is installed on Pirate.
+Its normal publication action pushed that exact commit and updated the existing
+PR, preserving accepted history. The case is `WAITING_CI`, revision 22. Fresh
+GitHub CI run `34104104224` is in progress. The old head's CI and reviews do not
+prove readiness of this new head. The PR is still draft; no merge occurred.
 
-| Target boundary | Status | Executable evidence |
-|---|---|---|
-| Generic repository/board/case identity | Implemented locally | Strict repository policy, numeric repository/actor validation, generic case identity, and no compiled canary issue |
-| Deterministic Rust workflow | Implemented locally | `pip-core` states/events/effects and property/fixture tests |
-| Authoritative durable ledger | Implemented locally | SQLite schema v7, immutable required-run history, detached review observations, workspace-retirement evidence, webhook deliveries, outbox, projections, attempts, migrations, backup, and crash injection |
-| Signed webhook primary intake adapter | Installed on Pirate; intake policy and consumer timer disabled | HMAC verification, delivery replay/conflict checks, exact repository/issue/actor re-read, isolated loopback receiver, atomic raw-body spool, controller-owned bounded consumption, commit-before-processed ordering, outage replay, tamper rejection, systemd lifecycle tests, and live signed delivery/replay evidence |
-| Bounded polling recovery | Implemented locally | Generic label discovery and live-evidence eligibility reconciliation |
-| Planner before builder | Implemented locally | Typed planner contract, durable plan publication gate, and dispatch ordering |
-| Assigned builder worktree and draft PR | Implemented locally | Controller-owned checkout/worktree/branch, credential-free builder, exact push, and stable draft-PR transaction |
-| Bounded worktree storage | Installed, persistently mounted, and reboot-verified on Pirate | Dedicated-mount and free-space gates, 24-hour terminal retention, no-force clean retirement, running-attempt exclusion, one-per-cycle cleanup, immutable retirement evidence, and successful manual-remount and post-reboot systemd mount-unit probes |
-| Pinned Hermes compatibility | Service-owned runtime bootstrapped inertly on Pirate | Exact `v2026.8.31` commit and installer hash, slug-based board identity, task/run JSON contract, typed workspaces, external-supervisor gateway flag, and successful exact-release service-root bootstrap |
-| Exact-head CI and policy-defined independent reviews | Implemented locally | CI reconciliation, stable reviewer-instance identities, required/advisory/shadow modes, all-required exact-head joins, two semantic-lane review aggregates, and publication retries |
-| Dynamic remediation and convergence | Implemented locally | State-driven redispatch rather than a fixed DAG; round, elapsed-time, repeated-finding, direct-attempt, and Hermes circuit-breaker bounds |
-| Holistic final review | Implemented locally | Atomic final preflight plus full immutable evidence bundle |
-| Shadow disposition | Implemented locally and selected for MDK | `READY` becomes `SHADOW_READY`; autonomous merge is unreachable under checked-in MDK policy |
-| Guarded merge | Implemented locally, disabled for MDK | Separate ready-for-review, revalidation, expected-head merge, and restart-convergence transaction |
-| Runtime isolation | Implemented locally | Separate control/worker identities, service-owned Hermes root, credential-free worker surfaces, and systemd contract tests |
-| Release provenance and rollback | Verified in protected CI and live on Pirate | Signed source-bound cohort, pinned actions/image, protected release workflow, independent verification, permanent trust rotation, injected live rollback, idempotent reinstall, and ingress restart recovery |
-| In-flight policy revision changes | Safe for the frozen canary; Phase 10 expansion | Policy revisions are immutable and mismatches fail closed; explicit restrictive overlays and nonrestrictive hot migration are deferred until after Phase 9 acceptance |
-| Global provider/registry/reporting layer | Sequenced after canary | Shared ledger and global active-case limit exist; registry operations, health aggregation, dependency routing, and multi-board reporting remain Phase 10 |
+Required remaining live evidence:
 
-## Roadmap disposition
+1. Successful required CI on the published remediation head.
+2. All required independent re-reviews on that same head, including origin
+   confirmation of the blocking finding's resolution. Actual Cursor verification
+   commands and the native review scratch layout must work in their sandboxes.
+3. Current authorization, ownership, clean mergeability, and no unresolved
+   blocking reviews or threads in the final preflight.
+4. A fresh holistic final review and a published human-held readiness result.
+5. Any further remediation must repeat exact-head CI and required reviews.
 
-| Phase | Disposition |
+## Lean architecture gate
+
+| Requirement | Current evidence and remaining work |
 |---|---|
-| 0 — architecture and safety boundaries | Complete in repository; documents reconciled by this audit |
-| 1 — frozen reference behavior | Complete; retained Python fixtures remain parity inputs, not runtime authority |
-| 2 — pure Rust core | Complete locally |
-| 3 — ledger and outbox | Complete locally through schema v7 |
-| 4 — read-only adapters | Complete locally with live controller and reviewer-App read probes on Pirate |
-| 5 — projections and execution | Complete locally for Hermes and direct Cursor paths |
-| 6 — controlled GitHub writes | Complete locally; live read scopes are proven and authorized write behavior remains reserved for the canary |
-| 7 — packaging and lifecycle | Complete: exact source `48ac1e2` passed protected CI and was independently verified, rollback-tested, and installed inertly on Pirate under the permanent trust anchor |
-| 8 — parity and non-dispatching live shadow | Complete: inert host install, storage, checkout, runtime bootstrap, live GitHub reconciliation, configured-model capability probes, process-scoped provider outage/recovery, and empty-board supervised gateway observation passed |
-| 9 — one MDK shadow case | Not authorized and not run |
-| 10 — controlled expansion | Intentionally not started before Phase 9 acceptance |
-| Legacy retirement | Vault runtime retired early on 2026-09-01 by explicit JG authorization; no Python rollback data retained, while repository source and curated parity fixtures remain |
+| One deterministic Rust authority; unmodified Hermes | Installed and exercised through planning, build, review and remediation. Hermes remains execution/projection, not the workflow authority. |
+| Signed webhook intake plus bounded recovery polling | Live signed intake, deduplication, revocation and controller polling exercised. Keep these boundaries. |
+| Dynamic bounded workflow; human-only merge | Live remediation is exercised. Alternate in-process direct execution and autonomous-merge coordinator/API were removed. Final readiness remains unproven live. |
+| Policy-defined repositories, identities and exact models | Configured reviewer instances executed live without intentional substitution. Repository-scoped effect claiming is installed with cross-repository regression tests; multi-repository live operation is not proven. |
+| Independent required and comparison reviews | Required and shadow results accepted independently; comparisons do not consume work-failure allowance. Required pending jobs have priority. An already-running comparison can still delay the serial worker. |
+| Failure isolation and ordinary recovery | Completed-result collection precedes GitHub access. Confirmed non-start backoff and bounded audited retry exist. Per-case/capability isolation and ordinary pause/resume still need completion. |
+| Immutable jobs across upgrades | Saved dispatch definitions are reused. Full preservation of actual execution settings and skill content across upgrades remains incomplete. Restrictive controls must still apply immediately. |
+| Compact evidence with durable provenance | Installed exports deduplicate accepted event/run payloads and provide role-specific indexes into retained artifacts. Full history remains duplicated in saved definitions; finish compact job inputs. |
+| Safe workers and storage | Real service-identity builder execution and controlled publication work; managed storage and credential isolation are installed. Fresh re-review must prove recent command/scratch fixes. Cleanup must remain independent of unrelated work. |
+| Small packaging and operating surface | Signed install/rollback, policy preservation and schema-8 ordered migrations are verified. Remove obsolete operational scaffolding; normal operation must not require case-specific shell scripts. |
+| Retire legacy Pip Python | Pending complete live cutover proof. Keep upstream Hermes and useful small probes/fixtures; remove the obsolete Pip runtime, packaging and CI rather than maintaining two implementations. |
+| Final handoff | Pending exact-head readiness verification, documentation reconciliation and removal of temporary operator elevation. Never merge automatically. |
 
-## Verified local evidence
+## Evidence boundaries
 
-The following gates passed on 2026-09-04 for exact source `e4cbd33` after the
-schema 6-to-7 installation regression was added and fixed:
+Pip release CI `34103318222` and signed build `34103318326` succeeded, including
+Linux service lifecycle tests. Installing that cohort preserved the stopped
+ledger and paused policy byte-for-byte. These checks prove this deployment, not
+the entire workflow or all architecture rows above.
 
-- `cargo fmt --all --check`;
-- `cargo clippy --workspace --all-targets --locked -- -D warnings`;
-- `cargo test --workspace --locked`;
-- `scripts/check-supply-chain-pins.sh` and its negative regression test; and
-- `scripts/test-systemd-lifecycle.sh`, reporting clean install, reinstall,
-  upgrade, injected rollback, and restart recovery with active timers disabled.
+A subsequent local review-publication change lets either accepted lane publish
+when the other App is unavailable, without accepting partial ledger evidence.
+Its regression test, full Rust suite and Clippy passed; source `240ff50` is
+pushed, but that change is not installed in this snapshot.
 
-## Verified Pirate installation evidence
-
-On 2026-09-04, source commit
-`e4cbd333ede4197c31349b9e7259ee670311ed1e` was built as a signed cohort and
-installed on Pirate under content-addressed release ID
-`99099430157256bfb922226afe698c2a650fdeb5e3bcff0699e29f40ac68a78b`.
-The live upgrade migrated the schema-6 ledger to schema 7 and preserved all
-eight webhook-delivery records. Policy revision 3, the exact installed source,
-ownership boundaries, service states, and Hermes profile reconciliation were
-verified. Real read-only calls under `pip-worker` succeeded for the configured
-Grok, Kimi, and Opus models, and the manual GitHub shadow reconciler found zero
-candidates and made zero mutations. A forced loopback connection refusal then
-recovered through a fresh exact Kimi request without changing the production
-ledger. The disabled Pip gateway was also observed briefly under its exact
-service identity and service-owned Hermes root while its board remained empty.
-See
-[`evidence/2026-09-04-pirate-policy-driven-reviewers.md`](evidence/2026-09-04-pirate-policy-driven-reviewers.md).
-
-The successor commit
-`48ac1e2b190118ba99b11a46ee7b4ba7029a44cb` passed ordinary and protected CI,
-independent consumer verification on the operator host and Pirate, a live
-injected `daemon-reload` rollback, successful content-addressed upgrade,
-permanent trust-anchor rotation, idempotent reinstall, inert Hermes
-reconciliation, and webhook-ingress restart. The schema-7 ledger retained the
-same semantic state and all eight webhook deliveries. The current release ID is
-`2591b7c24e4d05cc80b62933208fe59ca1d9ad31123df56515dd76d982d684d9`.
-See
-[`evidence/2026-09-04-protected-release-install-recovery.md`](evidence/2026-09-04-protected-release-install-recovery.md).
-
-## Inputs required before work can continue safely
-
-These are external state or authority, not remaining opportunities for a local
-implementation guess:
-
-1. Explicit authorization to activate the inert services and label exactly one
-   suitable MDK issue. Installation alone grants no activation authority.
-2. JG acceptance of the complete shadow result before Phase 10 or legacy
-   retirement begins.
-
-Installed policy revision 3, both reviewer App token-mint/read probes, and the
-live `Safe Master` / GitHub Actions `Required CI` match are recorded in
-[`evidence/2026-09-04-pirate-reviewer-apps.md`](evidence/2026-09-04-pirate-reviewer-apps.md).
-The completed configured-label add/live-reread/remove proof is recorded in
-[`evidence/2026-09-04-pirate-webhook-consumer.md`](evidence/2026-09-04-pirate-webhook-consumer.md).
-
-Until those inputs exist, the correct state is the checked-in one: intake
-disabled, repository paused, dispatch disabled, shadow merge mode, autonomous
-merge false, public ingress enabled, and all execution timers and gateways
-disabled.
+Historical installation, rollback, ingress and sandbox observations remain in
+[`docs/evidence/`](evidence/). Re-read current code, ledger, service state, exact
+PR head and GitHub checks before changing state or marking any gate complete.
+Neither this checklist nor a green local test substitutes for missing live proof.

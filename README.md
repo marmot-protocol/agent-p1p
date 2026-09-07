@@ -40,8 +40,8 @@ reference, not an installable runtime; it will be removed after cutover proof.
   simplification and Python-retirement gates.
 - [`docs/implementation-status.md`](docs/implementation-status.md) — current
   executable inventory, inert boundaries, and remaining cutover work.
-- [`docs/completion-audit.md`](docs/completion-audit.md) — historical coverage
-  audit; use implementation status for current gaps and host evidence.
+- [`docs/completion-audit.md`](docs/completion-audit.md) — current live-workflow
+  and lean-architecture completion gates, with explicit remaining gaps.
 - [`docs/worker-result-contracts.md`](docs/worker-result-contracts.md) — exact
   versioned JSON returned by each worker role.
 
