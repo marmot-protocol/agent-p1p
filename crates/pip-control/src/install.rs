@@ -196,58 +196,31 @@ fn install_release_inner(
 
     let release_id = hex_digest(&Sha256::digest(&manifest_bytes));
     let release_dir = layout.install_root.join("releases").join(&release_id);
-    let service_target = layout.unit_root.join("pip-shadow-reconcile.service");
-    let timer_target = layout.unit_root.join("pip-shadow-reconcile.timer");
-    let controller_service_target = layout.unit_root.join("pip-controller@.service");
-    let controller_timer_target = layout.unit_root.join("pip-controller@.timer");
-    let direct_service_target = layout.unit_root.join("pip-direct-worker@.service");
-    let direct_timer_target = layout.unit_root.join("pip-direct-worker@.timer");
-    let gateway_service_target = layout.unit_root.join("pip-hermes-gateway.service");
-    let webhook_ingress_target = layout.unit_root.join("pip-webhook-ingress.service");
-    let webhook_consumer_target = layout.unit_root.join("pip-webhook-consumer@.service");
-    let webhook_consumer_timer_target = layout.unit_root.join("pip-webhook-consumer@.timer");
+    let units = [
+        "pip-shadow-reconcile.service",
+        "pip-shadow-reconcile.timer",
+        "pip-controller@.service",
+        "pip-controller@.timer",
+        "pip-direct-worker@.service",
+        "pip-direct-worker@.timer",
+        "pip-hermes-gateway.service",
+        "pip-webhook-ingress.service",
+        "pip-webhook-consumer@.service",
+        "pip-webhook-consumer@.timer",
+    ]
+    .into_iter()
+    .map(|name| {
+        Ok(ManagedFile {
+            target: layout.unit_root.join(name),
+            bytes: read_regular(
+                &source_root.join("share/pip/systemd").join(name),
+                1024 * 1024,
+            )?,
+        })
+    })
+    .collect::<Result<Vec<_>, InstallError>>()?;
     let ledger_target = layout.state_root.join("ledger.db");
     let current = layout.install_root.join("current");
-    let service_bytes = read_regular(
-        &source_root.join("share/pip/systemd/pip-shadow-reconcile.service"),
-        1024 * 1024,
-    )?;
-    let timer_bytes = read_regular(
-        &source_root.join("share/pip/systemd/pip-shadow-reconcile.timer"),
-        1024 * 1024,
-    )?;
-    let controller_service_bytes = read_regular(
-        &source_root.join("share/pip/systemd/pip-controller@.service"),
-        1024 * 1024,
-    )?;
-    let controller_timer_bytes = read_regular(
-        &source_root.join("share/pip/systemd/pip-controller@.timer"),
-        1024 * 1024,
-    )?;
-    let direct_service_bytes = read_regular(
-        &source_root.join("share/pip/systemd/pip-direct-worker@.service"),
-        1024 * 1024,
-    )?;
-    let direct_timer_bytes = read_regular(
-        &source_root.join("share/pip/systemd/pip-direct-worker@.timer"),
-        1024 * 1024,
-    )?;
-    let gateway_service_bytes = read_regular(
-        &source_root.join("share/pip/systemd/pip-hermes-gateway.service"),
-        1024 * 1024,
-    )?;
-    let webhook_ingress_bytes = read_regular(
-        &source_root.join("share/pip/systemd/pip-webhook-ingress.service"),
-        1024 * 1024,
-    )?;
-    let webhook_consumer_bytes = read_regular(
-        &source_root.join("share/pip/systemd/pip-webhook-consumer@.service"),
-        1024 * 1024,
-    )?;
-    let webhook_consumer_timer_bytes = read_regular(
-        &source_root.join("share/pip/systemd/pip-webhook-consumer@.timer"),
-        1024 * 1024,
-    )?;
 
     if release_dir.exists() {
         verify_release(&release_dir, &manifest_bytes, signature, public_key)
@@ -257,19 +230,9 @@ fn install_release_inner(
             && policies
                 .iter()
                 .all(|policy| exact_file(&policy.target, &policy.bytes))
-            && exact_file(&service_target, &service_bytes)
-            && exact_file(&timer_target, &timer_bytes)
-            && exact_file(&controller_service_target, &controller_service_bytes)
-            && exact_file(&controller_timer_target, &controller_timer_bytes)
-            && exact_file(&direct_service_target, &direct_service_bytes)
-            && exact_file(&direct_timer_target, &direct_timer_bytes)
-            && exact_file(&gateway_service_target, &gateway_service_bytes)
-            && exact_file(&webhook_ingress_target, &webhook_ingress_bytes)
-            && exact_file(&webhook_consumer_target, &webhook_consumer_bytes)
-            && exact_file(
-                &webhook_consumer_timer_target,
-                &webhook_consumer_timer_bytes,
-            )
+            && units
+                .iter()
+                .all(|unit| exact_file(&unit.target, &unit.bytes))
             && ledger_target.is_file()
         {
             return Ok(InstallOutcome {
@@ -282,20 +245,9 @@ fn install_release_inner(
 
     let snapshot_paths = policies
         .iter()
-        .map(|policy| &policy.target)
-        .chain([
-            &service_target,
-            &timer_target,
-            &controller_service_target,
-            &controller_timer_target,
-            &direct_service_target,
-            &direct_timer_target,
-            &gateway_service_target,
-            &webhook_ingress_target,
-            &webhook_consumer_target,
-            &webhook_consumer_timer_target,
-            &ledger_target,
-        ])
+        .chain(units.iter())
+        .map(|file| &file.target)
+        .chain([&ledger_target])
         .collect::<Vec<_>>();
     let snapshot = Snapshot::capture(&current, snapshot_paths)?;
     let release_preexisting = release_dir.exists();
@@ -323,20 +275,9 @@ fn install_release_inner(
             }
         }
         inject(fault, InstallFault::AfterPolicy)?;
-        write_atomic(&service_target, &service_bytes, 0o444)?;
-        write_atomic(&timer_target, &timer_bytes, 0o444)?;
-        write_atomic(&controller_service_target, &controller_service_bytes, 0o444)?;
-        write_atomic(&controller_timer_target, &controller_timer_bytes, 0o444)?;
-        write_atomic(&direct_service_target, &direct_service_bytes, 0o444)?;
-        write_atomic(&direct_timer_target, &direct_timer_bytes, 0o444)?;
-        write_atomic(&gateway_service_target, &gateway_service_bytes, 0o444)?;
-        write_atomic(&webhook_ingress_target, &webhook_ingress_bytes, 0o444)?;
-        write_atomic(&webhook_consumer_target, &webhook_consumer_bytes, 0o444)?;
-        write_atomic(
-            &webhook_consumer_timer_target,
-            &webhook_consumer_timer_bytes,
-            0o444,
-        )?;
+        for unit in &units {
+            write_atomic(&unit.target, &unit.bytes, 0o444)?;
+        }
         inject(fault, InstallFault::AfterUnits)?;
         Store::open(&ledger_target).map_err(|error| InstallError::Ledger(error.to_string()))?;
         fs::set_permissions(&ledger_target, fs::Permissions::from_mode(0o600)).map_err(fs_error)?;
@@ -368,7 +309,7 @@ fn install_release_inner(
 }
 
 trait InstallLifecycle {
-    fn configure(&mut self, policies: &[CohortPolicy]) -> Result<(), InstallError>;
+    fn configure(&mut self, policies: &[ManagedFile]) -> Result<(), InstallError>;
     fn before_mutation(&mut self) -> Result<(), InstallError>;
     fn commit(&mut self) -> Result<(), InstallError>;
     fn rollback(&mut self) -> Result<(), InstallError>;
@@ -377,7 +318,7 @@ trait InstallLifecycle {
 struct NoopLifecycle;
 
 impl InstallLifecycle for NoopLifecycle {
-    fn configure(&mut self, _policies: &[CohortPolicy]) -> Result<(), InstallError> {
+    fn configure(&mut self, _policies: &[ManagedFile]) -> Result<(), InstallError> {
         Ok(())
     }
 
@@ -497,7 +438,7 @@ impl SystemdLifecycle {
 }
 
 impl InstallLifecycle for SystemdLifecycle {
-    fn configure(&mut self, policies: &[CohortPolicy]) -> Result<(), InstallError> {
+    fn configure(&mut self, policies: &[ManagedFile]) -> Result<(), InstallError> {
         let mut units = vec![
             SystemdUnitState {
                 name: "pip-shadow-reconcile.timer".into(),
@@ -618,7 +559,7 @@ fn status_label(status: ExitStatus) -> String {
         .map_or_else(|| "signal".to_owned(), |code| code.to_string())
 }
 
-struct CohortPolicy {
+struct ManagedFile {
     target: PathBuf,
     bytes: Vec<u8>,
 }
@@ -627,7 +568,7 @@ fn cohort_policies(
     source_root: &Path,
     manifest: &ReleaseManifest,
     layout: &InstallLayout,
-) -> Result<Vec<CohortPolicy>, InstallError> {
+) -> Result<Vec<ManagedFile>, InstallError> {
     const PREFIX: &str = "share/pip/config/repositories/";
     let mut policies = Vec::new();
     for artifact in &manifest.artifacts {
@@ -661,7 +602,7 @@ fn cohort_policies(
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => bytes,
             Err(error) => return Err(InstallError::Filesystem(error.to_string())),
         };
-        policies.push(CohortPolicy { target, bytes });
+        policies.push(ManagedFile { target, bytes });
     }
     if policies.is_empty() {
         return Err(InstallError::InvalidCohort(

@@ -12,7 +12,7 @@ Installation preserved the stopped ledger and paused policy byte-for-byte.
 - #993 is the sole labeled canary, with accepted plan 1.
   Draft [MDK #1726](https://github.com/marmot-protocol/mdk/pull/1726) now has
   remediation head `625bb4299187139461a64fd6eb5337ea35804261`; fresh GitHub CI
-  `34104104224` has been queued. Earlier CI was green only for head `05070de3`.
+  `34104104224` passed. Earlier reviews remain bound only to head `05070de3`.
 - GitHub reviews `5129269820` (general, changes requested) and `5129270044`
   (security/performance, approved) are published on the old `05070de3` head under the
   separate App identities. Both include reported verification and limitations.
@@ -21,7 +21,7 @@ Installation preserved the stopped ledger and paused policy byte-for-byte.
 - The installed binding/retry fixes preserved six case-local failures and the
   completed remediation. Builder attempt 14 reverified and reused clean commit
   `625bb4299187139461a64fd6eb5337ea35804261`. Its result is accepted, with the
-  case now `WAITING_CI` at revision 22, plan 1 and remediation round 1. The worker
+  case now `REVIEWING` at revision 23, plan 1 and remediation round 1. The worker
   reported passing CLI checks and `just fast-ci`, plus a Marmot parallel-test
   timeout whose isolated rerun passed. That limitation remains in its result.
 - Publication succeeded: the old dispatcher used an ambiguous builder round
@@ -32,6 +32,10 @@ Installation preserved the stopped ledger and paused policy byte-for-byte.
   first publication cycle hit a generic identity/head guard; its normal retry
   succeeded. GitHub and the ledger agree on the new head, with the builder's
   reported checks and limitations preserved in the PR body.
+- Fresh re-review started automatically: native task `t_d2cdf42a` runs the
+  configured `openai-codex/gpt-6-astra` general reviewer and direct attempt 15
+  runs required `cursor/kimi-k3-max`, both on head `625bb429`. The native worker
+  was observed executing Cargo/CLI tests. Neither new review is accepted yet.
 - #891, #1228 and #1639 are abandoned with history retained.
 - Hermes remains the upstream installation; Pip has not introduced a fork.
   Conversational Hermes was untouched. Pip execution timers and its dedicated
@@ -142,6 +146,14 @@ yet per-case authorization isolation. The full Rust suite, Clippy and formatting
 checks pass; the change is not installed in this snapshot.
 The service unit's absolute `LoadCredential` paths also remain startup
 dependencies; missing App files can still stop the process before collection.
+
+Installer simplification now uses one ten-unit list for reads, comparisons,
+snapshots and writes instead of repeating those operations per file. Expanded
+lifecycle tests change every fixture unit across upgrades and verify all bytes
+and modes, including rollback at every existing injected-failure point. The
+focused lifecycle suite passes before and after the behavior-preserving change;
+the full Rust suite, Clippy and formatting checks also pass. Signed deployment
+remains a separate gate; the running re-review is not interrupted for this change.
 
 A subsequent local TDD change attempts both accepted review-lane publications
 even if one App is unavailable. The ledger advances only after both succeed;

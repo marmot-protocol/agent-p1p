@@ -179,44 +179,26 @@ fn clean_install_reinstall_and_upgrade_are_content_addressed_and_paused() {
 
     let first = install_release(&v1, &public, &layout, None).unwrap();
     assert_eq!(first.result, InstallResult::Installed);
+    assert_eq!(unit_snapshot(&layout.unit_root).len(), 10);
+    assert_eq!(
+        unit_snapshot(&layout.unit_root),
+        unit_snapshot(&v1.join("root/share/pip/systemd"))
+    );
     assert_eq!(current_source(&layout), "a".repeat(40));
     let policy = fs::read_to_string(layout.config_root.join("repositories/mdk.json")).unwrap();
     assert!(policy.contains(r#""enabled": false"#));
     assert!(policy.contains(r#""dispatch_enabled": false"#));
     assert!(!layout.unit_root.join("timers.target.wants").exists());
-    assert!(layout.unit_root.join("pip-controller@.service").is_file());
-    assert!(layout.unit_root.join("pip-controller@.timer").is_file());
-    assert!(
-        layout
-            .unit_root
-            .join("pip-hermes-gateway.service")
-            .is_file()
-    );
-    assert!(
-        layout
-            .unit_root
-            .join("pip-webhook-ingress.service")
-            .is_file()
-    );
-    assert!(
-        layout
-            .unit_root
-            .join("pip-webhook-consumer@.service")
-            .is_file()
-    );
-    assert!(
-        layout
-            .unit_root
-            .join("pip-webhook-consumer@.timer")
-            .is_file()
-    );
-
     let replay = install_release(&v1, &public, &layout, None).unwrap();
     assert_eq!(replay.result, InstallResult::Existing);
     assert_eq!(replay.release_id, first.release_id);
 
     let upgraded = install_release(&v2, &public, &layout, None).unwrap();
     assert_eq!(upgraded.result, InstallResult::Installed);
+    assert_eq!(
+        unit_snapshot(&layout.unit_root),
+        unit_snapshot(&v2.join("root/share/pip/systemd"))
+    );
     assert_ne!(upgraded.release_id, first.release_id);
     assert_eq!(current_source(&layout), "b".repeat(40));
     assert!(
@@ -275,34 +257,7 @@ fn every_injected_install_failure_restores_the_complete_preinstall_snapshot() {
         assert!(install_release(&v1, &public, &layout, Some(fault)).is_err());
         assert!(!layout.install_root.join("current").exists());
         assert!(!layout.config_root.join("repositories/mdk.json").exists());
-        assert!(
-            !layout
-                .unit_root
-                .join("pip-shadow-reconcile.service")
-                .exists()
-        );
-        assert!(!layout.unit_root.join("pip-controller@.service").exists());
-        assert!(!layout.unit_root.join("pip-controller@.timer").exists());
-        assert!(!layout.unit_root.join("pip-hermes-gateway.service").exists());
-        assert!(
-            !layout
-                .unit_root
-                .join("pip-webhook-ingress.service")
-                .exists()
-        );
-        assert!(
-            !layout
-                .unit_root
-                .join("pip-webhook-consumer@.service")
-                .exists()
-        );
-        assert!(
-            !layout
-                .unit_root
-                .join("pip-webhook-consumer@.timer")
-                .exists()
-        );
-        assert!(!layout.unit_root.join("pip-shadow-reconcile.timer").exists());
+        assert!(unit_snapshot(&layout.unit_root).is_empty());
         assert!(!layout.state_root.join("ledger.db").exists());
     }
 }
@@ -318,6 +273,7 @@ fn every_injected_upgrade_failure_restores_the_previous_release_and_ledger() {
         let v1 = cohort(sandbox.path(), "v1", b"binary-v1\n", "a", &key);
         let v2 = cohort(sandbox.path(), "v2", b"binary-v2\n", "b", &key);
         let installed = install_release(&v1, &public, &layout, None).unwrap();
+        let units_before = unit_snapshot(&layout.unit_root);
         let policy_before = fs::read(layout.config_root.join("repositories/mdk.json")).unwrap();
         let ledger_before = Store::open_read_only(layout.state_root.join("ledger.db"))
             .unwrap()
@@ -325,6 +281,7 @@ fn every_injected_upgrade_failure_restores_the_previous_release_and_ledger() {
             .unwrap();
 
         assert!(install_release(&v2, &public, &layout, Some(fault)).is_err());
+        assert_eq!(unit_snapshot(&layout.unit_root), units_before);
         assert_eq!(current_source(&layout), "a".repeat(40));
         assert_eq!(
             fs::read(layout.config_root.join("repositories/mdk.json")).unwrap(),
@@ -553,6 +510,22 @@ fn prepare_layout(layout: &InstallLayout) {
     }
 }
 
+fn unit_snapshot(root: &Path) -> std::collections::BTreeMap<std::ffi::OsString, (Vec<u8>, u32)> {
+    fs::read_dir(root)
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            (
+                entry.file_name(),
+                (
+                    fs::read(entry.path()).unwrap(),
+                    entry.metadata().unwrap().mode() & 0o7777,
+                ),
+            )
+        })
+        .collect()
+}
+
 fn cohort(parent: &Path, name: &str, binary: &[u8], source: &str, key: &str) -> PathBuf {
     let cohort = parent.join(name);
     let root = cohort.join("root");
@@ -615,6 +588,14 @@ fn cohort(parent: &Path, name: &str, binary: &[u8], source: &str, key: &str) -> 
         include_bytes!("../../../packaging/systemd/pip-webhook-consumer@.timer"),
     )
     .unwrap();
+    // Make upgrades change every unit so rollback tests detect omissions from
+    // the shared compare/snapshot/write set, not only release-link rollback.
+    for entry in fs::read_dir(root.join("share/pip/systemd")).unwrap() {
+        let path = entry.unwrap().path();
+        let mut bytes = fs::read(&path).unwrap();
+        bytes.extend_from_slice(format!("\n# fixture source {source}\n").as_bytes());
+        fs::write(path, bytes).unwrap();
+    }
     for entry in walk_files(&root) {
         let mode = if entry.ends_with("bin/pip-control") {
             0o555

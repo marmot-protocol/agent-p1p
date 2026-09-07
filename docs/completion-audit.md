@@ -15,13 +15,14 @@ remediation at `625bb4299187139461a64fd6eb5337ea35804261`.
 
 Signed Pip `8d3dde498fe60da1b4be9b5f2728610e6cdedcdb` is installed on Pirate.
 Its normal publication action pushed that exact commit and updated the existing
-PR, preserving accepted history. The case is `WAITING_CI`, revision 22. Fresh
-GitHub CI run `34104104224` is in progress. The old head's CI and reviews do not
-prove readiness of this new head. The PR is still draft; no merge occurred.
+PR, preserving accepted history. Fresh GitHub CI run `34104104224` passed; the
+case is `REVIEWING`, revision 23. Native task `t_d2cdf42a` and direct attempt 15
+are running the required general and Kimi re-reviews. The old head's reviews do
+not prove readiness of this new head. The PR is still draft; no merge occurred.
 
-Required remaining live evidence:
+Live acceptance gates (partially satisfied):
 
-1. Successful required CI on the published remediation head.
+1. Required CI is green on the current head; any further head change must repeat it.
 2. All required independent re-reviews on that same head, including origin
    confirmation of the blocking finding's resolution. Actual Cursor verification
    commands and the native review scratch layout must work in their sandboxes.
