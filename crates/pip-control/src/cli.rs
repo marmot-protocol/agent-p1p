@@ -91,7 +91,8 @@ pub fn run_cli(arguments: impl IntoIterator<Item = String>) -> Result<Value, Cli
         "direct-worker-cycle" => direct_worker_cycle(&arguments[1..]),
         "bootstrap-runtime" => bootstrap_runtime(&arguments[1..]),
         "scratch-retire" => scratch_retire(&arguments[1..]),
-        "authorize-builder-retry" => authorize_builder_retry(&arguments[1..]),
+        "authorize-builder-retry" => authorize_retry(&arguments[1..], false),
+        "authorize-review-retry" => authorize_retry(&arguments[1..], true),
         "install-release" => install(&arguments[1..]),
         _ => Err(CliError::InvalidArgument(command.into())),
     }
@@ -112,7 +113,7 @@ fn validate_worker_result(arguments: &[String]) -> Result<Value, CliError> {
     )
 }
 
-fn authorize_builder_retry(arguments: &[String]) -> Result<Value, CliError> {
+fn authorize_retry(arguments: &[String], review: bool) -> Result<Value, CliError> {
     let options = options(
         arguments,
         &[
@@ -131,7 +132,7 @@ fn authorize_builder_retry(arguments: &[String]) -> Result<Value, CliError> {
     let uid = rustix::process::geteuid().as_raw();
     if uid != 0 {
         return Err(CliError::Reconciliation(
-            "builder retry requires root authorization".into(),
+            "work retry requires root authorization".into(),
         ));
     }
     let policy = crate::load_repository_policy(&read_bounded(
@@ -141,7 +142,7 @@ fn authorize_builder_retry(arguments: &[String]) -> Result<Value, CliError> {
     .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     if policy.intake.enabled || !policy.intake.paused || policy.dispatch_enabled {
         return Err(CliError::Reconciliation(
-            "builder retry requires an inert installed policy".into(),
+            "work retry requires an inert installed policy".into(),
         ));
     }
     crate::verify_scratch_runtime_stopped(&pip_hermes::ProcessRunner::default())
@@ -182,8 +183,13 @@ fn authorize_builder_retry(arguments: &[String]) -> Result<Value, CliError> {
     };
     let now = current_time()?;
     let mut store = Store::open(database).map_err(|error| CliError::Ledger(error.to_string()))?;
-    let result = crate::authorize_builder_retry(&mut store, &policy, &request, now, uid)
-        .map_err(CliError::Reconciliation)?;
+    let authorize = if review {
+        crate::authorize_review_retry
+    } else {
+        crate::authorize_builder_retry
+    };
+    let result =
+        authorize(&mut store, &policy, &request, now, uid).map_err(CliError::Reconciliation)?;
     Ok(
         json!({"ok":true,"result":format!("{result:?}"),"case_key":request.case_key,"request_id":request.request_id,
         "additional_attempts":1,"runtime_activated":false,"history_preserved":true}),

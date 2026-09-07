@@ -1,11 +1,11 @@
-//! Offline, root-authorized recovery of an exhausted pre-build task.
+//! Offline, root-authorized recovery of exhausted builder/review work.
 use std::num::{NonZeroU32, NonZeroU64};
 use std::str::FromStr;
 
 use pip_controller::{LedgerController, WorkflowCommand};
 use pip_core::{
-    CaseId, CaseState, Event, EventId, IssueNumber, ObservedAt, PlanVersion, PolicyRevision,
-    RepositoryId, StateRevision, WorkflowVersion,
+    CaseId, CaseState, Event, EventId, GitSha, IssueNumber, ObservedAt, PlanVersion,
+    PolicyRevision, PullRequestNumber, RepositoryId, StateRevision, WorkflowVersion,
 };
 use pip_store::{ApplyResult, BuilderRetryAuthorization, Store};
 
@@ -30,11 +30,47 @@ pub fn authorize_builder_retry(
     now: u64,
     operator_uid: u32,
 ) -> Result<ApplyResult, String> {
+    authorize_retry(
+        store,
+        paused,
+        request,
+        now,
+        operator_uid,
+        Event::BuilderRetryAuthorized,
+    )
+}
+
+pub fn authorize_review_retry(
+    store: &mut Store,
+    paused: &RepositoryPolicy,
+    request: &BuilderRetryRequest,
+    now: u64,
+    operator_uid: u32,
+) -> Result<ApplyResult, String> {
+    authorize_retry(
+        store,
+        paused,
+        request,
+        now,
+        operator_uid,
+        Event::ReviewRetryAuthorized,
+    )
+}
+
+fn authorize_retry(
+    store: &mut Store,
+    paused: &RepositoryPolicy,
+    request: &BuilderRetryRequest,
+    now: u64,
+    operator_uid: u32,
+    event: Event,
+) -> Result<ApplyResult, String> {
+    let review_retry = event == Event::ReviewRetryAuthorized;
     if operator_uid != 0 {
-        return Err("builder retry requires root authorization".into());
+        return Err("work retry requires root authorization".into());
     }
     if paused.intake.enabled || !paused.intake.paused || paused.dispatch_enabled {
-        return Err("builder retry requires an inert installed policy".into());
+        return Err("work retry requires an inert installed policy".into());
     }
     let case = store
         .case(&request.case_key)
@@ -72,7 +108,7 @@ pub fn authorize_builder_retry(
         .iter()
         .find(|event| event.event_id == request.request_id)
     {
-        if event.event_type == "BUILDER_RETRY_AUTHORIZED"
+        if event.event_type == retry_event_name(review_retry)
             && event.payload == payload
             && request.expected_revision.checked_add(1) == Some(event.state_revision)
         {
@@ -97,9 +133,23 @@ pub fn authorize_builder_retry(
         ),
         remediation_round: case.remediation_round,
         plan_version: NonZeroU32::new(case.plan_version).map(PlanVersion::new),
-        pr_number: None,
-        head_sha: None,
-        event: Event::BuilderRetryAuthorized,
+        pr_number: if review_retry {
+            case.pr_number
+                .and_then(NonZeroU64::new)
+                .map(PullRequestNumber::new)
+        } else {
+            None
+        },
+        head_sha: if review_retry {
+            case.head_sha
+                .as_deref()
+                .map(GitSha::from_str)
+                .transpose()
+                .map_err(error)?
+        } else {
+            None
+        },
+        event,
         accepted_plan_version: None,
         next_pr_number: None,
         next_head_sha: None,
@@ -113,4 +163,12 @@ pub fn authorize_builder_retry(
 
 fn error(value: impl std::fmt::Display) -> String {
     value.to_string()
+}
+
+fn retry_event_name(review: bool) -> &'static str {
+    if review {
+        "REVIEW_RETRY_AUTHORIZED"
+    } else {
+        "BUILDER_RETRY_AUTHORIZED"
+    }
 }

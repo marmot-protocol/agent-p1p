@@ -1110,7 +1110,10 @@ impl Store {
                 .expected_revision
                 .checked_add(1)
                 .ok_or(StoreError::InvalidInteger)?;
-            if input.event.event_type == "BUILDER_RETRY_AUTHORIZED" {
+            if matches!(
+                input.event.event_type.as_str(),
+                "BUILDER_RETRY_AUTHORIZED" | "REVIEW_RETRY_AUTHORIZED"
+            ) {
                 builder_retry::validate_retry(&transaction, &current, input)?;
             }
             insert_event(

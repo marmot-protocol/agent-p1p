@@ -10,6 +10,89 @@ use pip_store::{
 use serde_json::json;
 
 const CASE: &str = "repo:42#9@3";
+
+#[test]
+fn review_retry_preserves_the_build_and_requires_fresh_ci() {
+    let (_dir, mut store, paused, accepted, mut request) = fixture();
+    store.apply_transition(&TransitionInput {
+        case_key: CASE.into(), expected_revision: 2, next_state: "REVIEWING".into(),
+        remediation_round: 0, plan_version: 1, pr_number: Some(77), head_sha: Some("b".repeat(40)),
+        observed_at: 135, event: EventInput { event_id:"ci-accepted".into(), event_type:"CI_ACCEPTED".into(), payload:json!({}) },
+        run:Some(RunInput { run_id:"build-run".into(),task_id:"builder".into(),role:"builder".into(),payload:json!({"head_sha":"b".repeat(40)}) }),
+        evidence:vec![], findings:vec![], effects:vec![EffectInput {
+            effect_id:"old-review".into(),effect_type:"RUN_DIRECT_WORKER".into(),
+                payload:json!({"role":"reviewer-secperf","body":{"review_mode":"required"},"task_id":"reviewer"}),
+        }],
+    },None).unwrap();
+    let effect = store.claim_effect("worker", 136, 5).unwrap().unwrap();
+    let attempt = store
+        .begin_direct_attempt(&effect, "reviewer", 136)
+        .unwrap();
+    store
+        .fail_direct_attempt(attempt, "worker", 137, "workspace trust required")
+        .unwrap();
+    store.release_effect(&effect.effect_id, "worker").unwrap();
+    enforce_operational_bounds(&mut store, &accepted, 138).unwrap();
+    request.expected_revision = 4;
+    request.effect_id = "old-review".into();
+    request.expected_failures = 4;
+    let before = store.immutable_history_for_case(CASE).unwrap();
+    let status = store.status(139).unwrap();
+    for field in ["revision", "failures", "effect", "reason"] {
+        let mut invalid = request.clone();
+        match field {
+            "revision" => invalid.expected_revision += 1,
+            "failures" => invalid.expected_failures += 1,
+            "effect" => invalid.effect_id = "old-builder".into(),
+            "reason" => invalid.reason.clear(),
+            _ => unreachable!(),
+        }
+        assert!(
+            pip_control::authorize_review_retry(&mut store, &paused, &invalid, 139, 0).is_err(),
+            "accepted {field}"
+        );
+        assert_eq!(store.status(139).unwrap(), status);
+    }
+    assert!(pip_control::authorize_review_retry(&mut store, &accepted, &request, 139, 0).is_err());
+    assert!(
+        pip_control::authorize_review_retry(
+            &mut store,
+            &paused,
+            &request,
+            100 + accepted.max_case_elapsed_seconds,
+            0
+        )
+        .is_err()
+    );
+    assert!(pip_control::authorize_review_retry(&mut store, &paused, &request, 139, 1000).is_err());
+    assert_eq!(
+        pip_control::authorize_review_retry(&mut store, &paused, &request, 139, 0).unwrap(),
+        ApplyResult::Applied
+    );
+    let case = store.case(CASE).unwrap().unwrap();
+    assert_eq!(case.state, "WAITING_CI");
+    assert_eq!(case.pr_number, Some(77));
+    assert_eq!(case.head_sha, Some("b".repeat(40)));
+    assert_eq!(case.plan_version, 1);
+    assert_eq!(
+        store.immutable_history_for_case(CASE).unwrap().runs,
+        before.runs
+    );
+    assert_eq!(store.failed_direct_attempt_count_for_case(CASE).unwrap(), 4);
+    assert_eq!(store.effective_provider_failure_limit(CASE, 3).unwrap(), 5);
+    assert_eq!(
+        pip_control::authorize_review_retry(&mut store, &paused, &request, 140, 0).unwrap(),
+        ApplyResult::Replayed
+    );
+    let mut conflicting = request.clone();
+    conflicting.reason.push_str(" altered");
+    assert!(
+        pip_control::authorize_review_retry(&mut store, &paused, &conflicting, 140, 0).is_err()
+    );
+    let effect = store.claim_effect("controller", 141, 5).unwrap().unwrap();
+    assert_eq!(effect.effect_type, "OBSERVE_CI");
+}
+
 #[derive(Clone)]
 struct NoHermes;
 impl CommandRunner for NoHermes {
@@ -360,6 +443,15 @@ fn root_cli_retry_checks_real_uid_stopped_units_and_empty_queue() {
     ];
     let binary = env!("CARGO_BIN_EXE_pip-control");
     let run = || Command::new(binary).args(args).output().unwrap();
+    let mut review_args = args;
+    review_args[0] = "authorize-review-retry";
+    let review_denied = Command::new("runuser")
+        .args(["-u", "pip-worker", "--", binary])
+        .args(review_args)
+        .output()
+        .unwrap();
+    assert!(!review_denied.status.success());
+    assert!(String::from_utf8_lossy(&review_denied.stderr).contains("requires root"));
     let denied = Command::new("runuser")
         .args(["-u", "pip-worker", "--", binary])
         .args(args)

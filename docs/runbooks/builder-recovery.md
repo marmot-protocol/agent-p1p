@@ -28,6 +28,19 @@ It is not a general retry switch or a substitute for repairing provider errors.
 
 ## Authorize one retry
 
+For a direct required security/performance reviewer that failed immediately
+after entering review, `authorize-review-retry` uses the same arguments and
+offline/root checks below. It requires a provider-failure escalation from that
+exact review revision, the retained accepted builder, and unchanged plan, PR
+and head. It returns the case to `WAITING_CI`: fresh live authorization, CI,
+required reviews and final preflight still apply. It cannot reopen another
+kind of escalation or spend more than one extra failure allowance. This is
+not permission to rewrite a result or repair the ledger with SQL.
+
+Do not downgrade a ledger containing `REVIEW_RETRY_AUTHORIZED` to a release
+that does not understand that event's allowance. Keep the matching release
+and history together during recovery.
+
 Run on the host as root, substituting independently verified values below.
 Use a unique stable request ID for this authorization; reuse it if the command
 response is lost. Paths and identifiers are examples, not pilot constants.

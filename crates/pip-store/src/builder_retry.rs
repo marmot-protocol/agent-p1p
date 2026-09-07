@@ -17,9 +17,20 @@ pub(crate) fn validate_retry(
     current: &StoredCase,
     input: &TransitionInput,
 ) -> Result<()> {
+    let review = input.event.event_type == "REVIEW_RETRY_AUTHORIZED";
+    let next_state = if review {
+        "WAITING_CI"
+    } else {
+        "READY_TO_BUILD"
+    };
+    let effect_type = if review {
+        "OBSERVE_CI"
+    } else {
+        "DISPATCH_BUILDER"
+    };
     let invalid = || {
         StoreError::InvalidInput(
-            "builder retry requires an exhausted, unleased builder task, an unchanged accepted plan, and root authorization",
+            "work retry requires an exhausted, unleased task, unchanged accepted work, and root authorization",
         )
     };
     let authorization: BuilderRetryAuthorization =
@@ -29,20 +40,20 @@ pub(crate) fn validate_retry(
         || authorization.reason.trim().is_empty()
         || authorization.reason.len() > 2000
         || authorization.reason.chars().any(char::is_control)
-        || !matches!(current.state.as_str(), "READY_TO_BUILD" | "ESCALATED")
-        || input.next_state != "READY_TO_BUILD"
+        || !(current.state == "ESCALATED" || !review && current.state == "READY_TO_BUILD")
+        || input.next_state != next_state
         || current.plan_version == 0
         || input.plan_version != current.plan_version
         || input.remediation_round != current.remediation_round
-        || current.pr_number.is_some()
-        || current.head_sha.is_some()
-        || input.pr_number.is_some()
-        || input.head_sha.is_some()
+        || current.pr_number.is_some() != review
+        || current.head_sha.is_some() != review
+        || input.pr_number != current.pr_number
+        || input.head_sha != current.head_sha
         || input.run.is_some()
         || !input.evidence.is_empty()
         || !input.findings.is_empty()
         || input.effects.len() != 1
-        || input.effects[0].effect_type != "DISPATCH_BUILDER"
+        || input.effects[0].effect_type != effect_type
     {
         return Err(invalid());
     }
@@ -82,16 +93,24 @@ pub(crate) fn validate_retry(
     if unsigned(failed) != authorization.failed_attempts {
         return Err(invalid());
     }
-    // Only a direct-builder failure-bound escalation is recoverable here.
+    // Only an exact direct-worker failure-bound escalation is recoverable here.
     // Scope, elapsed-time, review and other terminal decisions stay held.
     let escalated = current.state == "ESCALATED";
     let effect_revision = if escalated {
         let recoverable: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM events WHERE case_key=?1 AND state_revision=?2
-             AND event_type='OPERATIONAL_BOUND_REACHED' AND previous_state='READY_TO_BUILD'
+             AND event_type='OPERATIONAL_BOUND_REACHED' AND previous_state=?3
              AND next_state='ESCALATED' AND json_extract(payload_json,'$.bound')='PROVIDER_FAILURES'
              AND json_extract(payload_json,'$.details.source')='direct-worker')",
-            params![current.case_key, sql_u64(current.state_revision)?],
+            params![
+                current.case_key,
+                sql_u64(current.state_revision)?,
+                if review {
+                    "REVIEWING"
+                } else {
+                    "READY_TO_BUILD"
+                }
+            ],
             |row| row.get(0),
         )?;
         if !recoverable {
@@ -104,16 +123,18 @@ pub(crate) fn validate_retry(
     // Check under the same IMMEDIATE transaction as supersession and dispatch.
     let admissible: bool = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM outbox WHERE effect_id=?1 AND case_key=?2 AND state_revision=?3
-          AND effect_type='RUN_DIRECT_WORKER' AND json_extract(payload_json,'$.role')='builder'
+          AND effect_type='RUN_DIRECT_WORKER' AND json_extract(payload_json,'$.role')=?7
+          AND (?8=0 OR json_extract(payload_json,'$.body.review_mode')='required')
           AND delivered_at IS NULL AND (superseded_at IS NOT NULL)=?5 AND lease_owner IS NULL AND lease_until IS NULL)
-         AND NOT EXISTS(SELECT 1 FROM direct_attempts WHERE case_key=?2 AND status IN ('RUNNING','COMPLETE'))
+         AND NOT EXISTS(SELECT 1 FROM direct_attempts WHERE case_key=?2 AND (status='RUNNING' OR (status='COMPLETE' AND (?8=0 OR effect_id=?1))))
          AND (SELECT COUNT(*) FROM outbox WHERE case_key=?2 AND delivered_at IS NULL AND superseded_at IS NULL AND effect_type!='ESCALATE')=?6
          AND NOT EXISTS(SELECT 1 FROM outbox WHERE case_key=?2 AND (lease_owner IS NOT NULL OR lease_until IS NOT NULL))
          AND EXISTS(SELECT 1 FROM direct_attempts WHERE effect_id=?1 AND case_key=?2 AND status='FAILED')
          AND EXISTS(SELECT 1 FROM runs WHERE case_key=?2 AND role='planner')
-         AND NOT EXISTS(SELECT 1 FROM events WHERE case_key=?2 AND event_type='BUILDER_RETRY_AUTHORIZED'
+         AND (?8=0 OR EXISTS(SELECT 1 FROM runs WHERE case_key=?2 AND role='builder'))
+         AND NOT EXISTS(SELECT 1 FROM events WHERE case_key=?2 AND event_type IN ('BUILDER_RETRY_AUTHORIZED','REVIEW_RETRY_AUTHORIZED')
              AND json_extract(payload_json,'$.failed_attempts')>=?4)",
-        params![authorization.effect_id,current.case_key,sql_u64(effect_revision)?,failed,escalated,if escalated {0} else {1}],|row|row.get(0))?;
+        params![authorization.effect_id,current.case_key,sql_u64(effect_revision)?,failed,escalated,if escalated {0} else {1},if review { "reviewer-secperf" } else { "builder" },review],|row|row.get(0))?;
     if !admissible {
         return Err(invalid());
     }
@@ -123,8 +144,8 @@ pub(crate) fn validate_retry(
         .filter(|value| *value <= i64::MAX as u64)
         .ok_or_else(invalid)?;
     let expected = serde_json::json!({"case_key":current.case_key,"state_revision":current.state_revision+1,
-        "effect":"DISPATCH_BUILDER","remediation_round":current.remediation_round,"plan_version":current.plan_version,
-        "pr_number":null,"head_sha":null});
+        "effect":effect_type,"remediation_round":current.remediation_round,"plan_version":current.plan_version,
+        "pr_number":current.pr_number,"head_sha":current.head_sha});
     if input.effects[0].payload != expected {
         return Err(invalid());
     }
@@ -137,8 +158,9 @@ impl Store {
     pub fn effective_provider_failure_limit(&self, case_key: &str, base: u64) -> Result<u64> {
         let granted: Option<i64> = self.connection.query_row(
             "SELECT MAX(json_extract(payload_json,'$.failed_attempts')+1) FROM events
-             WHERE case_key=?1 AND event_type='BUILDER_RETRY_AUTHORIZED'
-               AND previous_state IN ('READY_TO_BUILD','ESCALATED') AND next_state='READY_TO_BUILD'",
+             WHERE case_key=?1 AND ((event_type='BUILDER_RETRY_AUTHORIZED'
+               AND previous_state IN ('READY_TO_BUILD','ESCALATED') AND next_state='READY_TO_BUILD')
+               OR (event_type='REVIEW_RETRY_AUTHORIZED' AND previous_state='ESCALATED' AND next_state='WAITING_CI'))",
             [case_key],
             |row| row.get(0),
         )?;
