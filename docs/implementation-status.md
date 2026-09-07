@@ -93,6 +93,10 @@ fresh CI observation, not a builder rerun or approval. Short scratch schema-2
 paths now pass a real Unix-socket allocation test while old schema-1 paths stay
 unchanged. These changes have local Rust/Clippy coverage and are awaiting their
 signed release deployment. The recovery has not been applied to #993 yet.
+Native result ingestion now also accepts a reviewer after peer-only
+`REVIEW_RECORDED` revisions. A regression joins both real-shaped review
+contracts through final-review state; intervening CI/retry generations still
+fence older work. This ordering fix is not yet deployed.
 
 New managed Hermes tasks and direct Cursor prompts now reference a retained
 SHA-256-bound evidence file instead of embedding the full history. Saved older
@@ -109,9 +113,7 @@ reviewer set; completion compatibility is not yet proven.
    reviews, remediation where needed, and final human-ready disposition.
 2. Finish capability/case failure isolation and safe result collection during
    pause; extend confirmed-non-start classification where still missing.
-   Check native review ingestion's exact state-revision filter: a peer review's
-   `REVIEW_RECORDED` transition must not strand another result from the same
-   review generation, while a retry/replan/new head must still fence old jobs.
+   Prove native peer-review ordering through the live adapters, not only tests.
 3. Preserve saved job settings/skills through execution and acceptance across
    upgrades. Apply pause/revocation immediately without rewriting old jobs.
 4. Replace growing full-history prompts with compact role-specific inputs and

@@ -565,6 +565,16 @@ fn project_planner_with_task(
     task_id: &str,
     inline_plan: bool,
 ) {
+    project_native_task(store, max_retries, task_id, inline_plan, false);
+}
+
+fn project_native_task(
+    store: &mut Store,
+    max_retries: u32,
+    task_id: &str,
+    inline_plan: bool,
+    review: bool,
+) {
     store
         .create_case(&NewCase {
             case_key: "repo:984321#1240@1".into(),
@@ -579,13 +589,47 @@ fn project_planner_with_task(
                 event_type: "ISSUE_AUTHORIZED".into(),
                 payload: json!({"label":"pip-ok"}),
             },
-            effects: vec![EffectInput {
-                effect_id: "effect-planner".into(),
-                effect_type: "DISPATCH_PLANNER".into(),
-                payload: json!({"case_key":"repo:984321#1240@1"}),
-            }],
+            effects: if review {
+                vec![]
+            } else {
+                vec![EffectInput {
+                    effect_id: "effect-planner".into(),
+                    effect_type: "DISPATCH_PLANNER".into(),
+                    payload: json!({"case_key":"repo:984321#1240@1"}),
+                }]
+            },
         })
         .unwrap();
+    if review {
+        store
+            .apply_transition(
+                &pip_store::TransitionInput {
+                    case_key: "repo:984321#1240@1".into(),
+                    expected_revision: 1,
+                    next_state: "REVIEWING".into(),
+                    remediation_round: 0,
+                    plan_version: 1,
+                    pr_number: Some(77),
+                    head_sha: Some("b".repeat(40)),
+                    observed_at: 2,
+                    event: EventInput {
+                        event_id: "ci".into(),
+                        event_type: "CI_ACCEPTED".into(),
+                        payload: json!({}),
+                    },
+                    run: None,
+                    evidence: vec![],
+                    findings: vec![],
+                    effects: vec![EffectInput {
+                        effect_id: "effect-planner".into(),
+                        effect_type: "DISPATCH_REVIEWERS".into(),
+                        payload: json!({"case_key":"repo:984321#1240@1"}),
+                    }],
+                },
+                None,
+            )
+            .unwrap();
+    }
     store.claim_effect("dispatch", 2, 30).unwrap().unwrap();
     let mut desired = TaskCreateSpec {
         board: "pip-mdk".into(),
@@ -616,6 +660,17 @@ fn project_planner_with_task(
     if inline_plan {
         desired.body["storage"] = json!({"schema_version":1});
     }
+    if review {
+        desired.assignee = "reviewer-general".into();
+        desired.skills = vec!["workflow-contract".into(), "reviewer-general".into()];
+        desired.body["role"] = json!("reviewer-general");
+        desired.body["reviewer_id"] = json!("general-sol");
+        desired.body["review_mode"] = json!("required");
+        desired.body["pr_number"] = json!(77);
+        desired.body["expected_head_sha"] = json!("b".repeat(40));
+        desired.body["state_revision"] = json!(2);
+        desired.body["remediation_round"] = json!(0);
+    }
     let observed = TaskSnapshot {
         configuration: Default::default(),
         id: task_id.into(),
@@ -640,6 +695,81 @@ fn project_planner_with_task(
             None,
         )
         .unwrap();
+}
+
+#[test]
+fn peer_review_records_do_not_supersede_the_other_native_reviewer() {
+    for intervening in ["REVIEW_RECORDED", "CI_ACCEPTED"] {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../migration/target-v1/worker-results.json"
+        ))
+        .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+        project_native_task(&mut store, 3, "review-general-1", false, true);
+        store
+            .apply_transition(
+                &pip_store::TransitionInput {
+                    case_key: "repo:984321#1240@1".into(),
+                    expected_revision: 2,
+                    next_state: "REVIEWING".into(),
+                    remediation_round: 0,
+                    plan_version: 1,
+                    pr_number: Some(77),
+                    head_sha: Some("b".repeat(40)),
+                    observed_at: 4,
+                    event: EventInput {
+                        event_id: "peer-or-new-cycle".into(),
+                        event_type: intervening.into(),
+                        payload: json!({}),
+                    },
+                    run: if intervening == "REVIEW_RECORDED" {
+                        Some(pip_store::RunInput {
+                            run_id: "peer-review-run".into(),
+                            task_id: "review-secperf-1".into(),
+                            role: "reviewer-secperf".into(),
+                            payload: fixture["results"][3].clone(),
+                        })
+                    } else {
+                        None
+                    },
+                    evidence: vec![],
+                    findings: vec![],
+                    effects: vec![],
+                },
+                None,
+            )
+            .unwrap();
+        let mut result = fixture["results"][2].clone();
+        result["requested_model"] = json!("openai-codex/gpt-6-astra");
+        result["actual_model"] = json!("openai-codex/gpt-6-astra");
+        let mut completed = completed_planner("reviewer-general", result);
+        completed["task"]["id"] = json!("review-general-1");
+        completed["task"]["assignee"] = json!("reviewer-general");
+        let runner = FakeRunner::default();
+        runner.json(completed);
+        let observed =
+            ingest_completed_once_with(&mut store, &active_policy(), runner.clone(), "hermes", 10)
+                .unwrap();
+        if intervening == "REVIEW_RECORDED" {
+            assert!(matches!(
+                observed,
+                ResultCycle::Ingested {
+                    transition_count: 1,
+                    ..
+                }
+            ));
+            assert_eq!(store.run_count().unwrap(), 2);
+            assert_eq!(
+                store.case("repo:984321#1240@1").unwrap().unwrap().state,
+                "FINAL_REVIEW"
+            );
+        } else {
+            assert_eq!(observed, ResultCycle::Idle);
+            assert_eq!(store.run_count().unwrap(), 0);
+            assert_eq!(runner.outputs.borrow().len(), 1);
+        }
+    }
 }
 
 fn planner_result() -> Value {

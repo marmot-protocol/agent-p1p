@@ -130,14 +130,30 @@ pub fn reconcile_completed_once_with<R: CommandRunner>(
         let case = store
             .case(case_key)?
             .ok_or(ResultCycleError::InvalidProjection)?;
-        if advance
-            && (case.state_revision != number(desired_body, "state_revision")?
+        if advance {
+            let frozen_revision = number(desired_body, "state_revision")?;
+            // A peer result advances the ledger revision, not the review
+            // generation. Retries, replans and new CI still fence old jobs.
+            let peer_reviews_only = case.state == "REVIEWING"
+                && frozen_revision < case.state_revision
+                && matches!(
+                    desired_body.get("role").and_then(|value| value.as_str()),
+                    Some("reviewer-general" | "reviewer-secperf")
+                )
+                && store
+                    .immutable_history_for_case(case_key)?
+                    .events
+                    .iter()
+                    .filter(|event| event.state_revision > frozen_revision)
+                    .all(|event| event.event_type == "REVIEW_RECORDED");
+            if (case.state_revision != frozen_revision && !peer_reviews_only)
                 || matches!(
                     case.state.as_str(),
                     "ESCALATED" | "BLOCKED" | "ABANDONED" | "COMPLETED" | "TAKEN_OVER"
-                ))
-        {
-            continue;
+                )
+            {
+                continue;
+            }
         }
         // Historical projections retain their original model/profile bindings.
         // Only current, runnable work is checked against today's role policy;
