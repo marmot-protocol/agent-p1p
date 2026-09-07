@@ -186,7 +186,9 @@ fn takeover_blockers(
     if !pull.open || pull.merged {
         blockers.push("PR_DISPOSITION_CHANGED".into());
     }
-    if !pull.draft {
+    // The controller promotes a validated shadow-ready PR before notifying its
+    // human. A retry may observe that promotion before its evidence is stored.
+    if !pull.draft && case.state != "SHADOW_READY" {
         blockers.push("PR_LEFT_DRAFT_STATE".into());
     }
     let protected_head = !matches!(case.state.as_str(), "BUILDING" | "REMEDIATING");

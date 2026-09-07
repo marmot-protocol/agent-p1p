@@ -118,18 +118,14 @@ fn builder_uses_the_assigned_worktree_and_never_pushes_directly() {
 }
 
 #[test]
-fn mandatory_reviewers_publish_distinct_machine_readable_role_stamps() {
-    for (name, marker) in [
-        ("reviewer-general", "Pip reviewer role: reviewer-general"),
-        ("reviewer-secperf", "Pip reviewer role: reviewer-secperf"),
-    ] {
+fn reviewers_leave_hidden_publication_metadata_to_the_controller() {
+    for name in ["reviewer-general", "reviewer-secperf"] {
         let skill = ROLE_SKILLS
             .iter()
             .find_map(|(candidate, skill)| (*candidate == name).then_some(*skill))
             .unwrap();
-        assert!(
-            skill.contains(marker),
-            "{name} omits its exact GitHub review marker"
-        );
+        assert!(!skill.contains("Pip reviewer role:"));
+        assert!(skill.contains("controller derives"));
+        assert!(skill.contains("hidden"));
     }
 }

@@ -7,6 +7,17 @@ use pip_github::{CommentSpec, GitHubError, MutationResult};
 use pip_store::{EffectInput, EventInput, NewCase, Store, TransitionInput};
 use serde_json::{Value, json};
 
+struct NoReads;
+impl pip_github::ReadTransport for NoReads {
+    fn get(&self, _: pip_github::ReadRequest) -> Result<pip_github::ReadResponse, GitHubError> {
+        panic!("non-ready dispositions do not need readiness reads")
+    }
+}
+
+fn unused_source() -> pip_github::GitHubReader<NoReads> {
+    pip_github::GitHubReader::new(NoReads, "https://github.test", "fixture", 1024, 1).unwrap()
+}
+
 #[derive(Default)]
 struct FixtureWriter {
     comments: RefCell<Vec<CommentSpec>>,
@@ -14,6 +25,12 @@ struct FixtureWriter {
 }
 
 impl DispositionWriter for FixtureWriter {
+    fn mark_ready(
+        &self,
+        _: &pip_github::PullRequestReadySpec,
+    ) -> Result<MutationResult, GitHubError> {
+        panic!("non-ready dispositions must not change draft status")
+    }
     fn ensure_comment(&self, spec: &CommentSpec) -> Result<MutationResult, GitHubError> {
         self.comments.borrow_mut().push(spec.clone());
         if self.fail {
@@ -28,8 +45,8 @@ fn github_failure_releases_the_effect_for_immediate_idempotent_retry() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = disposition_store(
         directory.path().join("ledger.db"),
-        "SHADOW_READY",
-        "NOTIFY_SHADOW_READY",
+        "WAITING_HUMAN",
+        "HOLD_FOR_HUMAN",
     );
     let writer = FixtureWriter {
         fail: true,
@@ -37,7 +54,7 @@ fn github_failure_releases_the_effect_for_immediate_idempotent_retry() {
     };
     assert!(
         consume_disposition_once(
-            &writer,
+            (&unused_source(), &writer),
             &active_policy(),
             &mut store,
             100,
@@ -49,7 +66,7 @@ fn github_failure_releases_the_effect_for_immediate_idempotent_retry() {
     );
     assert!(
         store
-            .claim_effect_matching("retry", 100, 30, &["NOTIFY_SHADOW_READY"])
+            .claim_effect_matching("retry", 100, 30, &["HOLD_FOR_HUMAN"])
             .unwrap()
             .is_some()
     );
@@ -57,17 +74,17 @@ fn github_failure_releases_the_effect_for_immediate_idempotent_retry() {
 }
 
 #[test]
-fn shadow_ready_publishes_one_human_held_pr_comment_and_records_evidence() {
+fn waiting_human_publishes_one_issue_comment_and_records_evidence() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = disposition_store(
         directory.path().join("ledger.db"),
-        "SHADOW_READY",
-        "NOTIFY_SHADOW_READY",
+        "WAITING_HUMAN",
+        "HOLD_FOR_HUMAN",
     );
     let writer = FixtureWriter::default();
 
     let result = consume_disposition_once(
-        &writer,
+        (&unused_source(), &writer),
         &active_policy(),
         &mut store,
         100,
@@ -80,15 +97,14 @@ fn shadow_ready_publishes_one_human_held_pr_comment_and_records_evidence() {
         result,
         DispositionCycle::Published {
             effect_id: "effect-disposition".into(),
-            target_number: 77,
+            target_number: 1240,
             external_id: 9001,
         }
     );
     let comments = writer.comments.borrow();
     assert_eq!(comments.len(), 1);
-    assert_eq!(comments[0].issue_number, 77);
-    assert!(comments[0].body.contains("human merge"));
-    assert!(comments[0].body.contains(&"b".repeat(40)));
+    assert_eq!(comments[0].issue_number, 1240);
+    assert!(comments[0].body.contains("human decision"));
     assert_eq!(store.evidence_count().unwrap(), 1);
     assert_eq!(store.status(100).unwrap().outbox_delivered, 1);
 }
@@ -104,7 +120,7 @@ fn invalid_authorization_leaves_comment_effect_unclaimed() {
     let writer = FixtureWriter::default();
     assert_eq!(
         consume_disposition_once(
-            &writer,
+            (&unused_source(), &writer),
             &active_policy(),
             &mut store,
             100,
@@ -135,7 +151,7 @@ fn takeover_record_is_consumed_locally_without_a_github_write() {
     let writer = FixtureWriter::default();
     assert_eq!(
         consume_disposition_once(
-            &writer,
+            (&unused_source(), &writer),
             &active_policy(),
             &mut store,
             100,

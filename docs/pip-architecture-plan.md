@@ -54,7 +54,10 @@ lifecycle boundary before use.
    remediation occurred, returning worthwhile in-scope changes to the existing
    build loop. Suggestions alone do not force a new round or expand authority.
 9. Run a fresh final review of the issue, plan, implementation and review history.
-10. Publish a human-held readiness recommendation. A person reviews and merges.
+10. Revalidate authorization, exact-head CI/reviews and final acceptance; mark the
+    draft PR ready for review and publish a human-held readiness recommendation.
+    A person reviews and merges. Promotion and notification retry idempotently;
+    leaving draft after accepted final review is not itself a human takeover.
 
 This is a dynamic bounded loop, not a pre-created multi-round DAG. Rust creates
 only currently authorized work; no synthetic activation-gate cards. Hermes

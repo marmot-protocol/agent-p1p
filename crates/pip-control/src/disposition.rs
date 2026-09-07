@@ -2,7 +2,9 @@
 
 use std::fmt;
 
-use pip_github::{CommentSpec, GitHubError, GitHubWriter, MutationResult, MutationTransport};
+use pip_github::{
+    CommentSpec, GitHubError, GitHubWriter, MutationResult, MutationTransport, PullRequestReadySpec,
+};
 use pip_store::{ApplyResult, EvidenceInput, Store, StoreError, StoredCase};
 use serde::Serialize;
 use serde_json::json;
@@ -17,11 +19,15 @@ const COMMENT_EFFECTS: [&str; 3] = ["HOLD_FOR_HUMAN", "NOTIFY_SHADOW_READY", "ES
 
 pub trait DispositionWriter {
     fn ensure_comment(&self, spec: &CommentSpec) -> Result<MutationResult, GitHubError>;
+    fn mark_ready(&self, spec: &PullRequestReadySpec) -> Result<MutationResult, GitHubError>;
 }
 
 impl<T: MutationTransport> DispositionWriter for GitHubWriter<T> {
     fn ensure_comment(&self, spec: &CommentSpec) -> Result<MutationResult, GitHubError> {
         self.ensure_issue_comment(spec)
+    }
+    fn mark_ready(&self, spec: &PullRequestReadySpec) -> Result<MutationResult, GitHubError> {
+        self.mark_pull_request_ready(spec)
     }
 }
 
@@ -30,6 +36,10 @@ impl<T: MutationTransport> DispositionWriter for GitHubWriter<T> {
 pub enum DispositionCycle {
     Idle,
     AuthorizationBlocked,
+    ReadinessPending {
+        case_key: String,
+        blockers: Vec<String>,
+    },
     Recorded {
         effect_id: String,
         effect_type: String,
@@ -48,6 +58,8 @@ pub enum DispositionError {
     MissingAutomationActor,
     InvalidCase,
     UnexpectedMutationResult,
+    Preflight(crate::FinalPreflightError),
+    ReadinessBlocked(Vec<String>),
 }
 
 impl fmt::Display for DispositionError {
@@ -61,6 +73,10 @@ impl fmt::Display for DispositionError {
             Self::InvalidCase => formatter.write_str("disposition effect case is invalid"),
             Self::UnexpectedMutationResult => {
                 formatter.write_str("comment mutation returned a non-comment result")
+            }
+            Self::Preflight(error) => error.fmt(formatter),
+            Self::ReadinessBlocked(blockers) => {
+                write!(formatter, "readiness blocked: {}", blockers.join(", "))
             }
         }
     }
@@ -80,8 +96,8 @@ impl From<StoreError> for DispositionError {
     }
 }
 
-pub fn consume_disposition_once<'a, W: DispositionWriter>(
-    writer: &W,
+pub fn consume_disposition_once<'a, S: crate::FinalPreflightSource, W: DispositionWriter>(
+    (source, writer): (&S, &W),
     scope: impl Into<crate::RepositoryScope<'a>>,
     store: &mut Store,
     now: u64,
@@ -137,6 +153,23 @@ pub fn consume_disposition_once<'a, W: DispositionWriter>(
         .github
         .automation_actor_id
         .ok_or(DispositionError::MissingAutomationActor)?;
+    let readiness = if claimed.effect_type == "NOTIFY_SHADOW_READY" {
+        match publish_ready(source, writer, store, policy, &case, &claimed.effect_id) {
+            Ok(result) => Some(result),
+            Err(error) => {
+                store.release_effect(&claimed.effect_id, owner)?;
+                if let DispositionError::ReadinessBlocked(blockers) = error {
+                    return Ok(DispositionCycle::ReadinessPending {
+                        case_key: case.case_key,
+                        blockers,
+                    });
+                }
+                return Err(error);
+            }
+        }
+    } else {
+        None
+    };
     let (target_number, body) = disposition_comment(&case, &claimed.effect_type)?;
     let result = match writer.ensure_comment(&CommentSpec {
         owner: policy.repository.owner.clone(),
@@ -170,6 +203,7 @@ pub fn consume_disposition_once<'a, W: DispositionWriter>(
             "comment_id": external_id,
             "mutation": mutation,
             "actor_id": expected_actor,
+            "ready_for_review": readiness,
         }),
     };
     let ledger = store.complete_effect_evidence(&claimed.effect_id, owner, now, &evidence)?;
@@ -182,6 +216,90 @@ pub fn consume_disposition_once<'a, W: DispositionWriter>(
         target_number,
         external_id,
     })
+}
+
+fn publish_ready<S: crate::FinalPreflightSource, W: DispositionWriter>(
+    source: &S,
+    writer: &W,
+    store: &Store,
+    policy: &crate::RepositoryPolicy,
+    case: &StoredCase,
+    effect_id: &str,
+) -> Result<serde_json::Value, DispositionError> {
+    if case.state != "SHADOW_READY" {
+        return Err(DispositionError::InvalidCase);
+    }
+    let pr = case.pr_number.ok_or(DispositionError::InvalidCase)?;
+    let head = case
+        .head_sha
+        .as_deref()
+        .ok_or(DispositionError::InvalidCase)?;
+    let history = store.immutable_history_for_case(&case.case_key)?;
+    let final_run = history
+        .runs
+        .iter()
+        .rev()
+        .find(|run| run.role == "final-reviewer")
+        .ok_or(DispositionError::InvalidCase)?;
+    let result: pip_contracts::WorkerResult = serde_json::from_value(final_run.payload.clone())
+        .map_err(|_| DispositionError::InvalidCase)?;
+    if !crate::draft_pr::payload_matches(&final_run.payload, &final_run.payload_sha256)
+        || !matches!(result, pip_contracts::WorkerResult::Final(result)
+            if result.outcome == pip_contracts::FinalOutcome::Ready
+            && result.common.task_id == final_run.task_id
+            && result.plan_version == case.plan_version && result.pr_number == pr
+            && result.reviewed_head_sha == head)
+    {
+        return Err(DispositionError::InvalidCase);
+    }
+    let issue = source.intake(
+        &policy.repository.owner,
+        &policy.repository.name,
+        case.issue_number,
+    )?;
+    if !crate::final_preflight::fresh_issue_authorization(policy, case, &issue) {
+        return Err(DispositionError::ReadinessBlocked(vec![
+            "ISSUE_AUTHORIZATION_REVOKED".into(),
+        ]));
+    }
+    let pull = source.pull_request(
+        &policy.repository.owner,
+        &policy.repository.name,
+        policy.repository.id,
+        pr,
+    )?;
+    let threads = source.review_threads(
+        &policy.repository.owner,
+        &policy.repository.name,
+        policy.repository.id,
+        pr,
+    )?;
+    let blockers =
+        crate::final_preflight::final_gate_blockers(store, case, policy, &pull, &threads, None)
+            .map_err(DispositionError::Preflight)?;
+    if !blockers.is_empty() {
+        return Err(DispositionError::ReadinessBlocked(blockers));
+    }
+    let result = writer.mark_ready(&PullRequestReadySpec {
+        owner: policy.repository.owner.clone(),
+        repository: policy.repository.name.clone(),
+        repository_id: policy.repository.id,
+        pull_request_number: pr,
+        expected_actor_id: policy
+            .github
+            .automation_actor_id
+            .ok_or(DispositionError::MissingAutomationActor)?,
+        expected_head_branch: pull.pull_request.head_branch,
+        expected_head_sha: head.into(),
+        expected_base_branch: policy.repository.default_branch.clone(),
+        client_mutation_id: format!("{effect_id}:ready"),
+    })?;
+    let mutation = match result {
+        MutationResult::Existing(id) if id == pr => "existing",
+        MutationResult::Updated(id) if id == pr => "updated",
+        _ => return Err(DispositionError::UnexpectedMutationResult),
+    };
+    Ok(json!({"pull_request_number":pr,"head_sha":head,"mutation":mutation}))
 }
 
 fn disposition_comment(

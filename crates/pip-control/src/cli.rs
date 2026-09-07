@@ -748,7 +748,7 @@ where
             advancement_authorized,
         ));
         let disposition = cycle_observation(crate::consume_disposition_once(
-            &writer,
+            (&reader, &writer),
             scope,
             &mut store,
             now,

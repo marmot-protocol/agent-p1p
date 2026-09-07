@@ -963,7 +963,11 @@ fn binding(result: &WorkerResult) -> WorkerBinding {
             Some(result.pr_number),
             Some(result.reviewed_head_sha.clone()),
         ),
-        WorkerResult::Final(_) => unreachable!(),
+        WorkerResult::Final(result) => (
+            result.plan_version,
+            Some(result.pr_number),
+            Some(result.reviewed_head_sha.clone()),
+        ),
     };
     WorkerBinding {
         case: common.case.clone(),
@@ -982,6 +986,163 @@ fn binding(result: &WorkerResult) -> WorkerBinding {
         plan_version,
         pr_number,
         expected_head_sha,
+    }
+}
+
+#[derive(Default)]
+struct ReadyWriter {
+    calls: std::cell::RefCell<Vec<&'static str>>,
+    fail_ready: bool,
+    fail_comment: bool,
+}
+
+impl pip_control::DispositionWriter for ReadyWriter {
+    fn mark_ready(
+        &self,
+        spec: &pip_github::PullRequestReadySpec,
+    ) -> Result<pip_github::MutationResult, GitHubError> {
+        assert_eq!(spec.pull_request_number, 77);
+        assert_eq!(spec.expected_head_sha, "b".repeat(40));
+        assert_eq!(spec.expected_actor_id, 202880);
+        self.calls.borrow_mut().push("ready");
+        if self.fail_ready {
+            return Err(GitHubError::Transport("ready timeout".into()));
+        }
+        Ok(pip_github::MutationResult::Existing(77))
+    }
+    fn ensure_comment(
+        &self,
+        spec: &pip_github::CommentSpec,
+    ) -> Result<pip_github::MutationResult, GitHubError> {
+        assert_eq!(spec.issue_number, 77);
+        self.calls.borrow_mut().push("comment");
+        if self.fail_comment {
+            return Err(GitHubError::Transport("comment timeout".into()));
+        }
+        Ok(pip_github::MutationResult::Existing(9001))
+    }
+}
+
+fn ready_store(
+    path: std::path::PathBuf,
+    policy: &pip_control::RepositoryPolicy,
+    source: &FixtureSource,
+) -> Store {
+    let mut store = final_review_store(path, policy, source);
+    reconcile_final_preflight_once(source, policy, &mut store, 200, "preflight", 30, true).unwrap();
+    let result = results().pop().unwrap();
+    ingest_worker_result(
+        &mut store,
+        &policy.case_policy(),
+        &binding(&result),
+        &result,
+    )
+    .unwrap();
+    assert_eq!(
+        store.case("repo:984321#1240@1").unwrap().unwrap().state,
+        "SHADOW_READY"
+    );
+    store
+}
+
+#[test]
+fn readiness_marks_pr_ready_before_comment_and_retries_partial_publication() {
+    for failure in ["none", "ready", "comment"] {
+        let temp = tempfile::tempdir().unwrap();
+        let policy = active_policy();
+        let mut source = accepted_source();
+        let mut store = ready_store(temp.path().join("ledger.db"), &policy, &source);
+        let writer = ReadyWriter {
+            fail_ready: failure == "ready",
+            fail_comment: failure == "comment",
+            ..Default::default()
+        };
+        let outcome = pip_control::consume_disposition_once(
+            (&source, &writer),
+            &policy,
+            &mut store,
+            300,
+            "disposition",
+            30,
+            true,
+        );
+        let expected = if failure == "ready" {
+            vec!["ready"]
+        } else {
+            vec!["ready", "comment"]
+        };
+        assert_eq!(*writer.calls.borrow(), expected);
+        if failure == "none" {
+            assert!(outcome.is_ok());
+        } else {
+            assert!(outcome.is_err());
+            source.evidence.pull_request.draft = false; // GitHub may have applied the timed-out mutation.
+            let retry = ReadyWriter::default();
+            pip_control::consume_disposition_once(
+                (&source, &retry),
+                &policy,
+                &mut store,
+                301,
+                "disposition",
+                30,
+                true,
+            )
+            .unwrap();
+            assert_eq!(*retry.calls.borrow(), ["ready", "comment"]);
+        }
+        let again = ReadyWriter::default();
+        assert_eq!(
+            pip_control::consume_disposition_once(
+                (&source, &again),
+                &policy,
+                &mut store,
+                302,
+                "disposition",
+                30,
+                true
+            )
+            .unwrap(),
+            pip_control::DispositionCycle::Idle
+        );
+        assert!(again.calls.borrow().is_empty());
+    }
+}
+
+#[test]
+fn readiness_rechecks_authorization_head_ci_reviews_and_threads_before_any_write() {
+    for change in ["authorization", "head", "ci", "review", "thread"] {
+        let temp = tempfile::tempdir().unwrap();
+        let policy = active_policy();
+        let mut source = accepted_source();
+        let mut store = ready_store(temp.path().join("ledger.db"), &policy, &source);
+        match change {
+            "authorization" => source.issue_authorized = false,
+            "head" => source.evidence.pull_request.head_sha = "c".repeat(40),
+            "ci" => source.evidence.check_runs.clear(),
+            "review" => source.evidence.reviews.clear(),
+            "thread" => source.threads[0].is_resolved = false,
+            _ => unreachable!(),
+        }
+        let writer = ReadyWriter::default();
+        let _ = pip_control::consume_disposition_once(
+            (&source, &writer),
+            &policy,
+            &mut store,
+            300,
+            "disposition",
+            30,
+            true,
+        );
+        assert!(
+            writer.calls.borrow().is_empty(),
+            "published despite {change}"
+        );
+        assert!(
+            store
+                .claim_effect_matching("retry", 300, 30, &["NOTIFY_SHADOW_READY"])
+                .unwrap()
+                .is_some()
+        );
     }
 }
 

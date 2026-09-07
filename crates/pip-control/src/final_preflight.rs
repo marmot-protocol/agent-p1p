@@ -234,7 +234,7 @@ pub fn reconcile_final_preflight_once<'a, S: FinalPreflightSource>(
     })
 }
 
-fn fresh_issue_authorization(
+pub(crate) fn fresh_issue_authorization(
     policy: &RepositoryPolicy,
     case: &StoredCase,
     evidence: &pip_github::IntakeSnapshot,

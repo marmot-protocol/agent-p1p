@@ -41,6 +41,29 @@ fn exact_controller_owned_pull_request_remains_automated() {
 }
 
 #[test]
+fn only_completed_review_allows_the_owned_pr_to_leave_draft() {
+    for (state, head_changed, expected) in [
+        ("SHADOW_READY", false, "SHADOW_READY"),
+        ("SHADOW_READY", true, "TAKEN_OVER"),
+        ("FINAL_REVIEW", false, "TAKEN_OVER"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+        seed_bound_case(&mut store, state);
+        let mut evidence = pull_request();
+        evidence.pull_request.draft = false;
+        if head_changed {
+            evidence.pull_request.head_sha = "c".repeat(40);
+        }
+        let source = FakePullRequest {
+            evidence: RefCell::new(evidence),
+        };
+        reconcile_takeover_once(&source, &active_policy(), &mut store, 100).unwrap();
+        assert_eq!(store.case(case_key()).unwrap().unwrap().state, expected);
+    }
+}
+
+#[test]
 fn foreign_actor_or_protected_head_change_commits_takeover_and_supersedes_work() {
     for mutate in [
         |pull: &mut PullRequestEvidence| pull.pull_request.author_id = 999,
