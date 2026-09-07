@@ -123,10 +123,27 @@ pub(crate) fn validate_retry(
         current.state_revision
     };
     // Check under the same IMMEDIATE transaction as supersession and dispatch.
+    // Current outputs reference frozen intents; historical outputs remain inline.
+    // Use the normal digest- and case-checked resolver before checking role/mode.
+    let (raw, hash): (String, String) = transaction.query_row(
+        "SELECT payload_json,payload_sha256 FROM outbox WHERE effect_id=?1",
+        [&authorization.effect_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let value: Value = serde_json::from_str(&raw)?;
+    if payload(&value)?.1 != hash {
+        return Err(invalid());
+    }
+    let resolved = serde_json::to_string(&dispatch_intents::resolve_output(
+        transaction,
+        &authorization.effect_id,
+        dispatch_intents::DispatchTransport::Direct,
+        value,
+    )?)?;
     let admissible: bool = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM outbox WHERE effect_id=?1 AND case_key=?2 AND state_revision=?3
-          AND effect_type='RUN_DIRECT_WORKER' AND json_extract(payload_json,'$.role')=?7
-          AND (?8=0 OR json_extract(payload_json,'$.body.review_mode')='required')
+          AND effect_type='RUN_DIRECT_WORKER' AND json_extract(?10,'$.role')=?7
+          AND (?8=0 OR json_extract(?10,'$.body.review_mode')='required')
           AND delivered_at IS NULL AND (superseded_at IS NOT NULL)=?5 AND lease_owner IS NULL AND lease_until IS NULL)
          AND NOT EXISTS(SELECT 1 FROM direct_attempts WHERE case_key=?2 AND (status='RUNNING' OR (status='COMPLETE' AND effect_id=?1)))
          AND (SELECT COUNT(*) FROM outbox WHERE case_key=?2 AND delivered_at IS NULL AND superseded_at IS NULL AND effect_type!='ESCALATE')=?6
@@ -136,7 +153,7 @@ pub(crate) fn validate_retry(
          AND (?9=0 OR EXISTS(SELECT 1 FROM runs WHERE case_key=?2 AND role='builder'))
          AND NOT EXISTS(SELECT 1 FROM events WHERE case_key=?2 AND event_type IN ('BUILDER_RETRY_AUTHORIZED','REVIEW_RETRY_AUTHORIZED')
              AND json_extract(payload_json,'$.failed_attempts')>=?4)",
-        params![authorization.effect_id,current.case_key,sql_u64(effect_revision)?,failed,escalated,if escalated {0} else {1},if review { "reviewer-secperf" } else { "builder" },review,current.pr_number.is_some()],|row|row.get(0))?;
+        params![authorization.effect_id,current.case_key,sql_u64(effect_revision)?,failed,escalated,if escalated {0} else {1},if review { "reviewer-secperf" } else { "builder" },review,current.pr_number.is_some(),resolved],|row|row.get(0))?;
     if !admissible {
         return Err(invalid());
     }

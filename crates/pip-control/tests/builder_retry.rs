@@ -111,6 +111,21 @@ fn retry_cannot_replace_a_running_or_completed_target_attempt() {
 
 #[test]
 fn review_retry_preserves_the_build_and_requires_fresh_ci() {
+    review_retry_with_payload(false, "reviewer-secperf", "required");
+}
+
+#[test]
+fn review_retry_resolves_frozen_dispatch_references() {
+    review_retry_with_payload(true, "reviewer-secperf", "required");
+}
+
+#[test]
+fn review_retry_rejects_frozen_wrong_role_and_observer_intents() {
+    review_retry_with_payload(true, "builder", "required");
+    review_retry_with_payload(true, "reviewer-secperf", "observer");
+}
+
+fn review_retry_with_payload(frozen: bool, role: &str, mode: &str) {
     let (_dir, mut store, paused, accepted, mut request) = fixture();
     store.apply_transition(&TransitionInput {
         case_key: CASE.into(), expected_revision: 2, next_state: "REVIEWING".into(),
@@ -118,10 +133,39 @@ fn review_retry_preserves_the_build_and_requires_fresh_ci() {
         observed_at: 135, event: EventInput { event_id:"ci-accepted".into(), event_type:"CI_ACCEPTED".into(), payload:json!({}) },
         run:Some(RunInput { run_id:"build-run".into(),task_id:"builder".into(),role:"builder".into(),payload:json!({"head_sha":"b".repeat(40)}) }),
         evidence:vec![], findings:vec![], effects:vec![EffectInput {
-            effect_id:"old-review".into(),effect_type:"RUN_DIRECT_WORKER".into(),
+            effect_id:if frozen {"review-dispatch"} else {"old-review"}.into(),effect_type:if frozen {"DISPATCH_REVIEWERS"} else {"RUN_DIRECT_WORKER"}.into(),
                 payload:json!({"role":"reviewer-secperf","body":{"review_mode":"required"},"task_id":"reviewer"}),
         }],
     },None).unwrap();
+    if frozen {
+        let dispatch = store.claim_effect("dispatcher", 135, 5).unwrap().unwrap();
+        let desired = json!({"source_effect_id":"review-dispatch","role":role,"body":{"review_mode":mode},"task_id":"reviewer"});
+        store
+            .freeze_dispatch_intents(
+                &dispatch,
+                &[pip_store::DispatchIntent {
+                    intent_id: "reviewer".into(),
+                    transport: pip_store::DispatchTransport::Direct,
+                    desired: desired.clone(),
+                }],
+                135,
+            )
+            .unwrap();
+        store
+            .complete_dispatch_outputs(
+                "review-dispatch",
+                &[],
+                &[EffectInput {
+                    effect_id: "old-review".into(),
+                    effect_type: "RUN_DIRECT_WORKER".into(),
+                    payload: desired,
+                }],
+                "dispatcher",
+                135,
+                None,
+            )
+            .unwrap();
+    }
     let effect = store.claim_effect("worker", 136, 5).unwrap().unwrap();
     let attempt = store
         .begin_direct_attempt(&effect, "reviewer", 136)
@@ -136,6 +180,14 @@ fn review_retry_preserves_the_build_and_requires_fresh_ci() {
     request.expected_failures = 4;
     let before = store.immutable_history_for_case(CASE).unwrap();
     let status = store.status(139).unwrap();
+    if role != "reviewer-secperf" || mode != "required" {
+        assert!(
+            pip_control::authorize_review_retry(&mut store, &paused, &request, 139, 0).is_err()
+        );
+        assert_eq!(store.status(139).unwrap(), status);
+        assert_eq!(store.immutable_history_for_case(CASE).unwrap(), before);
+        return;
+    }
     for field in ["revision", "failures", "effect", "reason"] {
         let mut invalid = request.clone();
         match field {
