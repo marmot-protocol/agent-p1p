@@ -420,6 +420,110 @@ fn retirement_preserves_workspace_when_the_retained_branch_diverged() {
 }
 
 #[test]
+fn retirement_preserves_source_builds_that_are_not_ancestors_of_the_published_branch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let spec = fixture(tmp.path());
+    allocator().allocate(&spec, REMOTE).unwrap();
+    git(
+        spec.path(),
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "accepted raw build",
+        ],
+    );
+    let source = git(spec.path(), &["rev-parse", "HEAD"]);
+    let retained = format!("refs/pip/source-builds/{source}");
+    git(spec.path(), &["update-ref", &retained, &source]);
+    // Model the signing rewrite: identical tree, different parent/history.
+    git(
+        spec.path(),
+        &[
+            "update-ref",
+            &format!("refs/heads/{}", spec.branch()),
+            &spec.base().to_string(),
+            &source,
+        ],
+    );
+    allocator().retire(&spec.retirement_spec()).unwrap();
+    assert!(!spec.path().exists());
+    assert_eq!(git(spec.repository(), &["rev-parse", &retained]), source);
+    git(
+        spec.repository(),
+        &["reflog", "expire", "--expire=now", "--all"],
+    );
+    git(spec.repository(), &["gc", "--prune=now", "--quiet"]);
+    assert_eq!(
+        git(spec.repository(), &["cat-file", "-t", &source]),
+        "commit"
+    );
+    assert_eq!(
+        allocator().retire(&spec.retirement_spec()).unwrap(),
+        RetirementResult::Absent
+    );
+}
+
+#[test]
+fn retirement_rejects_misbound_source_history_without_removing_the_workspace() {
+    for invalid in ["wrong-name", "wrong-object", "conflicting-cache"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = fixture(tmp.path());
+        allocator().allocate(&spec, REMOTE).unwrap();
+        git(
+            spec.path(),
+            &[
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "accepted raw build",
+            ],
+        );
+        let source = git(spec.path(), &["rev-parse", "HEAD"]);
+        let retained = format!(
+            "refs/pip/source-builds/{}",
+            if invalid == "wrong-name" {
+                "bad"
+            } else {
+                &source
+            }
+        );
+        let value = if invalid == "wrong-object" {
+            spec.base().to_string()
+        } else {
+            source.clone()
+        };
+        git(spec.path(), &["update-ref", &retained, &value]);
+        if invalid == "conflicting-cache" {
+            git(
+                spec.repository(),
+                &["update-ref", &retained, &spec.base().to_string()],
+            );
+        }
+        assert!(
+            allocator().retire(&spec.retirement_spec()).is_err(),
+            "retired with {invalid}"
+        );
+        assert!(spec.path().is_dir());
+        assert_eq!(git(spec.path(), &["rev-parse", &retained]), value);
+        if invalid == "conflicting-cache" {
+            assert_eq!(
+                git(spec.repository(), &["rev-parse", &retained]),
+                spec.base().to_string()
+            );
+        }
+    }
+}
+
+#[test]
 fn tracked_symlinks_are_not_followed_when_sharing_or_retiring() {
     let tmp = tempfile::tempdir().unwrap();
     let original = fixture(tmp.path());

@@ -285,7 +285,7 @@ Deployment remains a separate gate. Healthy-case advancement still
 uses the repository-wide authorization gate; this is not complete per-case
 failure isolation.
 
-### Controller commit-signing primitive (local, not wired into publication)
+### Controller commit signing and Git publication (local, not wired into the controller)
 
 `pip-executor::sign_commit` creates one SSH-signed commit from the exact accepted
 source tree and an explicitly supplied ancestor parent. It leaves source refs,
@@ -307,9 +307,27 @@ warnings denied, formatting and diff checks also pass
 (`/tmp/pip-commit-signing-validation-20260907.log`). Linux release checks remain
 a separate gate.
 
-This is **not yet a live signing path**. Still required: validated policy and
-credential wiring, durable source-commit retention, publication and crash-replay
-integration, and an audited republish of the current canary followed by fresh
+The executor now also exposes `GitPublisher::publish_signed`. It retains the
+accepted source under `refs/pip/source-builds/<source-sha>` before aligning the
+local branch, pushes the explicit signed SHA with the existing exact remote
+lease, and returns the source-to-published binding. A failed push or already
+completed publication replays against the original accepted source. Cleanup
+copies and verifies retained source commits in the private repository cache
+before removing the workspace, using compare-and-swap refs rather than an
+unconditional fetch into a non-head namespace.
+
+Real local Git tests cover interrupted push, remote conflict, packed refs,
+garbage collection and source preservation across retirement. A regression test
+under controller umask `0077` exposed unreadable new Git objects; the signing and
+publication paths now share only their specific object/ref/log paths with the
+worker group, without changing the process umask or touching credential modes.
+Focused signing, publication and retirement tests pass. Full validation of this
+follow-up is in progress; the existing service-identity lifecycle test does not
+yet exercise the new signing path.
+
+This is **not yet a live signing path**. Still required: validated identity and
+credential wiring, recording the publication binding in the controller ledger,
+and an audited republish of the current canary followed by fresh
 CI/reviews. In particular, final-preflight currently joins builder finding
 resolutions directly against the PR head; that join must use the verified
 source-to-published binding without changing the original result. No accepted

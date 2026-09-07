@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use pip_core::GitSha;
 
-use crate::{GitCommand, GitRunner};
+use crate::{CommitSigningIdentity, GitCommand, GitRunner, SignedCommit, sign_commit};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GitPublicationSpec {
@@ -307,7 +307,7 @@ impl<R: GitRunner> GitPublisher<R> {
                 "--porcelain".into(),
                 format!("--force-with-lease={remote_ref}:{expected}"),
                 network_target.into(),
-                format!("HEAD:{remote_ref}"),
+                format!("{}:{remote_ref}", spec.local_head()),
             ],
         )?;
         if self.remote_head(spec, network_target)? != Some(spec.local_head()) {
@@ -435,6 +435,109 @@ impl<R: GitRunner> GitPublisher<R> {
             return Err(PublicationError::CommandFailed(output.status));
         }
         Ok(output)
+    }
+}
+
+impl<R: GitRunner + Clone> GitPublisher<R> {
+    /// Requires exclusive controller ownership, just like `sign_commit`.
+    /// Retains accepted source history before changing the local branch. All
+    /// steps replay against the original spec after a crash or failed push.
+    /// The caller records the returned binding with its publication evidence.
+    pub fn publish_signed(
+        &self,
+        spec: &GitPublicationSpec,
+        parent: GitSha,
+        identity: &CommitSigningIdentity,
+        key: &Path,
+    ) -> Result<(PublicationResult, SignedCommit), PublicationError> {
+        let signed = sign_commit(
+            self.runner.clone(),
+            &self.program,
+            spec,
+            parent,
+            identity,
+            key,
+        )?;
+        let source = signed.source_head.to_string();
+        let retained = format!("refs/pip/source-builds/{source}");
+        let output = self.execute(
+            spec,
+            vec![
+                "for-each-ref".into(),
+                "--format=%(objectname)".into(),
+                retained.clone(),
+            ],
+        )?;
+        let previous = std::str::from_utf8(&output.stdout)
+            .map_err(|error| PublicationError::MalformedOutput(error.to_string()))?
+            .trim_end_matches('\n');
+        if !previous.is_empty() && previous != source {
+            return Err(PublicationError::VerificationFailed);
+        }
+        self.execute(
+            spec,
+            vec![
+                "update-ref".into(),
+                retained.clone(),
+                source.clone(),
+                if previous.is_empty() {
+                    "0".repeat(40)
+                } else {
+                    source.clone()
+                },
+            ],
+        )?;
+        let current = self.single_line(spec, ["rev-parse", "--verify", "HEAD"])?;
+        if current == source {
+            self.execute(
+                spec,
+                vec![
+                    "update-ref".into(),
+                    format!("refs/heads/{}", spec.branch()),
+                    signed.head.to_string(),
+                    source,
+                ],
+            )?;
+        } else if current != signed.head.to_string() {
+            return Err(PublicationError::LocalHeadDrift);
+        }
+        for relative in [
+            retained,
+            format!("refs/heads/{}", spec.branch()),
+            format!("logs/refs/heads/{}", spec.branch()),
+            "logs/HEAD".into(),
+        ] {
+            let path = spec.worktree().join(".git").join(&relative);
+            match fs::symlink_metadata(&path) {
+                Ok(_) => crate::isolated_workspace::share_git_metadata_path(
+                    spec.worktree(),
+                    Path::new(&relative),
+                    0o660,
+                )
+                .map_err(|error| PublicationError::Filesystem(error.to_string()))?,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::NotFound
+                        && relative.starts_with("logs/") => {}
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::NotFound
+                        && relative.starts_with("refs/") =>
+                {
+                    // GC can pack an unchanged ref; a no-op update-ref then
+                    // correctly leaves it packed instead of making a loose file.
+                    crate::isolated_workspace::share_git_metadata_path(
+                        spec.worktree(),
+                        Path::new("packed-refs"),
+                        0o660,
+                    )
+                    .map_err(|error| PublicationError::Filesystem(error.to_string()))?;
+                }
+                Err(error) => return Err(PublicationError::Filesystem(error.to_string())),
+            }
+        }
+        let mut published = spec.clone();
+        published.local_head = signed.head;
+        let result = self.publish(&published)?;
+        Ok((result, signed))
     }
 }
 

@@ -130,9 +130,7 @@ pub fn sign_commit<R: GitRunner + Clone>(
         };
     let plain = BTreeMap::new();
     let source = spec.local_head().to_string();
-    if run(vec!["rev-parse".into(), "HEAD".into()], &plain)? != source {
-        return Err(PublicationError::LocalHeadDrift);
-    }
+    let current_head = run(vec!["rev-parse".into(), "HEAD".into()], &plain)?;
     if !run(
         vec!["status".into(), "--porcelain=v1".into(), "-z".into()],
         &plain,
@@ -234,6 +232,24 @@ pub fn sign_commit<R: GitRunner + Clone>(
     let head: GitSha = run(args, &signer_environment)?
         .parse()
         .map_err(|_| PublicationError::VerificationFailed)?;
+    let object = head.to_string();
+    let loose_object = format!("objects/{}/{}", &object[..2], &object[2..]);
+    // An idempotent retry can reuse an already packed commit. A newly written
+    // loose object must be readable by the next credential-free worker.
+    if spec
+        .worktree()
+        .join(".git")
+        .join(&loose_object)
+        .try_exists()
+        .map_err(io_error)?
+    {
+        crate::isolated_workspace::share_git_metadata_path(
+            spec.worktree(),
+            Path::new(&loose_object),
+            0o440,
+        )
+        .map_err(io_error)?;
+    }
     let mut verify = signing_args.clone();
     verify.extend(["verify-commit".into(), head.to_string()]);
     run(verify, &plain)?;
@@ -261,7 +277,12 @@ pub fn sign_commit<R: GitRunner + Clone>(
         "{tree}\n{parent}\n{}\n{}\n{}\n{}\n{timestamp}",
         identity.name, identity.email, identity.name, identity.email
     );
-    if actual != expected || run(vec!["rev-parse".into(), "HEAD".into()], &plain)? != source {
+    // Publication may already have aligned the branch before a crash. Accept
+    // only the original source or this exact, independently recreated commit.
+    if current_head != source && current_head != head.to_string() {
+        return Err(PublicationError::LocalHeadDrift);
+    }
+    if actual != expected || run(vec!["rev-parse".into(), "HEAD".into()], &plain)? != current_head {
         return Err(PublicationError::VerificationFailed);
     }
     Ok(SignedCommit {

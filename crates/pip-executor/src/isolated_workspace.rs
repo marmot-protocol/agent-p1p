@@ -161,6 +161,7 @@ impl<R: GitRunner> IsolatedWorkspace<R> {
         {
             return Err(AllocationError::DirtyWorktree);
         }
+        self.retain_source_builds(spec)?;
         // Retain the exact local branch before reclaiming its source tree,
         // just as linked-worktree retirement retains the branch in the cache.
         // Never force over an independently changed controller-side branch.
@@ -185,6 +186,66 @@ impl<R: GitRunner> IsolatedWorkspace<R> {
         // metadata, branch, and clean state have all been bound above.
         fs::remove_dir_all(spec.path()).map_err(io_error)?;
         Ok(RetirementResult::Retired)
+    }
+
+    fn retain_source_builds(&self, spec: &WorktreeRetirementSpec) -> Result<(), AllocationError> {
+        let sources = self.git(
+            spec.path(),
+            &[
+                "for-each-ref",
+                "--format=%(refname) %(objectname)",
+                "refs/pip/source-builds/",
+            ],
+        )?;
+        for line in sources.lines() {
+            let (reference, source) = line
+                .split_once(' ')
+                .ok_or(AllocationError::VerificationFailed)?;
+            if source.parse::<pip_core::GitSha>().is_err()
+                || reference != format!("refs/pip/source-builds/{source}")
+                || self.git(
+                    spec.path(),
+                    &["--no-replace-objects", "cat-file", "-t", source],
+                )? != "commit"
+            {
+                return Err(AllocationError::VerificationFailed);
+            }
+            let previous = self.git(
+                spec.repository(),
+                &["for-each-ref", "--format=%(objectname)", reference],
+            )?;
+            if !previous.is_empty() && previous != source {
+                return Err(AllocationError::VerificationFailed);
+            }
+            // Fetch immutable objects, then create the retention ref with CAS.
+            // Fetch alone can overwrite non-head namespaces without --force.
+            self.git(
+                spec.repository(),
+                &[
+                    "-c",
+                    "fetch.fsckObjects=true",
+                    "fetch",
+                    "--quiet",
+                    "--no-tags",
+                    "--",
+                    spec.path().to_str().ok_or(AllocationError::InvalidSpec)?,
+                    source,
+                ],
+            )?;
+            let expected = if previous.is_empty() {
+                "0".repeat(40)
+            } else {
+                previous
+            };
+            self.git(
+                spec.repository(),
+                &["update-ref", reference, source, &expected],
+            )?;
+            if self.git(spec.repository(), &["rev-parse", "--verify", reference])? != source {
+                return Err(AllocationError::VerificationFailed);
+            }
+        }
+        Ok(())
     }
 
     fn verify(&self, path: &Path, branch: &str) -> Result<(), AllocationError> {
@@ -345,4 +406,35 @@ fn share_created_tree(path: &Path) -> Result<(), AllocationError> {
         }
     }
     fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(io_error)
+}
+
+/// Share only a controller-written Git object/ref/log and its directories.
+/// Existing worker-owned entries with sufficient access need no chmod. Never
+/// traverse a symlink, chmod a hard link, or change the process-wide umask.
+pub(crate) fn share_git_metadata_path(
+    worktree: &Path,
+    relative: &Path,
+    file_mode: u32,
+) -> Result<(), std::io::Error> {
+    let mut path = worktree.join(".git");
+    for component in std::iter::once(None).chain(relative.components().map(Some)) {
+        if let Some(component) = component {
+            let std::path::Component::Normal(name) = component else {
+                return Err(std::io::Error::other("invalid Git metadata path"));
+            };
+            path.push(name);
+        }
+        let metadata = fs::symlink_metadata(&path)?;
+        let required = if metadata.is_dir() {
+            0o770
+        } else if metadata.is_file() && metadata.nlink() == 1 {
+            file_mode
+        } else {
+            return Err(std::io::Error::other("unsafe Git metadata path"));
+        };
+        if metadata.permissions().mode() & required != required {
+            fs::set_permissions(&path, fs::Permissions::from_mode(required))?;
+        }
+    }
+    Ok(())
 }

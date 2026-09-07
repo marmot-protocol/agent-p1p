@@ -5,7 +5,8 @@ use std::process::Command;
 
 use pip_core::GitSha;
 use pip_executor::{
-    CommitSigningIdentity, GitPublicationSpec, ProcessGitRunner, sign_commit,
+    AllocationError, CommitSigningIdentity, GitCommand, GitOutput, GitPublicationSpec,
+    GitPublisher, GitRunner, ProcessGitRunner, PublicationError, PublicationResult, sign_commit,
     workspace_git_environment,
 };
 
@@ -27,6 +28,226 @@ fn git(path: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+
+#[derive(Clone)]
+struct LocalRemote {
+    path: PathBuf,
+    fail_push: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl GitRunner for LocalRemote {
+    fn run(&self, command: &GitCommand) -> Result<GitOutput, AllocationError> {
+        let mut command = command.clone();
+        if command.args.iter().any(|arg| arg == "push") {
+            assert!(
+                command.args.iter().any(|arg| {
+                    arg.split_once(":refs/heads/")
+                        .is_some_and(|(sha, _)| sha.parse::<GitSha>().is_ok())
+                }),
+                "push must name the immutable signed commit, not HEAD"
+            );
+            if self.fail_push.load(std::sync::atomic::Ordering::SeqCst) {
+                return Ok(GitOutput {
+                    status: 1,
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                    timed_out: false,
+                });
+            }
+        }
+        if command
+            .args
+            .iter()
+            .any(|arg| arg == "push" || arg == "ls-remote")
+        {
+            for arg in &mut command.args {
+                if arg == REMOTE {
+                    *arg = self.path.to_str().unwrap().to_owned();
+                }
+            }
+        }
+        ProcessGitRunner.run(&command)
+    }
+}
+
+#[test]
+fn signed_publication_retains_source_and_recovers_an_interrupted_push() {
+    let f = Fixture::new();
+    let remote = f._temp.path().join("remote.git");
+    fs::create_dir(&remote).unwrap();
+    git(&remote, &["init", "--bare", "-q"]);
+    let fail_push = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let publisher = GitPublisher::new(
+        LocalRemote {
+            path: remote.clone(),
+            fail_push: fail_push.clone(),
+        },
+        "git",
+        std::time::Duration::from_secs(30),
+        1024 * 1024,
+    )
+    .unwrap();
+    assert!(matches!(
+        publisher.publish_signed(&f.spec, f.base, &f.identity, &f.key),
+        Err(PublicationError::CommandFailed(1))
+    ));
+    let signed_head = git(&f.worktree, &["rev-parse", "HEAD"]);
+    assert_ne!(signed_head, f.spec.local_head().to_string());
+    let retained = format!("refs/pip/source-builds/{}", f.spec.local_head());
+    assert_eq!(
+        git(&f.worktree, &["rev-parse", &retained]),
+        f.spec.local_head().to_string()
+    );
+    assert!(git(&f.worktree, &["status", "--porcelain"]).is_empty());
+    // Neither GC nor losing the branch's source-head reflog may lose accepted work.
+    git(&f.worktree, &["reflog", "expire", "--expire=now", "--all"]);
+    git(&f.worktree, &["gc", "--prune=now", "--quiet"]);
+    assert_eq!(
+        git(
+            &f.worktree,
+            &["cat-file", "-t", &f.spec.local_head().to_string()]
+        ),
+        "commit"
+    );
+    fail_push.store(false, std::sync::atomic::Ordering::SeqCst);
+    let (result, signed) = publisher
+        .publish_signed(&f.spec, f.base, &f.identity, &f.key)
+        .unwrap();
+    assert_eq!(result, PublicationResult::Created);
+    assert_eq!(signed.head.to_string(), signed_head);
+    assert_eq!(
+        git(&remote, &["rev-parse", &format!("refs/heads/{BRANCH}")]),
+        signed_head
+    );
+    let (result, replay) = publisher
+        .publish_signed(&f.spec, f.base, &f.identity, &f.key)
+        .unwrap();
+    assert_eq!(result, PublicationResult::Existing);
+    assert_eq!(signed, replay);
+    git(
+        &remote,
+        &[
+            "update-ref",
+            &format!("refs/heads/{BRANCH}"),
+            &f.base.to_string(),
+            &signed_head,
+        ],
+    );
+    assert!(matches!(
+        publisher.publish_signed(&f.spec, f.base, &f.identity, &f.key),
+        Err(PublicationError::RemoteRace)
+    ));
+    assert_eq!(
+        git(&remote, &["rev-parse", &format!("refs/heads/{BRANCH}")]),
+        f.base.to_string()
+    );
+}
+
+#[test]
+fn signed_publication_rejects_a_conflicting_retained_source_ref() {
+    let f = Fixture::new();
+    let retained = format!("refs/pip/source-builds/{}", f.spec.local_head());
+    git(&f.worktree, &["update-ref", &retained, &f.base.to_string()]);
+    let publisher = GitPublisher::new(
+        ProcessGitRunner,
+        "git",
+        std::time::Duration::from_secs(30),
+        1024 * 1024,
+    )
+    .unwrap();
+    assert!(matches!(
+        publisher.publish_signed(&f.spec, f.base, &f.identity, &f.key),
+        Err(PublicationError::VerificationFailed)
+    ));
+    assert_eq!(
+        git(&f.worktree, &["rev-parse", "HEAD"]),
+        f.spec.local_head().to_string()
+    );
+    assert_eq!(
+        git(&f.worktree, &["rev-parse", &retained]),
+        f.base.to_string()
+    );
+}
+
+#[test]
+fn signed_git_metadata_remains_group_accessible_under_the_controller_private_umask() {
+    const CHILD: &str = "PIP_TEST_SIGNING_PRIVATE_UMASK";
+    if std::env::var_os(CHILD).is_none() {
+        let output = Command::new("/bin/sh")
+            .args(["-c", "umask 0077; exec \"$@\"", "pip-signing-umask-test"])
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "signed_git_metadata_remains_group_accessible_under_the_controller_private_umask",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let f = Fixture::new();
+    let remote = f._temp.path().join("remote.git");
+    fs::create_dir(&remote).unwrap();
+    git(&remote, &["init", "--bare", "-q"]);
+    let publisher = GitPublisher::new(
+        LocalRemote {
+            path: remote,
+            fail_push: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        },
+        "git",
+        std::time::Duration::from_secs(30),
+        1024 * 1024,
+    )
+    .unwrap();
+    let (_, signed) = publisher
+        .publish_signed(&f.spec, f.base, &f.identity, &f.key)
+        .unwrap();
+    let head = signed.head.to_string();
+    for relative in [
+        format!(".git/objects/{}/{}", &head[..2], &head[2..]),
+        format!(".git/refs/pip/source-builds/{}", signed.source_head),
+        format!(".git/refs/heads/{BRANCH}"),
+        format!(".git/logs/refs/heads/{BRANCH}"),
+        ".git/logs/HEAD".into(),
+    ] {
+        let path = f.worktree.join(relative);
+        let required = if path.to_string_lossy().contains("/.git/objects/") {
+            0o040
+        } else {
+            0o060
+        };
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & required,
+            required,
+            "worker cannot read {}",
+            path.display()
+        );
+        for parent in path
+            .parent()
+            .unwrap()
+            .ancestors()
+            .take_while(|parent| *parent != f.worktree)
+        {
+            assert_eq!(
+                fs::metadata(parent).unwrap().permissions().mode() & 0o070,
+                0o070,
+                "worker cannot use {}",
+                parent.display()
+            );
+        }
+    }
+    assert_eq!(
+        fs::metadata(&f.key).unwrap().permissions().mode() & 0o077,
+        0
+    );
 }
 
 struct Fixture {
@@ -354,5 +575,44 @@ fn signing_rechecks_path_ownership_after_the_publication_spec_was_constructed() 
         )
         .is_err(),
         "an ancestor symlink must not redirect signing outside the bound workspace"
+    );
+}
+
+#[test]
+fn signing_replays_after_publication_has_aligned_the_local_branch() {
+    let f = Fixture::new();
+    let signed = sign_commit(
+        ProcessGitRunner,
+        "git",
+        &f.spec,
+        f.base,
+        &f.identity,
+        &f.key,
+    )
+    .unwrap();
+    git(
+        &f.worktree,
+        &[
+            "update-ref",
+            &format!("refs/heads/{BRANCH}"),
+            &signed.head.to_string(),
+            &f.spec.local_head().to_string(),
+        ],
+    );
+    assert_eq!(
+        sign_commit(
+            ProcessGitRunner,
+            "git",
+            &f.spec,
+            f.base,
+            &f.identity,
+            &f.key
+        )
+        .unwrap(),
+        signed
+    );
+    assert_eq!(
+        git(&f.worktree, &["rev-parse", "HEAD"]),
+        signed.head.to_string()
     );
 }

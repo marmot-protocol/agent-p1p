@@ -293,7 +293,7 @@ fn owned_branch_update_uses_an_exact_force_with_lease_and_verifies_remote() {
             "--porcelain",
             "--force-with-lease=refs/heads/pip/repo-984321/issue-1240/workflow-2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "origin",
-            "HEAD:refs/heads/pip/repo-984321/issue-1240/workflow-2",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:refs/heads/pip/repo-984321/issue-1240/workflow-2",
         ]
     );
 }
