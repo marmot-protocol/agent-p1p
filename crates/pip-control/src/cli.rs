@@ -1,5 +1,9 @@
 //! Strict operator command parsing and machine-readable output.
 
+#[cfg(test)]
+#[path = "cli_cycle_tests.rs"]
+mod cycle_tests;
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
@@ -438,6 +442,13 @@ fn bootstrap_runtime(arguments: &[String]) -> Result<Value, CliError> {
 }
 
 fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
+    controller_cycle_with_transport(arguments, UreqTransport::new(Duration::from_secs(20)))
+}
+
+fn controller_cycle_with_transport<T>(arguments: &[String], transport: T) -> Result<Value, CliError>
+where
+    T: pip_github::ReadTransport + pip_github::MutationTransport + Clone,
+{
     let options = options(
         arguments,
         &[
@@ -551,7 +562,6 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         })
         .transpose()?
         .unwrap_or(60);
-    let transport = UreqTransport::new(Duration::from_secs(20));
     let reader = GitHubReader::new(
         transport.clone(),
         "https://api.github.com",
@@ -582,61 +592,60 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
     };
     let mut store = Store::open(required(&options, "--database")?)
         .map_err(|error| CliError::Ledger(error.to_string()))?;
-    let workspace_lifecycle = crate::reconcile_workspace_lifecycle_once(&mut store, &policy, now)
-        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
-    let workspace_ready = workspace_lifecycle.ready;
-    let intake = if policy.intake.enabled {
-        serde_json::to_value(
-            crate::reconcile_intake(
-                &reader,
-                &policy,
-                &mut store,
-                now,
-                global_paused || !workspace_ready,
-            )
-            .map_err(|error| CliError::Reconciliation(error.to_string()))?,
-        )
-        .map_err(|error| CliError::Reconciliation(error.to_string()))?
+    let workspace_lifecycle = crate::reconcile_workspace_lifecycle_once(&mut store, &policy, now);
+    let workspace_ready = workspace_lifecycle.as_ref().is_ok_and(|state| state.ready);
+    let workspace_lifecycle = cycle_observation(workspace_lifecycle);
+    let intake = if policy.intake.enabled && workspace_ready {
+        cycle_observation(crate::reconcile_intake(
+            &reader, &policy, &mut store, now, false,
+        ))
     } else {
         json!({"result": "disabled"})
     };
-    let takeover = crate::reconcile_takeover_once(&reader, &policy, &mut store, now)
-        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
-    let authorization = crate::reconcile_active_authorization(&reader, &policy, &mut store, now)
-        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
-    let work_authorized = authorization.is_authorized() && workspace_ready;
-    let bounds = crate::enforce_operational_bounds(&mut store, &policy, now)
-        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
-    let (result, ci) = if authorization.is_authorized() {
-        let result =
-            crate::ingest_completed_once(&mut store, &policy, required(&options, "--hermes")?, now)
-                .map_err(|error| CliError::Reconciliation(error.to_string()))?;
-        let ci = crate::reconcile_ci_once(&reader, &policy, &mut store, now)
-            .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let takeover = crate::reconcile_takeover_once(&reader, &policy, &mut store, now);
+    let authorization = crate::reconcile_active_authorization(&reader, &policy, &mut store, now);
+    let bounds = crate::enforce_operational_bounds(&mut store, &policy, now);
+    // Errors are observations, never authorization. Keep collection and unrelated
+    // capabilities available, but fail closed when a prerequisite cannot be checked.
+    let advancement_authorized = authorization
+        .as_ref()
+        .is_ok_and(|state| state.is_authorized())
+        && takeover.is_ok()
+        && bounds.is_ok();
+    let takeover = cycle_observation(takeover);
+    let authorization = cycle_observation(authorization);
+    let bounds = cycle_observation(bounds);
+    let work_authorized = advancement_authorized && workspace_ready;
+    let (result, ci) = if advancement_authorized {
         (
-            serde_json::to_value(result)
-                .map_err(|error| CliError::Reconciliation(error.to_string()))?,
-            serde_json::to_value(ci)
-                .map_err(|error| CliError::Reconciliation(error.to_string()))?,
+            cycle_observation(crate::ingest_completed_once(
+                &mut store,
+                &policy,
+                required(&options, "--hermes")?,
+                now,
+            )),
+            cycle_observation(crate::reconcile_ci_once(&reader, &policy, &mut store, now)),
         )
     } else {
         let blocked = json!({"result": "authorization_blocked"});
         (blocked.clone(), blocked)
     };
-    let direct_queue = crate::DirectQueue::new(required(&options, "--direct-queue")?)
-        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
-    let direct_worker = crate::reconcile_direct_queue_once(
-        &mut store,
-        &policy,
-        &direct_queue,
-        required(&options, "--owner")?,
-        now,
-        crate::recommended_direct_lease_seconds(&policy)
-            .map_err(|error| CliError::Reconciliation(error.to_string()))?,
-        work_authorized,
-    )
-    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
-    let draft_pull_request = crate::publish_draft_pull_request_once(
+    let direct_worker = cycle_observation((|| {
+        let direct_queue = crate::DirectQueue::new(required(&options, "--direct-queue")?)
+            .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+        crate::reconcile_direct_queue_once(
+            &mut store,
+            &policy,
+            &direct_queue,
+            required(&options, "--owner")?,
+            now,
+            crate::recommended_direct_lease_seconds(&policy)
+                .map_err(|error| CliError::Reconciliation(error.to_string()))?,
+            work_authorized,
+        )
+        .map_err(|error| CliError::Reconciliation(error.to_string()))
+    })());
+    let draft_pull_request = cycle_observation(crate::publish_draft_pull_request_once(
         &writer,
         &policy,
         &mut store,
@@ -646,19 +655,17 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         required(&options, "--owner")?,
         lease_seconds,
         work_authorized,
-    )
-    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
-    let plan_publication = crate::publish_plan_once(
+    ));
+    let plan_publication = cycle_observation(crate::publish_plan_once(
         &writer,
         &policy,
         &mut store,
         now,
         required(&options, "--owner")?,
         lease_seconds,
-        authorization.is_authorized(),
-    )
-    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
-    let review_publication = crate::publish_reviews_once(
+        advancement_authorized,
+    ));
+    let review_publication = cycle_observation(crate::publish_reviews_once(
         &general_review_writer,
         &secperf_review_writer,
         &policy,
@@ -666,30 +673,27 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         now,
         required(&options, "--owner")?,
         lease_seconds,
-        authorization.is_authorized(),
-    )
-    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
-    let final_preflight = crate::reconcile_final_preflight_once(
+        advancement_authorized,
+    ));
+    let final_preflight = cycle_observation(crate::reconcile_final_preflight_once(
         &reader,
         &policy,
         &mut store,
         now,
         required(&options, "--owner")?,
         lease_seconds,
-        authorization.is_authorized(),
-    )
-    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
-    let disposition = crate::consume_disposition_once(
+        advancement_authorized,
+    ));
+    let disposition = cycle_observation(crate::consume_disposition_once(
         &writer,
         &policy,
         &mut store,
         now,
         required(&options, "--owner")?,
         lease_seconds,
-        authorization.is_authorized(),
-    )
-    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
-    let dispatch = crate::dispatch_once(
+        advancement_authorized,
+    ));
+    let dispatch = cycle_observation(crate::dispatch_once(
         &mut store,
         &policy,
         crate::DispatchCycleContext {
@@ -700,10 +704,8 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
             lease_seconds,
             authorization_valid: work_authorized,
         },
-    )
-    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
-    Ok(json!({
-        "ok": collection["direct_worker"]["result"] != "error" && collection["worker_result"]["result"] != "error",
+    ));
+    let mut report = json!({
         "result": "active",
         "collection": collection,
         "observed_at": now,
@@ -724,7 +726,17 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         "merge": {"result": "human_only"},
         "disposition": disposition,
         "dispatch": dispatch,
-    }))
+    });
+    report["ok"] = json!(
+        collection["direct_worker"]["result"] != "error"
+            && collection["worker_result"]["result"] != "error"
+            && report
+                .as_object()
+                .expect("cycle report")
+                .values()
+                .all(|value| value["result"] != "error")
+    );
+    Ok(report)
 }
 
 fn cycle_observation<T: serde::Serialize, E: fmt::Display>(result: Result<T, E>) -> Value {

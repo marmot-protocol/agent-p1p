@@ -131,6 +131,18 @@ These changes are now installed. They do not yet isolate every
 failed case within one repository: authorization and phase errors can still
 stop an otherwise unrelated active cycle.
 
+A subsequent local controller change reports capability failures individually
+and continues unrelated phases. Authorization, takeover and operational-bound
+errors still block advancement; storage readiness still gates new work. The
+real controller regression covers healthy idle operation plus intake, storage,
+queue, publication and authorization failures without external writes or case
+history changes. Degraded cycles emit their complete JSON report before exiting
+nonzero, including when paused collection fails. This is phase isolation, not
+yet per-case authorization isolation. The full Rust suite, Clippy and formatting
+checks pass; the change is not installed in this snapshot.
+The service unit's absolute `LoadCredential` paths also remain startup
+dependencies; missing App files can still stop the process before collection.
+
 A subsequent local TDD change attempts both accepted review-lane publications
 even if one App is unavailable. The ledger advances only after both succeed;
 partial external success retains the stable markers for retry. The regression

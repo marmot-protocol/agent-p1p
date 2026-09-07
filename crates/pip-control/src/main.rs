@@ -24,6 +24,11 @@ fn main() {
                 std::process::exit(1);
             }
             println!();
+            // Emit every phase observation before signalling a degraded cycle
+            // to systemd and operators. Partial progress is not a healthy run.
+            if value["ok"].as_bool() == Some(false) {
+                std::process::exit(1);
+            }
         }
         Err(error) => {
             eprintln!("pip-control: {error}");

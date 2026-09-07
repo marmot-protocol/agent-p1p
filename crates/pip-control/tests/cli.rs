@@ -303,73 +303,83 @@ fn derive_public_key_reads_a_private_mode_signing_key() {
 }
 
 #[test]
-fn controller_cycle_is_inert_before_credentials_database_or_hermes_when_policy_is_paused() {
-    let directory = tempfile::tempdir().unwrap();
-    let policy = directory.path().join("policy.json");
-    fs::write(
-        &policy,
-        include_bytes!("../../../config/target/repositories/mdk.json"),
-    )
-    .unwrap();
-    let database = directory.path().join("must-not-exist.db");
-    let output = Command::new(env!("CARGO_BIN_EXE_pip-control"))
-        .args([
-            "controller-cycle",
-            "--policy",
-            policy.to_str().unwrap(),
-            "--database",
-            database.to_str().unwrap(),
-            "--github-token",
-            directory.path().join("missing-token").to_str().unwrap(),
-            "--github-reviewer-general-app",
-            directory
-                .path()
-                .join("missing-general-app")
-                .to_str()
-                .unwrap(),
-            "--github-reviewer-general-key",
-            directory
-                .path()
-                .join("missing-general-key")
-                .to_str()
-                .unwrap(),
-            "--github-reviewer-secperf-app",
-            directory
-                .path()
-                .join("missing-secperf-app")
-                .to_str()
-                .unwrap(),
-            "--github-reviewer-secperf-key",
-            directory
-                .path()
-                .join("missing-secperf-key")
-                .to_str()
-                .unwrap(),
-            "--git-askpass",
-            directory.path().join("missing-askpass").to_str().unwrap(),
-            "--hermes",
-            "/missing/hermes",
-            "--owner",
-            "pip-controller",
-            "--skills-commit-file",
-            directory.path().join("missing-source").to_str().unwrap(),
-            "--direct-queue",
-            directory.path().join("missing-queue").to_str().unwrap(),
-            "--now",
-            "1787220000",
-        ])
-        .output()
+fn paused_controller_reports_collection_failures_without_reading_credentials() {
+    for initialized in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let policy = directory.path().join("policy.json");
+        fs::write(
+            &policy,
+            include_bytes!("../../../config/target/repositories/mdk.json"),
+        )
         .unwrap();
+        let database = directory.path().join("must-not-exist.db");
+        if initialized {
+            Store::open(&database).unwrap();
+        }
+        let output = Command::new(env!("CARGO_BIN_EXE_pip-control"))
+            .args([
+                "controller-cycle",
+                "--policy",
+                policy.to_str().unwrap(),
+                "--database",
+                database.to_str().unwrap(),
+                "--github-token",
+                directory.path().join("missing-token").to_str().unwrap(),
+                "--github-reviewer-general-app",
+                directory
+                    .path()
+                    .join("missing-general-app")
+                    .to_str()
+                    .unwrap(),
+                "--github-reviewer-general-key",
+                directory
+                    .path()
+                    .join("missing-general-key")
+                    .to_str()
+                    .unwrap(),
+                "--github-reviewer-secperf-app",
+                directory
+                    .path()
+                    .join("missing-secperf-app")
+                    .to_str()
+                    .unwrap(),
+                "--github-reviewer-secperf-key",
+                directory
+                    .path()
+                    .join("missing-secperf-key")
+                    .to_str()
+                    .unwrap(),
+                "--git-askpass",
+                directory.path().join("missing-askpass").to_str().unwrap(),
+                "--hermes",
+                "/missing/hermes",
+                "--owner",
+                "pip-controller",
+                "--skills-commit-file",
+                directory.path().join("missing-source").to_str().unwrap(),
+                "--direct-queue",
+                directory.path().join("missing-queue").to_str().unwrap(),
+                "--now",
+                "1787220000",
+            ])
+            .output()
+            .unwrap();
 
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["ok"], true);
-    assert_eq!(value["result"], "disabled");
-    assert!(!database.exists());
+        assert_eq!(
+            output.status.success(),
+            !initialized,
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["ok"], !initialized);
+        assert_eq!(value["result"], "disabled");
+        assert_eq!(database.exists(), initialized);
+        if initialized {
+            assert_eq!(value["direct_worker"]["result"], "error");
+            assert_eq!(value["worker_result"]["result"], "idle");
+        }
+    }
 }
 
 #[test]
