@@ -176,8 +176,12 @@ pub fn reconcile_ci_once<S: PullRequestSource>(
         event_payload,
         EvidenceInput {
             evidence_id: format!(
-                "evidence-ci-repo{}-issue{}-workflow{}-head{}",
-                case.repository_id, case.issue_number, case.workflow_version, expected_head
+                "evidence-ci-repo{}-issue{}-workflow{}-revision{}-head{}",
+                case.repository_id,
+                case.issue_number,
+                case.workflow_version,
+                case.state_revision,
+                expected_head
             ),
             kind: "GITHUB_CI".into(),
             source: format!("github-pr-{pr_number}"),

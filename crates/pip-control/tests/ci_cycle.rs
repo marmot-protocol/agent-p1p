@@ -54,6 +54,59 @@ fn exact_green_ci_is_recorded_and_releases_two_reviewers() {
 }
 
 #[test]
+fn fresh_ci_observation_on_the_same_head_preserves_prior_evidence() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = waiting_ci_store(directory.path().join("ledger.db"));
+    let source = FixtureSource {
+        evidence: evidence(vec![check(CheckConclusion::Success)]),
+    };
+    reconcile_ci_once(&source, &active_policy(), &mut store, 100).unwrap();
+    let prior = store
+        .immutable_history_for_case("repo:984321#1240@1")
+        .unwrap();
+    let case = store.case("repo:984321#1240@1").unwrap().unwrap();
+    // A new CI generation may follow recovery without changing the build.
+    store
+        .apply_transition(
+            &TransitionInput {
+                case_key: case.case_key.clone(),
+                expected_revision: case.state_revision,
+                next_state: "WAITING_CI".into(),
+                remediation_round: case.remediation_round,
+                plan_version: case.plan_version,
+                pr_number: case.pr_number,
+                head_sha: case.head_sha,
+                observed_at: 101,
+                event: EventInput {
+                    event_id: "fresh-ci-generation".into(),
+                    event_type: "RECHECK_CI".into(),
+                    payload: json!({}),
+                },
+                run: None,
+                evidence: vec![],
+                findings: vec![],
+                effects: vec![],
+            },
+            None,
+        )
+        .unwrap();
+    reconcile_ci_once(&source, &active_policy(), &mut store, 102).unwrap();
+    let history = store.immutable_history_for_case(&case.case_key).unwrap();
+    assert_eq!(history.evidence.len(), prior.evidence.len() + 1);
+    for old in prior.evidence {
+        assert!(history.evidence.contains(&old));
+    }
+    assert_eq!(
+        store.case(&case.case_key).unwrap().unwrap().state,
+        "REVIEWING"
+    );
+    assert_eq!(
+        reconcile_ci_once(&source, &active_policy(), &mut store, 103).unwrap(),
+        CiCycle::Idle
+    );
+}
+
+#[test]
 fn pending_ci_is_read_only_and_historical_failure_enters_remediation() {
     let directory = tempfile::tempdir().unwrap();
     let mut pending_store = waiting_ci_store(directory.path().join("pending.db"));

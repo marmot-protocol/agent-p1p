@@ -5,6 +5,22 @@ live proof. The target is [the lean architecture](pip-architecture-plan.md).
 
 ## Latest verified live state
 
+The subsequent signed `16ee6649e3cf5afffea7ba20417cc782ee0ce618` release
+passed CI `34090500812` and deployment gates `34090500817` and was installed
+on Pirate with the paused policy and ledger byte-for-byte preserved. The
+root-authorized review retry then moved #993 from `ESCALATED` revision 12 to
+`WAITING_CI` revision 13, preserving the PR/head and all five case-local failed
+attempts (nine failures across all cases). No new model attempt started:
+same-head CI re-observation collided with the old evidence ID. Execution was
+stopped/disabled again and the paused seed policy restored; ingress stays up.
+The follow-up regression distinguishes CI observation generations without
+replacing the earlier exact-head snapshot. Historical native collection also
+needed its saved accepted policy rather than today's model settings; that fix
+is committed separately. Both follow-ups require deployment and live proof.
+The general review remains preserved in Hermes and a root-only recovery copy.
+
+Earlier observations explaining the current PR and review state:
+
 Pirate was checked after the `e6f7eec4d92a26d7e141591c285fcbcdc350154c`
 installation:
 
@@ -70,7 +86,7 @@ Inspect the current ledger, services and GitHub evidence before acting.
 These changes have Rust regression coverage and signed-release Linux lifecycle
 coverage. They do not by themselves establish end-to-end success.
 
-## Local work, not yet deployed
+## Result compatibility and remaining work
 
 Direct result collection is deployed separately from workflow advancement.
 The paused controller can retain an exactly bound completed result without
@@ -80,7 +96,8 @@ dispatch lease after retention, malformed bindings, failures and queue traversal
 Native Hermes collection now has local coverage for the same pause/restart
 behavior using the existing immutable evidence table, not another workflow
 database. A broken direct queue does not prevent native collection while paused.
-Native collection is not yet deployed. Active-cycle/cross-case failure isolation
+Native collection is deployed but historical-policy collection needs its follow-up.
+Active-cycle/cross-case failure isolation
 and saved-policy compatibility still need work; not all pause semantics are done.
 Collection also retains late completions from held/superseded work as evidence
 without advancing those cases. Cursor now requests `--trust` for the assigned
@@ -91,12 +108,13 @@ Review-start recovery now shares the existing bounded root/offline recovery
 path: `authorize-review-retry` preserves the accepted PR/head/build and creates
 fresh CI observation, not a builder rerun or approval. Short scratch schema-2
 paths now pass a real Unix-socket allocation test while old schema-1 paths stay
-unchanged. These changes have local Rust/Clippy coverage and are awaiting their
-signed release deployment. The recovery has not been applied to #993 yet.
+unchanged. These changes have local Rust/Clippy and signed Linux lifecycle
+coverage and are installed. The recovery was applied to #993; fresh CI exposed
+the observation-ID collision noted above, before any new reviewer execution.
 Native result ingestion now also accepts a reviewer after peer-only
 `REVIEW_RECORDED` revisions. A regression joins both real-shaped review
 contracts through final-review state; intervening CI/retry generations still
-fence older work. This ordering fix is not yet deployed.
+fence older work. This ordering fix is installed but still awaits live proof.
 
 New managed Hermes tasks and direct Cursor prompts now reference a retained
 SHA-256-bound evidence file instead of embedding the full history. Saved older
