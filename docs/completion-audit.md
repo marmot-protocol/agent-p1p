@@ -13,29 +13,26 @@ passed required CI and received independent App reviews: general requested
 changes; security/performance approved. Builder attempt 14 produced an accepted
 remediation at `625bb4299187139461a64fd6eb5337ea35804261`.
 
-Signed Pip `8ca4e7422e49269aa8c8720791d1ac5ccd76fb29` is installed on Pirate.
-The earlier `8d3dde4` publication action pushed that exact MDK commit and updated the existing
-PR, preserving accepted history. Fresh GitHub CI run `34104104224` passed; the
-case is `FINAL_REVIEW`, revision 26. Native task `t_d2cdf42a` and direct attempt
-15 passed required general and Kimi re-reviews; App approvals `5130401272` and
-`5130401511` bind this head. Final preflight remains pending: GitHub reports
-`mergeable=true` but state `blocked`; Safe Master requires signed commits and
-both PR commits are unsigned. Signing/publication identity needs correction;
-replacement commits require fresh CI and reviews. The holistic final reviewer
-has not started. The PR is still draft; no merge occurred.
+Signed Pip `5d4fdb2c3a9d14e84d3c5444c31bdfaaa5750397` is installed on Pirate;
+CI `34133415495` and deployment `34133415508` passed. The latest installation
+preserved the complete logical ledger dump and policy bytes. Schema remains 10.
 
-Controller-only signing, audited publication-only recovery and case isolation
-are installed through `8ca4e74`. CI `34129502446` and signed deployment
-`34129502489` passed, including actual Linux signing credentials/sandbox and
-root/queue/service-state recovery checks. Pirate's schema 8 to 10 upgrade
-preserved all data in 14 existing tables and the active policy bytes. Resumed
-format-2 controller cycles succeed but still report `PR_MERGE_STATE:blocked`.
-The approved new signing key is not yet registered on GitHub. Installation is
-not signed live publication or completion of the final gate.
+The unsigned build passed CI `34104104224`, native general task `t_d2cdf42a`
+and Kimi direct attempt 15. App approvals `5130401272` and `5130401511` bind
+that historical head. JG has now registered the dedicated signing key, and
+publication-only recovery produced signed head
+`53ac3d8f8143ea9f186bf677f59c3a16f2632fca` on the original planned base.
+GitHub verifies its signature for `agent-p1p`; its tree exactly matches the
+accepted unsigned build. No new builder attempt was granted or run.
+
+The case is `WAITING_CI`, revision 28, with fresh CI `34134517302` running.
+Required reviews must run on the signed head. The holistic final reviewer has
+not started. The PR remains draft and no merge occurred. See the
+[signed recovery evidence](evidence/2026-09-07-signed-canary-recovery.md).
 
 Live acceptance gates (partially satisfied):
 
-1. Required CI is green on the current head; any further head change must repeat it.
+1. Required CI must be green on the signed current head; any further head change must repeat it.
 2. All required independent re-reviews on that same head, including origin
    confirmation of the blocking finding's resolution. Actual Cursor verification
    commands and the native review scratch layout must work in their sandboxes.
@@ -45,6 +42,9 @@ Live acceptance gates (partially satisfied):
 5. Any further remediation must repeat exact-head CI and required reviews.
 
 ## Lean architecture gate
+
+JG's latest direction is to finish the existing canary before further cleanup.
+The remaining cleanup below is deferred, not reported as completed.
 
 | Requirement | Current evidence and remaining work |
 |---|---|

@@ -8,32 +8,34 @@ experiments remain in Git history and [evidence/](evidence/).
 
 ## Live checkpoint
 
-Pirate was rechecked and runs `8ca4e7422e49269aa8c8720791d1ac5ccd76fb29`, ledger
-schema 10. CI `34129502446` and signed deployment `34129502489` passed. Installation
-preserved all data in the 14 existing ledger tables and the active policy bytes;
-only schema metadata/constraints changed. The dedicated controller, direct-worker
-and webhook-consumer timers are active, with repeated firings and finite next
-runs verified. No `pip-worker` process was running at inspection. Refresh this
-dated evidence before mutation. See the [deployment evidence](evidence/2026-09-07-case-isolation-deployment.md).
+Pirate runs `5d4fdb2c3a9d14e84d3c5444c31bdfaaa5750397`, ledger schema 10.
+CI `34133415495` and signed deployment `34133415508` passed. The latest install
+preserved the complete logical ledger dump and active policy bytes. The dedicated
+controller, direct-worker and webhook-consumer timers are resumed, with repeated
+firings and finite next runs verified. See the
+[signed recovery evidence](evidence/2026-09-07-signed-canary-recovery.md).
 Conversational Hermes is separate and untouched; Hermes remains upstream.
 
 MDK #993 produced draft [PR #1726](https://github.com/marmot-protocol/mdk/pull/1726),
-currently at `625bb4299187139461a64fd6eb5337ea35804261`.
+currently at signed head `53ac3d8f8143ea9f186bf677f59c3a16f2632fca`.
 
 - Planning, initial build, independent reviews, remediation and re-review have
-  executed. Last ledger inspection: `FINAL_REVIEW`, revision 26, plan 1, policy 7,
-  remediation round 1. Builder attempt 14 and its reported limitations are retained.
-- Current-head required CI `34104104224` passes. App reviews `5130401272` and
-  `5130401511` both approve this exact head; old-head reviews remain historical.
+  executed on the accepted unsigned build. Publication-only recovery retained
+  that exact tree and produced a GitHub-verified signed replacement. Last ledger
+  inspection: `WAITING_CI`, revision 28, plan 1, policy 7, remediation round 1.
+  Builder attempt 14 and its reported limitations are retained; no builder rerun.
+- Fresh CI `34134517302` is running. Earlier CI `34104104224` and App approvals
+  `5130401272` / `5130401511` bind the old unsigned head, not the new head.
+  Required reviews must run again after CI passes.
 - Native general task `t_d2cdf42a` used `openai-codex/gpt-6-astra`; its retained
   logs showed 611 library and two sanitization tests passing. Required direct
   attempt 15 used `cursor/kimi-k3-max`, reporting successful tests and hostile-input
   probes. Its long-TMPDIR failure and short-path rerun remain disclosed. Shadow
   Opus attempt 16 approved but is advisory, not an additional required vote.
-- Final holistic review has **not** started. GitHub reports `BLOCKED`: Safe Master
-  requires signatures and both PR commits are unsigned. Commit email also maps
-  to `pip`, not the configured `agent-p1p`. The PR remains open and draft.
-  No merge occurred. Reinspect other merge blockers after signing.
+- Final holistic review has **not** started. The signed commit is verified for
+  `agent-p1p`; signatures no longer need operator setup. The PR remains open and
+  draft with fresh checks/reviews pending. No merge occurred. Reinspect actual
+  mergeability after the new head's gates complete.
 - #891, #1228 and #1639 are abandoned with history retained.
 
 Models come from validated policy: planner/general/final GPT-6 Astra, builder
@@ -62,6 +64,8 @@ thinking/high. Use exact policy/provider identifiers, never substitute models.
   builder/review retries replace earlier ad hoc paths.
 
 These are partial gates, not end-to-end or complete lean-architecture acceptance.
+JG's latest direction is to finish the working canary before further cleanup;
+the remaining architectural work is deferred, not claimed complete.
 
 ## Recent deployed changes and remaining live proof
 
@@ -77,10 +81,11 @@ idle reconciliation do not prove every outage/replay path or a live provider run
 | One evidence bundle per frozen batch, exact job references, schema 10 | `8345aad` | Schema installed; new live dispatch remains unproven; historical rows stay unchanged |
 | Short private per-execution TMPDIR and cleanup | `a8bdb4c` | Live Cursor/provider execution |
 | One authorization snapshot for decision and evidence; unrelated revocations survive an outage | `6917c81` | Installed with case-scoped advancement; live outage drill remains |
-| Human-readable plans, reviews and PR descriptions | `1676a39` | Installed; existing GitHub text has not been rewritten |
-| Controller signing, retained source commits and exact source/published-head binding | `b326a0a` | Installed; key registration, signed publication and fresh CI/reviews remain |
-| Audited publication-only recovery of an accepted unsigned build | `36e3a66` | Installed; live recovery remains |
+| Human-readable plans, reviews and PR descriptions | `1676a39` | Signed publication updated the PR description; historical review comments remain unchanged |
+| Controller signing, retained source commits and exact source/published-head binding | `b326a0a` | Signed live publication verified on GitHub; fresh CI/reviews remain |
+| Audited publication-only recovery of an accepted unsigned build | `36e3a66` | Exercised live without a new builder attempt; history retained |
 | Case-scoped advancement, result selection and required-work scheduling | `8ca4e74` | Healthy format-2 cycles observed; live peer-outage drill remains |
+| Optional controller credential startup | `5d4fdb2` | Linux absent/partial/full credential checks passed; installed controller published successfully; live App-outage test deferred |
 
 The installed controller replaces the repository-wide advancement veto with
 explicit case selection for authorization, bounds, takeover, result acceptance,
@@ -115,13 +120,12 @@ bypass ownership/idempotency checks to accept a changed body.
 
 ## Signing prerequisite and recovery
 
-Pending source change: the controller unit uses namespaced credential-store
+Installed change: the controller unit uses namespaced credential-store
 lookups for its GitHub token and review App metadata/keys, extending the existing
 optional signing lookup. Missing credentials must not prevent service startup;
 the consuming capability still fails closed. Pirate's five root-owned aliases
 are prepared under `/etc/credstore`, with the existing 0600 source files unchanged
-and worker reads denied. The installed `8ca4e74` unit still uses the old absolute
-paths until the next verified release. A transient network-disabled Pirate
+and worker reads denied. Installed `5d4fdb2` uses these aliases. A transient network-disabled Pirate
 service successfully read all five aliases as `pip-control` without exposing
 credential contents; this is lookup/delivery proof, not a deployed controller
 outage drill. The disposable Linux lifecycle suite also passed startup with no
@@ -131,7 +135,7 @@ controller; worker reads of the source files were denied. Install, reinstall,
 upgrade, rollback and restart recovery passed in the same run. Active review
 publication during an outage remains a separate live gate. See the migration mappings in the
 [deployment runbook](runbooks/deployment.md); startup tests do not prove a live
-review publication or resolve the independent signing-account prerequisite.
+review publication.
 
 Jeff approved a dedicated signing-only key, staged on Pirate, not in this repo:
 
@@ -143,11 +147,10 @@ Jeff approved a dedicated signing-only key, staged on Pirate, not in this repo:
   `/etc/credstore/pip-commit-signing-identity`. Transient controller probes loaded
   both correctly; worker reads of both protected source files are denied.
 
-The key is **not yet listed** on `agent-p1p`'s GitHub signing keys. The existing
-repository token returned HTTP 403 for account-key registration. Do not broaden
-that token, reuse Jeff's key, or register this as an authentication key. Jeff must
-register the public half as a signing key; the older dual-purpose key is untouched.
-Credential delivery is proven, not live GitHub commit verification.
+JG registered the key as signing-key ID `1161893` on `agent-p1p`. Its API public
+key exactly matches the approved public half on Pirate. Signed commit
+`53ac3d8f8143ea9f186bf677f59c3a16f2632fca` is GitHub-verified for that account.
+The older dual-purpose key is untouched; no token scopes were broadened.
 
 Signing uses the exact accepted tree and validated parent, verifies the signature,
 retains the source and records its published-SHA mapping. Workers receive no key.
@@ -164,16 +167,13 @@ publisher results are rejected. See [the recovery runbook](runbooks/builder-reco
 
 ## Next gates
 
-1. Register the approved signing key; the signing/recovery code is now installed.
-2. Quiesce normally, take a fresh backup and authorize signed republication of
-   the accepted canary. Then resume and exercise fresh CI,
-   required reviews, final holistic review and human readiness. Reinspect actual
-   mergeability; do not assume signatures were the only blocker or relax
-   `blocked` blindly. Never merge automatically.
-3. Finish the [lean architecture gates](completion-audit.md): case/capability
+1. Follow fresh CI, required reviews, final holistic review and human readiness
+   on the signed canary. Reinspect actual mergeability; do not assume signatures
+   were the only blocker or relax `blocked` blindly. Never merge automatically.
+2. After the working canary, revisit deferred [lean architecture gates](completion-audit.md): case/capability
    isolation, immutable actual settings/skills, nonblocking comparisons, ordinary
    pause/resume, compact live dispatch and obsolete operational-path removal.
-4. After live cutover proof, remove legacy Pip Python/runtime packaging/CI, keeping
+3. After live cutover proof, remove legacy Pip Python/runtime packaging/CI, keeping
    useful fixtures and upstream Hermes. Reconcile docs and revoke temporary sudo
    when no longer needed. Keep the full goal active until both the live PR and
    architecture requirements are verified.
