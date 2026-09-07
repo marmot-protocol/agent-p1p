@@ -326,10 +326,10 @@ test suite passed for `96cda5c`; workspace Clippy also passes after the subseque
 publication-text change. Signed Linux CI is a separate pending gate. The existing
 service-identity lifecycle test does not yet exercise the new signing path.
 
-This is **not yet a live signing path**. Still required: validated identity and
-credential wiring and an audited republish of the current canary followed by
-fresh CI/reviews. No accepted result, branch, PR or live unit was changed by this
-work.
+This is **not yet a live signing path**. Still required: installation and
+verification of the signing identity, key registration, sandbox/release gates,
+and an audited republish of the current canary followed by fresh CI/reviews.
+No accepted result, branch, PR or live unit was changed by this work.
 
 The controller publication boundary now accepts the signed commit identity,
 checks its source and parent against the accepted build and preceding head (or
@@ -339,8 +339,20 @@ joins that evidence to its publication event and exact accepted build event/run,
 verifying stored payload digests. Builder finding resolutions refer to that
 source build; CI, review approvals and origin confirmations still require the
 published head. Historical unsigned publications retain their original exact-head
-checks. Production still uses the unsigned publisher until the signing-only
-credential path is wired; this adapter work is not deployment proof.
+checks. The production controller now uses only signed publication; the obsolete
+unsigned control adapter was removed. Its hostile-configuration credential test
+now exercises the signed executor path. This source change is not deployment proof.
+
+The controller loads signing credentials lazily after claiming publication work.
+An idle cycle does not open GitHub/signing credential files for publication;
+missing signing capability releases pending publication for retry, never silently
+publishes unsigned, and does not abort unrelated phases. The public identity is
+a bounded, regular root-owned file with strict versioned fields and an actor ID
+matching policy. The private key is passed only by path to the signing executor.
+The unit uses identifier-only credential lookup for `pip-commit-signing` and
+`pip-commit-signing-identity`; workers and Hermes receive neither. The disposable
+Linux lifecycle harness now includes a generated-key signing probe under the
+controller unit's actual sandbox. That gate must pass before deployment.
 
 Twenty-two focused tests pass and cover initial and remediated signed publication, preserved worker
 results, malformed/misbound evidence, retry-lease release, stale GitHub approvals,

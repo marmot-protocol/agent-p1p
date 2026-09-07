@@ -460,6 +460,8 @@ where
             "--github-reviewer-secperf-app",
             "--github-reviewer-secperf-key",
             "--git-askpass",
+            "--commit-signing-identity",
+            "--commit-signing-key",
             "--hermes",
             "--owner",
             "--skills-commit-file",
@@ -652,6 +654,13 @@ where
         &mut store,
         Path::new(required(&options, "--git-askpass")?),
         Path::new(required(&options, "--github-token")?),
+        options
+            .get("--commit-signing-identity")
+            .zip(options.get("--commit-signing-key"))
+            .map(|(identity, key)| crate::CommitSigningCredentials {
+                identity_file: Path::new(identity),
+                key_file: Path::new(key),
+            }),
         now,
         required(&options, "--owner")?,
         lease_seconds,

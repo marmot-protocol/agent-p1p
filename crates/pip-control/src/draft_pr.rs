@@ -14,8 +14,8 @@ use pip_core::{
     PolicyRevision, PullRequestNumber, RepositoryId, StateRevision, WorkflowVersion,
 };
 use pip_executor::{
-    GitPublicationSpec, GitPublisher, GitRunner, ProcessGitRunner, PublicationError,
-    PublicationResult, SignedCommit,
+    GitPublicationSpec, GitPublisher, ProcessGitRunner, PublicationError, PublicationResult,
+    SignedCommit,
 };
 use pip_github::{GitHubError, GitHubWriter, MutationResult, MutationTransport, PullRequestSpec};
 use pip_store::{EvidenceInput, ImmutableCaseHistory, Store, StoreError, StoredCase};
@@ -61,6 +61,12 @@ pub struct BranchPublication {
     pub signed: Option<SignedCommit>,
 }
 
+#[derive(Clone, Copy)]
+pub struct CommitSigningCredentials<'a> {
+    pub identity_file: &'a Path,
+    pub key_file: &'a Path,
+}
+
 pub trait BranchPublisher {
     fn publish_branch(
         &self,
@@ -68,11 +74,9 @@ pub trait BranchPublisher {
     ) -> Result<BranchPublication, PublicationError>;
 }
 
-impl<R: GitRunner> BranchPublisher for GitPublisher<R> {
-    fn publish_branch(
-        &self,
-        request: &BranchPublicationRequest,
-    ) -> Result<BranchPublication, PublicationError> {
+impl BranchPublicationRequest {
+    fn spec(&self) -> Result<GitPublicationSpec, PublicationError> {
+        let request = self;
         let local_head =
             GitSha::from_str(&request.local_head).map_err(|_| PublicationError::InvalidSpec)?;
         let expected_remote_head = request
@@ -81,7 +85,7 @@ impl<R: GitRunner> BranchPublisher for GitPublisher<R> {
             .map(GitSha::from_str)
             .transpose()
             .map_err(|_| PublicationError::InvalidSpec)?;
-        let spec = GitPublicationSpec::new_scoped(
+        GitPublicationSpec::new_scoped(
             &request.worktree_root,
             &request.worktree,
             &request.remote,
@@ -89,27 +93,47 @@ impl<R: GitRunner> BranchPublisher for GitPublisher<R> {
             &request.branch,
             local_head,
             expected_remote_head,
-        )?;
-        // Metadata now belongs to the shared case boundary, not the private
-        // fetch cache. Validate it with a credential-free runner before the
-        // authenticated publisher performs any repository operation.
-        pip_executor::IsolatedWorkspace::new(
-            pip_executor::ProcessGitRunner,
-            "git",
-            std::time::Duration::from_secs(60),
-            4 * 1024 * 1024,
         )
-        .and_then(|workspace| {
-            workspace.verify_for_controller(
-                spec.worktree(),
-                spec.branch(),
-                &request.expected_remote_url,
-            )
-        })
-        .map_err(|error| PublicationError::Process(error.to_string()))?;
-        self.publish(&spec).map(|result| BranchPublication {
+    }
+}
+
+struct ControllerPublisher<'a> {
+    signing: Option<CommitSigningCredentials<'a>>,
+    actor: u64,
+    git_askpass: &'a Path,
+    github_token_file: &'a Path,
+}
+
+impl BranchPublisher for ControllerPublisher<'_> {
+    fn publish_branch(
+        &self,
+        request: &BranchPublicationRequest,
+    ) -> Result<BranchPublication, PublicationError> {
+        // Resolve this capability only after its durable effect is claimed.
+        // Missing credentials must never turn idle collection into an outage.
+        let signing = self.signing.ok_or_else(|| {
+            PublicationError::Process("commit signing credentials are not configured".into())
+        })?;
+        let identity = crate::commit_signing::load_identity(signing.identity_file, self.actor)?;
+        let publisher = GitPublisher::new(
+            ProcessGitRunner,
+            "git",
+            Duration::from_secs(30),
+            1024 * 1024,
+        )?
+        .with_askpass(self.git_askpass, self.github_token_file)?;
+        let (result, signed) = publisher.publish_signed(
+            &request.spec()?,
+            request
+                .parent_head
+                .parse()
+                .map_err(|_| PublicationError::InvalidSpec)?,
+            &identity,
+            signing.key_file,
+        )?;
+        Ok(BranchPublication {
             result,
-            signed: None,
+            signed: Some(signed),
         })
     }
 }
@@ -190,18 +214,18 @@ pub fn publish_draft_pull_request_once<W: DraftPullRequestWriter>(
     store: &mut Store,
     git_askpass: &Path,
     github_token_file: &Path,
+    signing: Option<CommitSigningCredentials<'_>>,
     now: u64,
     owner: &str,
     lease_seconds: u64,
     authorization_valid: bool,
 ) -> Result<DraftPullRequestCycle, DraftPullRequestError> {
-    let publisher = GitPublisher::new(
-        ProcessGitRunner,
-        "git",
-        Duration::from_secs(30),
-        1024 * 1024,
-    )?
-    .with_askpass(git_askpass, github_token_file)?;
+    let publisher = ControllerPublisher {
+        signing,
+        actor: policy.github.automation_actor_id.unwrap_or(0),
+        git_askpass,
+        github_token_file,
+    };
     publish_draft_pull_request_once_with(
         writer,
         &publisher,

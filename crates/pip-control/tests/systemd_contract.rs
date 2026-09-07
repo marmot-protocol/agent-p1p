@@ -72,6 +72,26 @@ fn staged_active_controller_template_uses_a_dedicated_shared_hermes_root() {
 }
 
 #[test]
+fn signing_credentials_are_optional_startup_capabilities_only_for_the_controller() {
+    let service = include_str!("../../../packaging/systemd/pip-controller@.service");
+    for name in ["pip-commit-signing", "pip-commit-signing-identity"] {
+        assert!(
+            service
+                .lines()
+                .any(|line| line == format!("LoadCredential={name}"))
+        );
+        assert!(
+            !include_str!("../../../packaging/systemd/pip-direct-worker@.service").contains(name)
+        );
+        assert!(
+            !include_str!("../../../packaging/systemd/pip-hermes-gateway.service").contains(name)
+        );
+    }
+    assert!(service.contains("--commit-signing-identity %d/pip-commit-signing-identity"));
+    assert!(service.contains("--commit-signing-key %d/pip-commit-signing"));
+}
+
+#[test]
 fn direct_worker_template_has_provider_state_but_no_controller_credentials() {
     let service = include_str!("../../../packaging/systemd/pip-direct-worker@.service");
     let timer = include_str!("../../../packaging/systemd/pip-direct-worker@.timer");

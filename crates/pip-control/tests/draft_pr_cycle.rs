@@ -2,7 +2,8 @@ use std::cell::RefCell;
 
 use pip_control::{
     BranchPublication, BranchPublicationRequest, BranchPublisher, DraftPullRequestCycle,
-    DraftPullRequestWriter, load_repository_policy, publish_draft_pull_request_once_with,
+    DraftPullRequestWriter, load_repository_policy, publish_draft_pull_request_once,
+    publish_draft_pull_request_once_with,
 };
 use pip_executor::{PublicationError, PublicationResult, SignedCommit};
 use pip_github::{GitHubError, MutationResult, PullRequestSpec};
@@ -73,6 +74,48 @@ impl BranchPublisher for FixturePublisher {
             })
         }
     }
+}
+
+#[test]
+fn missing_signing_credentials_only_block_pending_publication() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut empty = Store::open(temp.path().join("empty.db")).unwrap();
+    let writer = FixtureWriter::default();
+    let missing = std::path::Path::new("/missing/pip-publication-credential");
+    assert_eq!(
+        publish_draft_pull_request_once(
+            &writer,
+            &active_policy(),
+            &mut empty,
+            missing,
+            missing,
+            None,
+            100,
+            "publisher",
+            30,
+            true
+        )
+        .unwrap(),
+        DraftPullRequestCycle::Idle
+    );
+    let mut pending = build_store(temp.path().join("pending.db"));
+    let error = publish_draft_pull_request_once(
+        &writer,
+        &active_policy(),
+        &mut pending,
+        missing,
+        missing,
+        None,
+        100,
+        "publisher",
+        30,
+        true,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("signing credentials"));
+    assert!(writer.specs.borrow().is_empty());
+    assert_eq!(pending.status(100).unwrap().outbox_leased, 0);
+    assert_eq!(pending.status(100).unwrap().outbox_pending, 1);
 }
 
 #[test]

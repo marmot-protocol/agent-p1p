@@ -463,6 +463,45 @@ fn signing_rejects_corrupted_blob_content_even_when_the_checkout_is_clean() {
 }
 
 #[test]
+fn hostile_worker_configuration_is_rejected_before_signing_or_github_credentials_reach_git() {
+    #[derive(Clone)]
+    struct GuardedGit {
+        key: String,
+    }
+    impl GitRunner for GuardedGit {
+        fn run(&self, command: &GitCommand) -> Result<GitOutput, AllocationError> {
+            assert!(!command.environment.contains_key("PIP_GIT_TOKEN_FILE"));
+            assert!(!command.args.iter().any(|arg| arg.contains(&self.key)));
+            ProcessGitRunner.run(command)
+        }
+    }
+    let f = Fixture::new();
+    git(&f.worktree, &["config", "filter.hostile.clean", "false"]);
+    let token = f._temp.path().join("fixture.token");
+    let askpass = f._temp.path().join("fixture-askpass");
+    fs::write(&token, "fixture-not-a-real-token").unwrap();
+    fs::set_permissions(&token, fs::Permissions::from_mode(0o400)).unwrap();
+    fs::write(&askpass, "fixture-not-an-executable").unwrap();
+    fs::set_permissions(&askpass, fs::Permissions::from_mode(0o555)).unwrap();
+    let publisher = GitPublisher::new(
+        GuardedGit {
+            key: f.key.to_str().unwrap().into(),
+        },
+        "git",
+        std::time::Duration::from_secs(30),
+        1024 * 1024,
+    )
+    .unwrap()
+    .with_askpass(&askpass, &token)
+    .unwrap();
+    assert!(
+        publisher
+            .publish_signed(&f.spec, f.base, &f.identity, &f.key)
+            .is_err()
+    );
+}
+
+#[test]
 fn signing_rejects_mismatched_keys_unsafe_config_dirty_work_and_identity_injection() {
     for fault in [
         "key", "mode", "symlink", "config", "dirty", "identity", "head", "remote",

@@ -101,6 +101,8 @@ fn capability_failures_are_reported_without_aborting_unrelated_controller_phases
             arguments.extend([name.into(), path.to_str().unwrap().into()]);
         }
         for name in [
+            "--commit-signing-identity",
+            "--commit-signing-key",
             "--github-reviewer-general-app",
             "--github-reviewer-general-key",
             "--github-reviewer-secperf-app",

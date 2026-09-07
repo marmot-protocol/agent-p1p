@@ -134,9 +134,29 @@ through systemd LoadCredential. App metadata binds app/installation/repository
 IDs; reviewer tokens are minted only when that capability is needed.
 
 Workers do not get GitHub credentials. Builders commit locally. The controller
-uses the verified askpass executable, policy-bound remote and exact head lease
-to publish. Git hooks, credential helpers, URL rewrites and other repository
+signs the accepted tree, then uses the verified askpass executable, policy-bound
+remote and exact head lease to publish. Git hooks, credential helpers, URL rewrites and other repository
 configuration cannot alter credential-bearing publication.
+
+Provision a dedicated SSH **signing-only** key and register its public key on the
+policy's automation account. Do not reuse an SSH login key or the Pip release
+signing key. The installer does not create, rotate or register account keys.
+Keep the private key and public identity under a root-only directory, e.g.
+`/etc/pip/commit-signing/`, and expose root-managed credential-store entries
+`/etc/credstore/pip-commit-signing` (private key) and
+`/etc/credstore/pip-commit-signing-identity` (identity JSON). Root-owned aliases to
+the protected files are supported by systemd. Never link them into worker homes.
+
+The identity JSON has exactly `schema_version` (1), `actor_id` (the policy's
+automation actor), `name`, `email` (verified for that GitHub account), and
+`public_key` (the registered Ed25519 public key). Use root:root mode 0600 regular
+files; the controller also accepts systemd's root:root 0440 credential mounts.
+The two controller CLI inputs are `--commit-signing-identity` and
+`--commit-signing-key`. The unit resolves these through identifier-only
+`LoadCredential` entries so absent signing capability does not prevent service
+startup. Publication fails closed and retries with its accepted build unchanged;
+there is no unsigned fallback. This does not yet make the older GitHub App
+credential entries optional at service startup.
 
 Keep provider credentials in their own runtime state, never in policies, task
 bodies, Git remotes, source files or release manifests.
@@ -160,6 +180,7 @@ installation or running process is not an end-to-end success.
 
 The repeatable Linux gate is scripts/test-systemd-lifecycle.sh. It covers fresh
 install, reinstall, upgrade, injected rollback, reboot recovery, actual
-service-identity workspace handoff, JIT requirements and policy preservation.
+service-identity workspace handoff, controller signing credentials/sandbox,
+JIT requirements and policy preservation.
 Run it for executable lifecycle changes, and still verify the actual signed
 artifact on its intended host.

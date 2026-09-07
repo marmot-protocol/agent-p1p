@@ -16,11 +16,15 @@ LoadCredential=github-reviewer-general.app:/etc/pip/github-reviewer-general.app.
 LoadCredential=github-reviewer-general.pem:/etc/pip/github-reviewer-general.pem
 LoadCredential=github-reviewer-secperf.app:/etc/pip/github-reviewer-secperf.app.json
 LoadCredential=github-reviewer-secperf.pem:/etc/pip/github-reviewer-secperf.pem
+# Identifier-only lookup in root's credential store: absent signing capability
+# must not prevent collection or unrelated controller phases from starting.
+LoadCredential=pip-commit-signing
+LoadCredential=pip-commit-signing-identity
 Environment=HERMES_HOME=/var/lib/pip/hermes
 Environment=HERMES_KANBAN_HOME=/var/lib/pip/hermes
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 WorkingDirectory=/var/lib/pip
-ExecStart=/opt/pip/current/bin/pip-control controller-cycle --policy /etc/pip/repositories/%i.json --database /var/lib/pip/ledger.db --github-token %d/github.token --github-reviewer-general-app %d/github-reviewer-general.app --github-reviewer-general-key %d/github-reviewer-general.pem --github-reviewer-secperf-app %d/github-reviewer-secperf.app --github-reviewer-secperf-key %d/github-reviewer-secperf.pem --git-askpass /opt/pip/current/bin/pip-control --hermes hermes --owner pip-controller-%i --skills-commit-file /opt/pip/current/SOURCE.COMMIT --direct-queue /var/lib/pip/direct-queue
+ExecStart=/opt/pip/current/bin/pip-control controller-cycle --policy /etc/pip/repositories/%i.json --database /var/lib/pip/ledger.db --github-token %d/github.token --github-reviewer-general-app %d/github-reviewer-general.app --github-reviewer-general-key %d/github-reviewer-general.pem --github-reviewer-secperf-app %d/github-reviewer-secperf.app --github-reviewer-secperf-key %d/github-reviewer-secperf.pem --git-askpass /opt/pip/current/bin/pip-control --commit-signing-identity %d/pip-commit-signing-identity --commit-signing-key %d/pip-commit-signing --hermes hermes --owner pip-controller-%i --skills-commit-file /opt/pip/current/SOURCE.COMMIT --direct-queue /var/lib/pip/direct-queue
 UMask=0077
 NoNewPrivileges=yes
 PrivateDevices=yes

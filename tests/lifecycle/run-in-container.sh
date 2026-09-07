@@ -109,6 +109,7 @@ install_version /work/releases/v0
 assert_service_release_access /work/releases/v0
 first_target=$(readlink -f /opt/pip/current)
 bash /source/tests/lifecycle/workspace-handoff.sh
+bash /source/tests/lifecycle/commit-signing.sh
 bash /source/tests/lifecycle/jit-memory.sh
 bash /source/tests/lifecycle/hermes-isolation.sh
 bash /source/tests/lifecycle/builder-retry.sh
