@@ -22,13 +22,21 @@ pub(crate) fn load_identity(
     let metadata = file
         .metadata()
         .map_err(|error| PublicationError::Filesystem(error.to_string()))?;
+    // Older systemd versions chown the read-only credential copy to the
+    // service UID; newer versions retain root ownership and grant read access.
+    // A service-owned ordinary file is not an operator-owned signing identity.
+    let readonly_credential = std::env::var_os("CREDENTIALS_DIRECTORY").is_some_and(|directory| {
+        Path::new(&directory).is_absolute() && path.parent() == Some(Path::new(&directory))
+    }) && rustix::fs::fstatvfs(&file)
+        .is_ok_and(|stat| stat.f_flag.contains(rustix::fs::StatVfsMountFlags::RDONLY));
     if !metadata.is_file()
-        || metadata.uid() != 0
-        || metadata.gid() != 0
         || metadata.nlink() != 1
-        || !matches!(
+        || !trusted_identity_permissions(
+            metadata.uid(),
+            metadata.gid(),
             metadata.permissions().mode() & 0o7777,
-            0o400 | 0o440 | 0o600
+            rustix::process::geteuid().as_raw(),
+            readonly_credential,
         )
         || metadata.len() == 0
         || metadata.len() > 4096
@@ -55,6 +63,18 @@ struct SigningIdentity {
     public_key: String,
 }
 
+fn trusted_identity_permissions(
+    uid: u32,
+    gid: u32,
+    mode: u32,
+    service_uid: u32,
+    readonly_credential: bool,
+) -> bool {
+    gid == 0
+        && ((uid == 0 && matches!(mode, 0o400 | 0o440 | 0o600))
+            || (uid == service_uid && mode == 0o400 && readonly_credential))
+}
+
 fn parse_identity(bytes: &[u8], actor: u64) -> Result<CommitSigningIdentity, PublicationError> {
     let value: SigningIdentity =
         serde_json::from_slice(bytes).map_err(|_| PublicationError::InvalidConfiguration)?;
@@ -72,6 +92,18 @@ fn parse_identity(bytes: &[u8], actor: u64) -> Result<CommitSigningIdentity, Pub
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn only_root_files_or_readonly_service_credential_copies_are_trusted() {
+        assert!(trusted_identity_permissions(0, 0, 0o600, 997, false));
+        assert!(trusted_identity_permissions(0, 0, 0o440, 997, true));
+        assert!(trusted_identity_permissions(997, 0, 0o400, 997, true));
+        assert!(!trusted_identity_permissions(997, 0, 0o400, 997, false));
+        assert!(!trusted_identity_permissions(998, 0, 0o400, 997, true));
+        assert!(!trusted_identity_permissions(997, 997, 0o400, 997, true));
+        assert!(!trusted_identity_permissions(997, 0, 0o600, 997, true));
+        assert!(!trusted_identity_permissions(0, 0, 0o644, 997, true));
+    }
 
     #[test]
     #[ignore = "requires the disposable systemd signing fixture"]

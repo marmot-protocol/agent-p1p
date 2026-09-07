@@ -460,14 +460,18 @@ where
             "--github-reviewer-secperf-app",
             "--github-reviewer-secperf-key",
             "--git-askpass",
-            "--commit-signing-identity",
-            "--commit-signing-key",
             "--hermes",
             "--owner",
             "--skills-commit-file",
             "--direct-queue",
         ],
-        &["--now", "--lease-seconds", "--global-paused"],
+        &[
+            "--now",
+            "--lease-seconds",
+            "--global-paused",
+            "--commit-signing-identity",
+            "--commit-signing-key",
+        ],
     )?;
     let policy_bytes = read_bounded(Path::new(required(&options, "--policy")?), 1024 * 1024)?;
     let policy = crate::load_repository_policy(&policy_bytes)

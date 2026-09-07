@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# systemd 252 stages credential mounts in a child namespace and propagates them
+# back through /run. Docker's private tmpfs otherwise leaves services looking at
+# the empty root-only placeholder directory. This is the disposable container's
+# own /run tmpfs, not the host's /run or a credential permission relaxation.
+mount --make-rshared /run
+
 bash /source/tests/lifecycle/timer-restart.sh /source/packaging/systemd
 
 rm -rf /work/repo

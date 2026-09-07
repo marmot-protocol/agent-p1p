@@ -56,7 +56,7 @@ Installation preserved the stopped ledger and paused policy byte-for-byte.
   this repository. The existing repository token cannot register account keys
   (HTTP 403); Jeff was given the public-key-only command and asked to register
   it as a **signing**, not authentication, key on `agent-p1p`. Registration and
-  controller signing integration are not yet verified. The previous registered
+  live controller signing are not yet verified. The previous registered
   dual-purpose key is untouched.
   A root-owned credential-store alias at `/etc/credstore/pip-commit-signing`
   points to the private key. A collected transient systemd service running as
@@ -64,6 +64,15 @@ Installation preserved the stopped ledger and paused policy byte-for-byte.
   the expected public fingerprint. It did not sign or publish a commit; the
   live controller unit is unchanged. The key and alias remain staged for the
   forthcoming signed-publication integration.
+  The root-owned mode-0600 identity file is now staged at
+  `/etc/pip/commit-signing/identity.json`, with the matching identity credential
+  alias. It names policy actor 292420120 and that account's numeric noreply
+  address. SHA-256: `ead231916824385d0b4cc5e525ef24168d039eb8139d7e80d58de7d57543de44`.
+  A second collected `pip-control` probe loaded both credentials, matched that
+  identity digest and the original public-key fingerprint, and confirmed
+  root:root 0440 single-link credential metadata. Worker reads of both source
+  files are denied. This was credential delivery only, not commit publication;
+  the live Pip units, policy and ledger were not changed.
   GitHub's documented [`createCommitOnBranch` signing API](https://docs.github.com/en/graphql/reference/commits#createcommitonbranch)
   was investigated as an alternative, not live proof:
   file-mode support, exact tree/parent/actor verification, recovery and the
@@ -353,6 +362,16 @@ The unit uses identifier-only credential lookup for `pip-commit-signing` and
 `pip-commit-signing-identity`; workers and Hermes receive neither. The disposable
 Linux lifecycle harness now includes a generated-key signing probe under the
 controller unit's actual sandbox. That gate must pass before deployment.
+
+The first CI pass caught signing CLI options incorrectly marked required; they
+are now optional at startup. It also exposed Docker's private `/run` preventing
+systemd 252 credential mounts from reaching the service namespace. A standalone
+shell reproduced the denial; sharing only the disposable container's `/run`
+fixed it without changing credential permissions. That systemd version delivers
+service-UID:root 0400 copies on a read-only mount, whereas Pirate exposes
+root:root 0440. The identity reader permits the former only directly inside its
+systemd credential directory on a filesystem verified read-only through the open
+file descriptor. Ordinary service-owned identity files remain rejected.
 
 Twenty-two focused tests pass and cover initial and remediated signed publication, preserved worker
 results, malformed/misbound evidence, retry-lease release, stale GitHub approvals,

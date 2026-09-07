@@ -151,6 +151,9 @@ The identity JSON has exactly `schema_version` (1), `actor_id` (the policy's
 automation actor), `name`, `email` (verified for that GitHub account), and
 `public_key` (the registered Ed25519 public key). Use root:root mode 0600 regular
 files; the controller also accepts systemd's root:root 0440 credential mounts.
+Older systemd service-UID:root 0400 copies are accepted only in the supplied
+credential directory on a verified read-only filesystem, not as ordinary
+service-owned configuration files.
 The two controller CLI inputs are `--commit-signing-identity` and
 `--commit-signing-key`. The unit resolves these through identifier-only
 `LoadCredential` entries so absent signing capability does not prevent service
