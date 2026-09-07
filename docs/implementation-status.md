@@ -24,8 +24,12 @@ installation:
   CI and transitioned to `REVIEWING`, dispatching one native and two direct
   reviewer jobs. Cursor attempt 10 then stopped at its noninteractive workspace
   trust prompt, before a review result. The aggregate failure bound escalated
-  the case. Controller/direct timers were stopped; the native general review
-  was left running. Required reviews and final readiness are not proven yet.
+  the case. The native general review `t_6b15c1cd` subsequently completed with
+  `REQUEST_CHANGES`: daemon error writers still emit unsanitized terminal
+  controls. Its evidence also reproduces an overlong assigned Unix socket path.
+  That result remains in Hermes, not yet accepted into the escalated case.
+  Execution services/timers are now stopped and disabled; webhook ingress stays
+  active. Required reviews and final readiness are not proven yet.
 - #891, #1228 and #1639 are abandoned with history retained.
 - Hermes remains the upstream installation; Pip has not introduced a fork.
   Conversational Hermes is separate and must not be interrupted.
@@ -83,6 +87,13 @@ without advancing those cases. Cursor now requests `--trust` for the assigned
 workspace without adding `--force` to reviewers. These follow-up changes have
 focused regression and Clippy coverage, not live reviewer completion proof.
 
+Review-start recovery now shares the existing bounded root/offline recovery
+path: `authorize-review-retry` preserves the accepted PR/head/build and creates
+fresh CI observation, not a builder rerun or approval. Short scratch schema-2
+paths now pass a real Unix-socket allocation test while old schema-1 paths stay
+unchanged. These changes have local Rust/Clippy coverage and are awaiting their
+signed release deployment. The recovery has not been applied to #993 yet.
+
 New managed Hermes tasks and direct Cursor prompts now reference a retained
 SHA-256-bound evidence file instead of embedding the full history. Saved older
 Hermes projections keep their original body. Tests cover 200 KB histories with
@@ -98,6 +109,9 @@ reviewer set; completion compatibility is not yet proven.
    reviews, remediation where needed, and final human-ready disposition.
 2. Finish capability/case failure isolation and safe result collection during
    pause; extend confirmed-non-start classification where still missing.
+   Check native review ingestion's exact state-revision filter: a peer review's
+   `REVIEW_RECORDED` transition must not strand another result from the same
+   review generation, while a retry/replan/new head must still fence old jobs.
 3. Preserve saved job settings/skills through execution and acceptance across
    upgrades. Apply pause/revocation immediately without rewriting old jobs.
 4. Replace growing full-history prompts with compact role-specific inputs and
