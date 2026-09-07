@@ -1,7 +1,7 @@
 ---
 name: workflow-contract
 description: Use for every Pip case task. Enforce shared invariants.
-version: 0.10.0
+version: 0.11.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -38,7 +38,7 @@ This is the shared contract for every Pip role. Role-specific skills add respons
 
 ## Hermes storage
 
-For Hermes tasks carrying `storage` schema 1 or 2, `source` is the controller-owned
+For Hermes tasks carrying `storage` schema 1, 2 or 3, `source` is the controller-owned
 read-only checkout, and the current directory remains that checkout. Use the
 exact `cargo_target`, `cargo_home`, and `temporary` paths from the task as
 `CARGO_TARGET_DIR`, `CARGO_HOME`, and `TMPDIR` for Cargo commands. The controller

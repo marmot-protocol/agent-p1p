@@ -152,11 +152,15 @@ fn bindings(
         .ok_or("missing scratch layout")?;
     let root = configured.join(match version {
         1 => hash.as_str(),
-        2 => &hash[..16],
+        2 | 3 => &hash[..16],
         _ => return Err("unsupported scratch layout".into()),
     });
     if version == 2 && root.join("disposable/tmp").as_os_str().len() > 72 {
         return Err("scratch TMPDIR leaves insufficient Unix socket path space".into());
+    }
+    let temporary = root.join(if version == 3 { "t" } else { "disposable/tmp" });
+    if version == 3 && temporary.as_os_str().len() > 56 {
+        return Err("scratch TMPDIR leaves insufficient private socket staging space".into());
     }
     let source = format!(
         "{}/repo-{}-issue-{}-workflow-{}",
@@ -164,7 +168,7 @@ fn bindings(
     );
     let expected = json!({"schema_version":version,"root":root,"source":source,
         "cargo_target":root.join("disposable/target"),"cargo_home":root.join("disposable/cargo-home"),
-        "temporary":root.join("disposable/tmp"),"results":root.join("results")});
+        "temporary":temporary,"results":root.join("results")});
     if body["storage"] != expected {
         return Err("scratch paths differ from the frozen projection".into());
     }
@@ -298,7 +302,11 @@ pub fn prepare_hermes_scratch(
         "disposable",
         "disposable/target",
         "disposable/cargo-home",
-        "disposable/tmp",
+        if body["storage"]["schema_version"] == 3 {
+            "t"
+        } else {
+            "disposable/tmp"
+        },
         "results",
     ] {
         let path = root.join(child);
@@ -366,15 +374,29 @@ pub fn retire_hermes_scratch(
     if read_marker(&root.join(".pip-scratch.json"), owner)? != marker {
         return Err("unrecognized scratch ownership".into());
     }
-    let disposable = root.join("disposable");
-    if disposable.try_exists().map_err(failure)? {
-        real_directory(&disposable, owner)?;
+    let mut disposable_roots = vec![root.join("disposable")];
+    if body["storage"]["schema_version"] == 3 {
+        disposable_roots.push(root.join("t"));
+    }
+    let disposable_roots = disposable_roots
+        .into_iter()
+        .map(|path| {
+            path.try_exists()
+                .map(|exists| (path, exists))
+                .map_err(failure)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    // Inspect every disposable root before deleting either one.
+    for (disposable, _) in disposable_roots.iter().filter(|(_, exists)| *exists) {
+        real_directory(disposable, owner)?;
         inspect_disposable(
-            &disposable,
+            disposable,
             fs::metadata(&root).map_err(failure)?.dev(),
             &mut 0,
         )?;
-        fs::remove_dir_all(&disposable).map_err(failure)?;
+    }
+    for (disposable, _) in disposable_roots.iter().filter(|(_, exists)| *exists) {
+        fs::remove_dir_all(disposable).map_err(failure)?;
     }
     let receipt = root.join(".pip-retired.json");
     if !receipt.try_exists().map_err(failure)? {

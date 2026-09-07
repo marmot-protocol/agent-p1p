@@ -133,11 +133,15 @@ fn hermes_storage_is_projection_scoped_and_direct_tasks_are_unchanged() {
     let task = planner[0].hermes_task().unwrap();
     let storage = &task.body["storage"];
     assert_eq!(task.body["projection_key"], task.projection_key);
-    assert_eq!(storage["schema_version"], 2);
     let root = storage["root"].as_str().unwrap();
     assert!(root.starts_with("/var/lib/pip/worktrees/hermes-scratch/"));
     assert_eq!(root.rsplit('/').next().unwrap().len(), 16);
-    assert!(storage["temporary"].as_str().unwrap().len() <= 72);
+    let temporary = storage["temporary"].as_str().unwrap();
+    // MDK binds through a private staging directory, not the final socket path.
+    let staged = format!("{temporary}/.tmpabcdefgh/dev/.sock.4194304.wnd.sock/wnd.sock");
+    assert!(staged.len() < 108, "Linux sockaddr_un overflow: {staged}");
+    assert_eq!(storage["schema_version"], 3);
+    assert_eq!(temporary, format!("{root}/t"));
     assert_eq!(storage["cargo_target"], format!("{root}/disposable/target"));
     assert_eq!(storage["results"], format!("{root}/results"));
     assert_eq!(

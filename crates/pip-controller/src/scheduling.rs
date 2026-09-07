@@ -614,9 +614,9 @@ fn dispatch(
             "{root}/{}",
             &hex_digest(&Sha256::digest(worker_projection_key.as_bytes()))[..16]
         );
-        // Leave room for a temporary child directory and Unix socket name.
+        // Include private socket staging, not only the final socket name.
         // Full task identity remains in the checked ownership marker.
-        if format!("{root}/disposable/tmp").len() > 72 {
+        if format!("{root}/t").len() > 56 {
             return Err(DispatchError::InvalidPolicy);
         }
         let evidence = serde_json::to_vec(&context.immutable_evidence_bundle)
@@ -630,12 +630,12 @@ fn dispatch(
             }),
         );
         body.insert("storage".into(), json!({
-            "schema_version": 2,
+            "schema_version": 3,
             "root": root,
             "source": format!("{}/repo-{}-issue-{}-workflow-{}", policy.workspace.trim_end_matches('/'), context.case_id.repository().get(), context.case_id.issue().get(), context.case_id.workflow().get()),
             "cargo_target": format!("{root}/disposable/target"),
             "cargo_home": format!("{root}/disposable/cargo-home"),
-            "temporary": format!("{root}/disposable/tmp"),
+            "temporary": format!("{root}/t"),
             "results": format!("{root}/results"),
         }));
     }

@@ -158,6 +158,47 @@ fn compact_scratch_allows_real_unix_sockets_and_preserves_legacy_layouts() {
 }
 
 #[test]
+fn short_temporary_root_supports_private_socket_staging_and_retirement() {
+    use std::os::unix::net::UnixListener;
+    let (_temp, policy, store, mut body) = setup("COMPLETED");
+    let old_root = body["storage"]["root"].as_str().unwrap().to_owned();
+    let hash = old_root.rsplit('/').next().unwrap();
+    let root = format!(
+        "{}/{}",
+        policy.hermes_scratch_root.as_ref().unwrap(),
+        &hash[..16]
+    );
+    for field in ["root", "cargo_target", "cargo_home", "results"] {
+        body["storage"][field] = json!(
+            body["storage"][field]
+                .as_str()
+                .unwrap()
+                .replacen(&old_root, &root, 1)
+        );
+    }
+    body["storage"]["schema_version"] = json!(3);
+    body["storage"]["temporary"] = json!(format!("{root}/t"));
+    prepare_hermes_scratch(&policy, &store, &body).unwrap();
+    let stage = std::path::Path::new(&root).join("t/.tmpabcdefgh/dev/.sock.4194304.wnd.sock");
+    fs::create_dir_all(&stage).unwrap();
+    let socket = UnixListener::bind(stage.join("wnd.sock")).unwrap();
+    fs::write(format!("{root}/results/proof.json"), b"retained evidence").unwrap();
+    drop(socket);
+    fs::set_permissions(format!("{root}/t"), fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(retire_hermes_scratch(&policy, &store, &body, 110, true).is_err());
+    assert!(std::path::Path::new(&root).join("disposable").exists());
+    fs::set_permissions(format!("{root}/t"), fs::Permissions::from_mode(0o700)).unwrap();
+    retire_hermes_scratch(&policy, &store, &body, 110, true).unwrap();
+    assert!(!std::path::Path::new(&root).join("t").exists());
+    assert!(!std::path::Path::new(&root).join("disposable").exists());
+    assert_eq!(
+        fs::read(format!("{root}/results/proof.json")).unwrap(),
+        b"retained evidence"
+    );
+    retire_hermes_scratch(&policy, &store, &body, 111, true).unwrap();
+}
+
+#[test]
 fn scratch_retains_exact_evidence_and_rejects_artifact_drift() {
     let (_temp, policy, store, mut body) = setup("PLANNING");
     let bundle = json!({"records":"x".repeat(200_000)});
