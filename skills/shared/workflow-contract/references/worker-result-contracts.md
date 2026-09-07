@@ -45,8 +45,18 @@ conversation. Then inspect relevant records: planners use issue/intake and
 replanning evidence; builders use the accepted plan and applicable findings;
 reviewers use the plan, accepted build, exact-head CI and their prior findings;
 final reviewers also inspect final preflight and the required review set.
-Full history remains available in the artifact. Do not treat absence from a
-short summary as absence from the evidence.
+New jobs also supply `evidence_focus` (`schema_version: 1`, `records` array).
+Each entry has a JSON `pointer` into this verified bundle and the selected
+record's `payload_sha256`. Resolve that pointer with a local program, verify
+the record digest matches, and read its relevant fields without printing
+unrelated logs. The index selects the current plan; builders also get prior
+build/reviews and findings; reviewers get the bound build/CI and their own
+findings; final reviewers also get the accepted review set and preflight.
+Reviewer indexes omit peer verdicts to support independent review. They do not
+make those verdicts secret. Full history remains available in the artifact.
+The index is a reading aid, not a completeness or readiness attestation. Do
+not treat absence from the index as absence from evidence. Saved jobs without
+an index remain valid: select the relevant records as described above.
 
 The executable definitions are in `crates/pip-contracts/src/lib.rs`. Valid
 examples for every role are frozen in

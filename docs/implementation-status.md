@@ -5,8 +5,8 @@ live proof. The target is [the lean architecture](pip-architecture-plan.md).
 
 ## Latest verified live state
 
-Pirate runs signed `e40d011309805642b98acdc199a182dddc13968f`, verified by
-CI `34095706554` and deployment `34095706582`, including Linux lifecycle tests.
+Pirate runs signed `e4106a988a70d8c76d31f6c3fedc86f5fc3048cf`, verified by
+CI `34100251695` and deployment `34100251650`, including Linux lifecycle tests.
 Installation preserved the stopped ledger and paused policy byte-for-byte.
 
 - #993 is the sole labeled canary, with accepted plan 1 and builder attempt 9.
@@ -33,16 +33,17 @@ Installation preserved the stopped ledger and paused policy byte-for-byte.
   and the case escalated at revision 18; all six case-local failures remain.
   The commit is retained, not published. A supported retry must reverify it.
   Regression tests now distinguish incoming planner/builder context from exact
-  review/final output bindings. Full Rust tests and Clippy pass locally; this
-  fix still requires a signed deployment and a real accepted remediation.
+  review/final output bindings. Full Rust tests, Clippy and signed Linux gates
+  pass; this fix is installed but a real accepted remediation remains unproven.
   The same regression pass found the offline builder-retry guard only supported
   pre-PR failures. It now preserves an existing PR/head and remediation round,
   permits prior accepted builds, and still fences running or completed target
-  attempts. Both changes are required before this case can resume.
+  attempts. The supported retry applied successfully at revision 19, preserving
+  PR 1726, its old head, plan 1 and round 1. Normal execution has resumed.
 - #891, #1228 and #1639 are abandoned with history retained.
 - Hermes remains the upstream installation; Pip has not introduced a fork.
-  Conversational Hermes was untouched. Pip execution timers are paused; ingress
-  remains active. The dedicated Pip gateway is idle pending upgrade.
+  Conversational Hermes was untouched. Pip execution timers, the dedicated
+  gateway and ingress are active.
 
 These are dated observations, not a promise that a process is still running.
 Inspect the current ledger, services and GitHub evidence before acting.
@@ -89,10 +90,10 @@ resume are proven above. One shared generation check accepts peer-only review
 progress while fencing new CI, retries and terminal dispositions. Shadow Opus
 was recorded as a comparison after the required lane advanced. Active-cycle
 failure isolation and full saved-policy execution compatibility remain incomplete.
-The next change moves that credential-free collection phase ahead of GitHub
+The installed runtime moves that credential-free collection phase ahead of GitHub
 dependencies even during active operation. A real CLI regression with missing
 GitHub credentials proves completed direct work is retained without advancing
-the case; it still requires signed deployment and live verification.
+the case; a real live-outage drill remains unproven.
 
 Cursor now approves verification commands noninteractively, with an unchanged
 checkout postcondition and the credential-isolating service sandbox. This is
@@ -103,8 +104,8 @@ reviews now expose suggestions and reviewer-reported evidence and limitations.
 Review retry shares the bounded root/offline recovery path and preserves the
 accepted PR/head/build. Queue backpressure admits one serial handoff at a time;
 tests cover restart, expired handoffs and recovery without duplicate execution.
-Both are installed. A subsequent local regression makes required jobs take
-priority over pending comparisons regardless of effect ID. An already-running
+Both are installed. Required jobs now take priority over pending comparisons
+regardless of effect ID, with queue regression coverage. An already-running
 comparison can still occupy the serial worker; that isolation remains unfinished.
 Ordinary pause/resume must stop requiring policy-copy commands.
 
@@ -116,11 +117,16 @@ pass. The next native review must prove the new layout in its actual sandbox.
 Jobs reference a retained SHA-256-bound evidence file; new Cursor files support
 bounded line reads. Existing jobs keep their artifact bytes and references.
 Transport tests cover large histories and drift, but job definitions still
-include full history. A locally tested format-2 export removes identical
+include full history. The installed format-2 export removes identical
 accepted-result copies from events using exact run/digest references; stored
 ledger records and existing format-1 jobs remain unchanged. This is a bounded
-deduplication improvement, not yet compact role-specific inputs, which remain
-a completion gate.
+deduplication improvement. A subsequent locally tested role-specific index
+points into the same artifact without copying payloads. It selects the current
+plan, exact-head build/CI, applicable findings and final-review evidence;
+independent reviewer indexes omit peer verdicts. Full history stays readable.
+This index still requires deployment; eliminating full-history duplication in
+saved job definitions remains unfinished. The product-naming test has moved
+from Python into Rust in preparation for legacy runtime removal after cutover.
 
 ## Remaining completion gates
 

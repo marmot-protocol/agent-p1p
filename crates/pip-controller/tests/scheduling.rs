@@ -124,6 +124,112 @@ fn policy() -> WorkflowPolicy {
 }
 
 #[test]
+fn role_evidence_focus_uses_exact_current_records_without_copying_history() {
+    let mut ctx = context();
+    ctx.immutable_evidence_bundle["records"] = json!({
+        "events": [{"event_type":"ISSUE_AUTHORIZED","payload_sha256":"intake"}],
+        "runs": [
+            {"role":"planner","payload_sha256":"old-plan","payload":{"plan_version":0}},
+            {"role":"planner","payload_sha256":"plan","payload":{"plan_version":1,"evidence":{"large_log":"x".repeat(100_000)}}},
+            {"role":"builder","payload_sha256":"old-build","payload":{"plan_version":1,"head_sha":"c".repeat(40)}},
+            {"role":"builder","payload_sha256":"build","payload":{"plan_version":1,"head_sha":"b".repeat(40)}},
+            {"role":"reviewer-general","payload_sha256":"general","payload":{"reviewer_id":"general-sol","reviewed_head_sha":"b".repeat(40)}},
+            {"role":"reviewer-secperf","payload_sha256":"kimi","payload":{"reviewer_id":"secperf-kimi","reviewed_head_sha":"b".repeat(40)}},
+            {"role":"builder","payload_sha256":"different-head-build","payload":{"plan_version":1,"head_sha":"d".repeat(40)}}
+        ],
+        "findings": [
+            {"origin_role":"general-sol","payload_sha256":"general-finding"},
+            {"origin_role":"secperf-kimi","payload_sha256":"kimi-finding"}
+        ],
+        "evidence": [
+            {"kind":"GITHUB_CI","payload_sha256":"old-ci","payload":{"pull_request":{"head_sha":"c".repeat(40)}}},
+            {"kind":"GITHUB_CI","payload_sha256":"ci","payload":{"pull_request":{"head_sha":"b".repeat(40)}}},
+            {"kind":"GITHUB_FINAL_PREFLIGHT","payload_sha256":"preflight","payload":{}},
+            {"kind":"GITHUB_CI","payload_sha256":"different-head-ci","payload":{"pull_request":{"head_sha":"d".repeat(40)}}}
+        ]
+    });
+    for (effect, expected) in [
+        (
+            Effect::DispatchPlanner,
+            vec!["intake", "plan", "general-finding", "kimi-finding"],
+        ),
+        (
+            Effect::DispatchBuilder,
+            vec![
+                "intake",
+                "plan",
+                "build",
+                "general",
+                "kimi",
+                "ci",
+                "general-finding",
+                "kimi-finding",
+            ],
+        ),
+        (
+            Effect::DispatchReviewers,
+            vec![
+                "intake",
+                "plan",
+                "build",
+                "general",
+                "ci",
+                "general-finding",
+            ],
+        ),
+        (
+            Effect::DispatchFinalReviewer,
+            vec![
+                "intake",
+                "plan",
+                "build",
+                "general",
+                "kimi",
+                "ci",
+                "general-finding",
+                "kimi-finding",
+                "preflight",
+            ],
+        ),
+    ] {
+        let jobs = schedule_effect("focus", effect, &ctx, &policy()).unwrap();
+        let focus = &jobs[0].worker_body["evidence_focus"];
+        assert_eq!(focus["schema_version"], 1);
+        assert!(serde_json::to_vec(focus).unwrap().len() < 3000);
+        let mut actual = focus["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|reference| {
+                let record = ctx
+                    .immutable_evidence_bundle
+                    .pointer(reference["pointer"].as_str().unwrap())
+                    .unwrap();
+                assert_eq!(reference["payload_sha256"], record["payload_sha256"]);
+                reference["payload_sha256"].as_str().unwrap()
+            })
+            .collect::<Vec<_>>();
+        actual.sort();
+        let mut expected = expected;
+        expected.sort();
+        assert_eq!(actual, expected, "{effect:?}");
+        if jobs.len() == 3 {
+            let kimi = serde_json::to_string(&jobs[1].worker_body["evidence_focus"]).unwrap();
+            assert!(kimi.contains("kimi-finding"));
+            assert!(!kimi.contains("general"));
+            let opus = serde_json::to_string(&jobs[2].worker_body["evidence_focus"]).unwrap();
+            assert!(!opus.contains("finding"));
+            assert!(!opus.contains("general"));
+            assert!(!opus.contains("kimi"));
+        }
+        assert_eq!(
+            jobs[0].worker_body["immutable_evidence_bundle"],
+            ctx.immutable_evidence_bundle
+        );
+    }
+}
+
+#[test]
 fn hermes_storage_is_projection_scoped_and_direct_tasks_are_unchanged() {
     let configured = policy()
         .with_hermes_scratch_root("/var/lib/pip/worktrees/hermes-scratch".into())

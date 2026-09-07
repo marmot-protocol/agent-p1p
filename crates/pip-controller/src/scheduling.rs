@@ -441,6 +441,69 @@ fn immutable_evidence_bundle(store: &Store, case: &StoredCase) -> Result<Value, 
 
 impl std::error::Error for DispatchError {}
 
+/// A reading index, never workflow authority. Full immutable records remain
+/// available in the same artifact; no payload is copied into the prompt.
+fn evidence_focus(context: &DispatchContext, binding: &RolePolicy) -> Value {
+    let records = &context.immutable_evidence_bundle["records"];
+    let rows = |kind: &str| records[kind].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    let mut selected = BTreeSet::new();
+    let mut latest = |kind, predicate: &dyn Fn(&Value) -> bool| {
+        if let Some(index) = rows(kind).iter().rposition(predicate) {
+            selected.insert((kind, index));
+        }
+    };
+    latest("events", &|row| row["event_type"] == "ISSUE_AUTHORIZED");
+    latest("runs", &|row| {
+        row["role"] == "planner"
+            && row["payload"]["plan_version"].as_u64()
+                == context.plan_version.map(|version| u64::from(version.get()))
+    });
+    if binding.role != WorkerRole::Planner {
+        let head = context.head_sha.map(|sha| sha.to_string());
+        latest("runs", &|row| {
+            row["role"] == "builder"
+                && head.is_some()
+                && row["payload"]["head_sha"].as_str() == head.as_deref()
+        });
+        latest("evidence", &|row| {
+            row["kind"] == "GITHUB_CI"
+                && head.is_some()
+                && row["payload"]["pull_request"]["head_sha"].as_str() == head.as_deref()
+        });
+    }
+    if binding.role == WorkerRole::FinalReviewer {
+        latest("evidence", &|row| row["kind"] == "GITHUB_FINAL_PREFLIGHT");
+    }
+    let independent_review = matches!(
+        binding.role,
+        WorkerRole::ReviewerGeneral | WorkerRole::ReviewerSecperf
+    );
+    for (index, row) in rows("findings").iter().enumerate() {
+        if !independent_review || row["origin_role"].as_str() == binding.reviewer_id.as_deref() {
+            selected.insert(("findings", index));
+        }
+    }
+    if binding.role != WorkerRole::Planner {
+        let head = context.head_sha.map(|sha| sha.to_string());
+        let mut reviewers = BTreeSet::new();
+        for (index, row) in rows("runs").iter().enumerate().rev() {
+            let Some(reviewer) = row["payload"]["reviewer_id"].as_str() else {
+                continue;
+            };
+            if head.is_some()
+                && row["payload"]["reviewed_head_sha"].as_str() == head.as_deref()
+                && (!independent_review || Some(reviewer) == binding.reviewer_id.as_deref())
+                && reviewers.insert(reviewer)
+            {
+                selected.insert(("runs", index));
+            }
+        }
+    }
+    json!({"schema_version":1,"records":selected.into_iter().map(|(kind, index)| {
+        json!({"pointer":format!("/records/{kind}/{index}"),"payload_sha256":rows(kind)[index]["payload_sha256"]})
+    }).collect::<Vec<_>>()})
+}
+
 pub fn schedule_effect(
     effect_id: &str,
     effect: Effect,
@@ -635,6 +698,7 @@ fn dispatch(
         "immutable_evidence_bundle".into(),
         context.immutable_evidence_bundle.clone(),
     );
+    body.insert("evidence_focus".into(), evidence_focus(context, binding));
     if binding.execution == ExecutionKind::Hermes
         && let Some(root) = &policy.hermes_scratch_root
     {
