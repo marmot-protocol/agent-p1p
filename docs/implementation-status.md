@@ -115,6 +115,24 @@ bypass ownership/idempotency checks to accept a changed body.
 
 ## Signing prerequisite and recovery
 
+Pending source change: the controller unit uses namespaced credential-store
+lookups for its GitHub token and review App metadata/keys, extending the existing
+optional signing lookup. Missing credentials must not prevent service startup;
+the consuming capability still fails closed. Pirate's five root-owned aliases
+are prepared under `/etc/credstore`, with the existing 0600 source files unchanged
+and worker reads denied. The installed `8ca4e74` unit still uses the old absolute
+paths until the next verified release. A transient network-disabled Pirate
+service successfully read all five aliases as `pip-control` without exposing
+credential contents; this is lookup/delivery proof, not a deployed controller
+outage drill. The disposable Linux lifecycle suite also passed startup with no
+credentials, token only, and all five credentials. Its main service process
+checked exact fake credential contents before executing the real paused
+controller; worker reads of the source files were denied. Install, reinstall,
+upgrade, rollback and restart recovery passed in the same run. Active review
+publication during an outage remains a separate live gate. See the migration mappings in the
+[deployment runbook](runbooks/deployment.md); startup tests do not prove a live
+review publication or resolve the independent signing-account prerequisite.
+
 Jeff approved a dedicated signing-only key, staged on Pirate, not in this repo:
 
 - Private key: `/etc/pip/commit-signing/key`, root:root 0600 in a 0700 directory.

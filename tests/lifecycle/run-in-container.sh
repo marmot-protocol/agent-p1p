@@ -10,8 +10,11 @@ mount --make-rshared /run
 bash /source/tests/lifecycle/timer-restart.sh /source/packaging/systemd
 
 rm -rf /work/repo
-install -d -m 0755 /work
-cp -a /source /work/repo
+install -d -m 0755 /work/repo
+# Keep current source edits and Git metadata, not host-platform build caches.
+tar -C /source --exclude=./target --exclude=./.venv -cf - . | tar -C /work/repo -xf -
+test ! -e /work/repo/target
+test ! -e /work/repo/.venv
 if [[ -n $(git -C /work/repo status --porcelain=v1 --untracked-files=all) ]]; then
   git -C /work/repo add -A
   git -C /work/repo -c user.name=lifecycle -c user.email=lifecycle.invalid commit -m lifecycle-candidate >/dev/null
@@ -114,6 +117,7 @@ test "$(stat -c '%U:%G:%a' /var/lib/pip/worktrees)" = root:root:770
 install_version /work/releases/v0
 assert_service_release_access /work/releases/v0
 first_target=$(readlink -f /opt/pip/current)
+bash /source/tests/lifecycle/controller-credentials.sh
 bash /source/tests/lifecycle/workspace-handoff.sh
 bash /source/tests/lifecycle/commit-signing.sh
 bash /source/tests/lifecycle/jit-memory.sh

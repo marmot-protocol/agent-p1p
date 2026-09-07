@@ -133,6 +133,38 @@ uses a private GitHub App. Root-owned credential files reach the controller
 through systemd LoadCredential. App metadata binds app/installation/repository
 IDs; reviewer tokens are minted only when that capability is needed.
 
+The controller uses credential-store identifiers, not mandatory absolute-path
+loads. An absent identifier allows startup/collection; actual GitHub access or
+review publication still requires its credential. This is systemd's documented
+[credential lookup behavior](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#LoadCredential=).
+The ingress and webhook consumer retain their mandatory credential requirements.
+
+Before upgrading from the older absolute-path controller unit, provision these
+root-owned aliases in the root:root 0700 `/etc/credstore` directory. Keep the
+existing root:root 0600 regular source files; other services still use them.
+Validate both paths and refuse to overwrite an unrecognized existing entry.
+
+| Credential-store entry | Existing source file |
+|---|---|
+| `pip-github-token` | `/etc/pip/github.token` |
+| `pip-reviewer-general-app` | `/etc/pip/github-reviewer-general.app.json` |
+| `pip-reviewer-general-key` | `/etc/pip/github-reviewer-general.pem` |
+| `pip-reviewer-secperf-app` | `/etc/pip/github-reviewer-secperf.app.json` |
+| `pip-reviewer-secperf-key` | `/etc/pip/github-reviewer-secperf.pem` |
+
+For example, after validation, the following creates the token alias without
+copying the secret:
+
+```sh
+sudo ln -s /etc/pip/github.token /etc/credstore/pip-github-token
+```
+
+Repeat for the explicit mappings above. The installer does not create
+or rotate credentials. Alias provisioning is a one-time credential-layout step,
+not a new policy revision or a reason to rewrite accepted jobs. Missing private
+keys remain publication errors; missing App identity metadata can block review
+publication because the controller must still validate distinct review Apps.
+
 Workers do not get GitHub credentials. Builders commit locally. The controller
 signs the accepted tree, then uses the verified askpass executable, policy-bound
 remote and exact head lease to publish. Git hooks, credential helpers, URL rewrites and other repository
@@ -158,8 +190,8 @@ The two controller CLI inputs are `--commit-signing-identity` and
 `--commit-signing-key`. The unit resolves these through identifier-only
 `LoadCredential` entries so absent signing capability does not prevent service
 startup. Publication fails closed and retries with its accepted build unchanged;
-there is no unsigned fallback. This does not yet make the older GitHub App
-credential entries optional at service startup.
+there is no unsigned fallback. GitHub App private keys remain isolated from workers
+and are read only when a review publication needs them.
 
 Keep provider credentials in their own runtime state, never in policies, task
 bodies, Git remotes, source files or release manifests.

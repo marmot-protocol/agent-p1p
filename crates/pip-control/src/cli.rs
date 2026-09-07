@@ -903,6 +903,45 @@ mod review_credentials_tests {
     use super::*;
 
     #[test]
+    fn missing_review_key_remains_a_publication_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut options = BTreeMap::new();
+        for (lane, app_id) in [("general", 123), ("secperf", 124)] {
+            let app = directory.path().join(format!("{lane}.json"));
+            fs::write(
+                &app,
+                serde_json::to_vec(&json!({
+                    "app_id": app_id, "installation_id": app_id + 100, "repository_id": 789
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            options.insert(
+                format!("--github-reviewer-{lane}-app"),
+                app.to_str().unwrap().into(),
+            );
+            options.insert(
+                format!("--github-reviewer-{lane}-key"),
+                directory
+                    .path()
+                    .join("missing.pem")
+                    .to_str()
+                    .unwrap()
+                    .into(),
+            );
+        }
+        for general in [true, false] {
+            let writer = AppReviewWriter {
+                options: &options,
+                repository_id: 789,
+                general,
+                now: 100,
+            };
+            assert!(matches!(writer.writer(), Err(CliError::Filesystem(_))));
+        }
+    }
+
+    #[test]
     fn duplicate_review_apps_are_rejected_before_key_read_or_network() {
         let directory = tempfile::tempdir().unwrap();
         let app = directory.path().join("app.json");

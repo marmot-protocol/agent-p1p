@@ -11,13 +11,13 @@ ConditionPathIsMountPoint=/var/lib/pip/worktrees
 Type=oneshot
 User=pip-control
 Group=pip-control
-LoadCredential=github.token:/etc/pip/github.token
-LoadCredential=github-reviewer-general.app:/etc/pip/github-reviewer-general.app.json
-LoadCredential=github-reviewer-general.pem:/etc/pip/github-reviewer-general.pem
-LoadCredential=github-reviewer-secperf.app:/etc/pip/github-reviewer-secperf.app.json
-LoadCredential=github-reviewer-secperf.pem:/etc/pip/github-reviewer-secperf.pem
-# Identifier-only lookup in root's credential store: absent signing capability
-# must not prevent collection or unrelated controller phases from starting.
+# Credential-store identifiers are optional at startup. Each capability still
+# requires its credentials when used; missing review keys must not stop collection.
+LoadCredential=github.token:pip-github-token
+LoadCredential=github-reviewer-general.app:pip-reviewer-general-app
+LoadCredential=github-reviewer-general.pem:pip-reviewer-general-key
+LoadCredential=github-reviewer-secperf.app:pip-reviewer-secperf-app
+LoadCredential=github-reviewer-secperf.pem:pip-reviewer-secperf-key
 LoadCredential=pip-commit-signing
 LoadCredential=pip-commit-signing-identity
 Environment=HERMES_HOME=/var/lib/pip/hermes

@@ -46,20 +46,25 @@ fn staged_active_controller_template_uses_a_dedicated_shared_hermes_root() {
     assert!(service.contains("--policy /etc/pip/repositories/%i.json"));
     assert!(service.contains("--skills-commit-file /opt/pip/current/SOURCE.COMMIT"));
     assert!(service.contains("--direct-queue /var/lib/pip/direct-queue"));
-    assert!(service.contains("LoadCredential=github.token:/etc/pip/github.token"));
     assert!(service.contains("--git-askpass /opt/pip/current/bin/pip-control"));
-    assert!(service.contains(
-        "LoadCredential=github-reviewer-general.app:/etc/pip/github-reviewer-general.app.json"
-    ));
-    assert!(service.contains(
-        "LoadCredential=github-reviewer-general.pem:/etc/pip/github-reviewer-general.pem"
-    ));
-    assert!(service.contains(
-        "LoadCredential=github-reviewer-secperf.app:/etc/pip/github-reviewer-secperf.app.json"
-    ));
-    assert!(service.contains(
-        "LoadCredential=github-reviewer-secperf.pem:/etc/pip/github-reviewer-secperf.pem"
-    ));
+    for (name, source) in [
+        ("github.token", "pip-github-token"),
+        ("github-reviewer-general.app", "pip-reviewer-general-app"),
+        ("github-reviewer-general.pem", "pip-reviewer-general-key"),
+        ("github-reviewer-secperf.app", "pip-reviewer-secperf-app"),
+        ("github-reviewer-secperf.pem", "pip-reviewer-secperf-key"),
+    ] {
+        assert!(
+            service
+                .lines()
+                .any(|line| line == format!("LoadCredential={name}:{source}"))
+        );
+    }
+    assert!(
+        !service
+            .lines()
+            .any(|line| line.starts_with("LoadCredential=") && line.contains(":/"))
+    );
     assert!(service.contains("--github-reviewer-general-app %d/github-reviewer-general.app"));
     assert!(service.contains("--github-reviewer-general-key %d/github-reviewer-general.pem"));
     assert!(service.contains("--github-reviewer-secperf-app %d/github-reviewer-secperf.app"));
