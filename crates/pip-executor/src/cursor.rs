@@ -485,7 +485,17 @@ fn result_from_transcript(text: &str) -> Result<Value, CursorExecutionError> {
     let mut escaped = false;
     for (index, byte) in text.bytes().enumerate() {
         if depth == 0 {
-            if byte == b'{' {
+            // Progress may quote Rust interpolation or code, e.g. `{err}`.
+            // A JSON object starts with a quoted member name or is empty;
+            // those prose braces are not competing result objects.
+            if byte == b'{'
+                && matches!(
+                    text[index + 1..]
+                        .bytes()
+                        .find(|byte| !byte.is_ascii_whitespace()),
+                    Some(b'"' | b'}')
+                )
+            {
                 start = index;
                 depth = 1;
             }

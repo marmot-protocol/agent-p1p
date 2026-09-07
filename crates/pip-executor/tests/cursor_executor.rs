@@ -194,12 +194,19 @@ fn cursor_progress_text_may_surround_one_bound_result_but_not_two() {
     for (text, accepted) in [
         (
             format!(
+                "Reviewed raw `error: {{err}}` / `{{message}}` writers and fn check() {{ call(); }}.\n{result}"
+            ),
+            true,
+        ),
+        (
+            format!(
                 "Checking source.{{\"progress\":\"compiled\"}}```json\n{result}\n```Tests finished."
             ),
             true,
         ),
         (format!("{result}Next reply: {result}"), false),
         ("No structured result was returned.".into(), false),
+        (format!("{{\"contract_version\": broken}}{result}"), false),
         (
             format!("{{\"contract_version\":2,\"role\":\"builder\"}}{result}"),
             false,
