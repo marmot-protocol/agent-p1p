@@ -5,34 +5,37 @@ live proof. The target is [the lean architecture](pip-architecture-plan.md).
 
 ## Latest verified live state
 
-Pirate runs signed `e4106a988a70d8c76d31f6c3fedc86f5fc3048cf`, verified by
-CI `34100251695` and deployment `34100251650`, including Linux lifecycle tests.
+Pirate runs signed `8d3dde498fe60da1b4be9b5f2728610e6cdedcdb`, verified by
+CI `34103318222` and deployment `34103318326`, including Linux lifecycle tests.
 Installation preserved the stopped ledger and paused policy byte-for-byte.
 
 - #993 is the sole labeled canary, with accepted plan 1.
-  Draft [MDK #1726](https://github.com/marmot-protocol/mdk/pull/1726) remains at
-  `05070de3ef5e151bba702f85fd4c9e510f7e0df4`, with required GitHub CI green.
+  Draft [MDK #1726](https://github.com/marmot-protocol/mdk/pull/1726) now has
+  remediation head `625bb4299187139461a64fd6eb5337ea35804261`; fresh GitHub CI
+  `34104104224` has been queued. Earlier CI was green only for head `05070de3`.
 - GitHub reviews `5129269820` (general, changes requested) and `5129270044`
-  (security/performance, approved) are published on that exact head under the
+  (security/performance, approved) are published on the old `05070de3` head under the
   separate App identities. Both include reported verification and limitations.
   Required Kimi attempt 11 and shadow Opus attempt 12 disclosed denied commands;
   the next review must prove the installed noninteractive-execution fix.
 - The installed binding/retry fixes preserved six case-local failures and the
   completed remediation. Builder attempt 14 reverified and reused clean commit
   `625bb4299187139461a64fd6eb5337ea35804261`. Its result is accepted, with the
-  case `BUILDING` at revision 21, plan 1 and remediation round 1. The worker
+  case now `WAITING_CI` at revision 22, plan 1 and remediation round 1. The worker
   reported passing CLI checks and `just fast-ci`, plus a Marmot parallel-test
   timeout whose isolated rerun passed. That limitation remains in its result.
-- Publication is paused: the old dispatcher used an ambiguous builder round
+- Publication succeeded: the old dispatcher used an ambiguous builder round
   counter while publication expected a different number. A regression-tested
   fix selects the exact run attached to the accepted `BUILD_RECORDED` event;
   new jobs also get an explicit one-based `build_round`. The accepted result
-  and history are not rewritten, and no new model attempt is required. This
-  publication fix still needs signed deployment and real GitHub verification.
+  and history were not rewritten, and no new model attempt was required. The
+  first publication cycle hit a generic identity/head guard; its normal retry
+  succeeded. GitHub and the ledger agree on the new head, with the builder's
+  reported checks and limitations preserved in the PR body.
 - #891, #1228 and #1639 are abandoned with history retained.
 - Hermes remains the upstream installation; Pip has not introduced a fork.
   Conversational Hermes was untouched. Pip execution timers and its dedicated
-  gateway are stopped under paused policy 6; ingress remains active.
+  gateway are active under approved policy 7; ingress remains active.
 
 These are dated observations, not a promise that a process is still running.
 Inspect the current ledger, services and GitHub evidence before acting.
@@ -113,7 +116,7 @@ deduplication improvement. A subsequent locally tested role-specific index
 points into the same artifact without copying payloads. It selects the current
 plan, exact-head build/CI, applicable findings and final-review evidence;
 independent reviewer indexes omit peer verdicts. Full history stays readable.
-This index still requires deployment; eliminating full-history duplication in
+This index is installed; eliminating full-history duplication in
 saved job definitions remains unfinished. The product-naming test has moved
 from Python into Rust in preparation for legacy runtime removal after cutover.
 
@@ -124,9 +127,15 @@ repeated migration blocks with one ordered, individually transactional loop.
 Repository-scoped effect selection now precedes leasing in every policy-owned
 consumer. A regression reproduced foreign-repository dispatch before the fix;
 dispatch, restart/lease isolation, the full Rust suite and Clippy now pass.
-These changes still need signed deployment. They do not yet isolate every
+These changes are now installed. They do not yet isolate every
 failed case within one repository: authorization and phase errors can still
 stop an otherwise unrelated active cycle.
+
+A subsequent local TDD change attempts both accepted review-lane publications
+even if one App is unavailable. The ledger advances only after both succeed;
+partial external success retains the stable markers for retry. The regression
+covers either or both lanes failing, lease release and no partial acceptance.
+The full Rust suite and Clippy pass; this change is not yet deployed.
 
 1. Finish one real issue through builder, exact-head CI, all required independent
    reviews, remediation where needed, and final human-ready disposition.

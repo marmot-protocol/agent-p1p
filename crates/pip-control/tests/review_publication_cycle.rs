@@ -153,33 +153,41 @@ fn request_changes_are_published_before_the_remediation_builder_is_released() {
 
 #[test]
 fn reviewer_credential_outage_releases_the_effect_without_partial_ledger_evidence() {
-    let directory = tempfile::tempdir().unwrap();
-    let mut store = review_store(directory.path().join("ledger.db"), false);
-    let general = FixtureWriter::default();
-    let secperf = FixtureWriter {
-        fail: true,
-        ..FixtureWriter::default()
-    };
-    assert!(
-        publish_reviews_once(
-            &general,
-            &secperf,
-            &active_policy(),
-            &mut store,
-            100,
-            "review-publisher",
-            30,
-            true,
-        )
-        .is_err()
-    );
-    assert!(
-        store
-            .claim_effect_matching("retry", 100, 30, &["PUBLISH_REVIEWS"])
-            .unwrap()
-            .is_some()
-    );
-    assert_eq!(store.evidence_count().unwrap(), 0);
+    for (general_failed, secperf_failed) in [(true, false), (false, true), (true, true)] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = review_store(directory.path().join("ledger.db"), false);
+        let general = FixtureWriter {
+            fail: general_failed,
+            ..FixtureWriter::default()
+        };
+        let secperf = FixtureWriter {
+            fail: secperf_failed,
+            ..FixtureWriter::default()
+        };
+        assert!(
+            publish_reviews_once(
+                &general,
+                &secperf,
+                &active_policy(),
+                &mut store,
+                100,
+                "review-publisher",
+                30,
+                true,
+            )
+            .is_err()
+        );
+        // Publishing one accepted lane must not depend on the other App being up.
+        assert_eq!(general.reviews.borrow().len(), 1);
+        assert_eq!(secperf.reviews.borrow().len(), 1);
+        assert!(
+            store
+                .claim_effect_matching("retry", 100, 30, &["PUBLISH_REVIEWS"])
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(store.evidence_count().unwrap(), 0);
+    }
 }
 
 #[test]

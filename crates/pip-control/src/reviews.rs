@@ -161,13 +161,9 @@ pub fn publish_reviews_once<G: ReviewWriter, S: ReviewWriter>(
         "reviewer-general",
         &general_reviews,
     );
-    let general_review_id = match general {
-        Ok(id) => id,
-        Err(error) => {
-            store.release_effect(&claimed.effect_id, owner)?;
-            return Err(error);
-        }
-    };
+    // Both lanes already have accepted exact-head results. Publish each
+    // independently; a temporary App outage must not hide the healthy lane.
+    // Their stable markers make a partial external success safe to retry.
     let secperf = publish_one(
         secperf_writer,
         policy,
@@ -177,13 +173,14 @@ pub fn publish_reviews_once<G: ReviewWriter, S: ReviewWriter>(
         "reviewer-secperf",
         &secperf_reviews,
     );
-    let secperf_review_id = match secperf {
-        Ok(id) => id,
-        Err(error) => {
-            store.release_effect(&claimed.effect_id, owner)?;
-            return Err(error);
-        }
-    };
+    let (general_review_id, secperf_review_id) =
+        match general.and_then(|id| secperf.map(|other| (id, other))) {
+            Ok(ids) => ids,
+            Err(error) => {
+                store.release_effect(&claimed.effect_id, owner)?;
+                return Err(error);
+            }
+        };
     let evidence = EvidenceInput {
         evidence_id: format!("evidence-reviews-{}", claimed.effect_id),
         kind: "GITHUB_REVIEW_PUBLICATION".into(),
