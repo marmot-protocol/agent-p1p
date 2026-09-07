@@ -8,6 +8,7 @@ mod isolated_workspace;
 mod process;
 mod provider;
 mod publication;
+mod signing;
 
 pub use checkout::{CheckoutError, CheckoutReconciler};
 pub use cursor::{CursorExecutionError, CursorExecutor, CursorTask};
@@ -20,6 +21,7 @@ pub use process::{
 };
 pub use provider::{CursorHealthProbe, HealthAssurance, ProviderHealth, ProviderProbeError};
 pub use publication::{GitPublicationSpec, GitPublisher, PublicationError, PublicationResult};
+pub use signing::{CommitSigningIdentity, SignedCommit, sign_commit};
 
 pub use worktree::{
     AllocationError, AllocationResult, GitCommand, GitOutput, GitRunner, ProcessGitRunner,

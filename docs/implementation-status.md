@@ -285,6 +285,36 @@ Deployment remains a separate gate. Healthy-case advancement still
 uses the repository-wide authorization gate; this is not complete per-case
 failure isolation.
 
+### Controller commit-signing primitive (local, not wired into publication)
+
+`pip-executor::sign_commit` creates one SSH-signed commit from the exact accepted
+source tree and an explicitly supplied ancestor parent. It leaves source refs,
+checkout contents and repository configuration unchanged, returns the source,
+tree, parent, published SHA and signer fingerprint, and reproduces the same
+signed SHA on retry using source-bound timestamps. It verifies the signature
+against the configured public key. Private key contents are never loaded into
+Rust values, worker input or repository configuration; only the credential-file
+path goes to the configured Git command and fixed SSH signing executable.
+
+Real Git/SSH tests cover binaries, executable modes and symlinks, reproducible
+signatures, wrong keys, unsafe configuration, dirty/head/remote drift, identity
+injection, replacement refs, corrupt objects and ancestor-path redirection.
+A clean checkout with a corrupted blob initially passed signing; a full bounded
+Git object-integrity check now rejects it before signing. Ancestor redirection
+also reproduced before adding canonical-path revalidation. Focused tests and
+executor Clippy pass. The full Rust workspace suite, workspace Clippy with
+warnings denied, formatting and diff checks also pass
+(`/tmp/pip-commit-signing-validation-20260907.log`). Linux release checks remain
+a separate gate.
+
+This is **not yet a live signing path**. Still required: validated policy and
+credential wiring, durable source-commit retention, publication and crash-replay
+integration, and an audited republish of the current canary followed by fresh
+CI/reviews. In particular, final-preflight currently joins builder finding
+resolutions directly against the PR head; that join must use the verified
+source-to-published binding without changing the original result. No accepted
+result, branch, PR or live unit was changed by this work.
+
 1. Finish one real issue through builder, exact-head CI, all required independent
    reviews, remediation where needed, and final human-ready disposition.
 2. Finish capability/case failure isolation and safe result collection during

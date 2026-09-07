@@ -42,7 +42,9 @@ lifecycle boundary before use.
    scope, dependencies and test plan against current source.
 3. Accept a versioned plan or record an explicit human/terminal disposition.
 4. Ask the builder to implement that plan, test it and produce a local commit.
-5. Publish the exact commit to the assigned branch and create/update one draft PR.
+5. The controller signs the accepted build tree, retains its source commit and
+   records the source-to-published commit binding, then publishes the signed
+   commit to the assigned branch and creates/updates one draft PR.
 6. Observe required CI for that exact head.
 7. Run every configured required reviewer independently on the same head.
 8. If changes are needed, combine blocking findings, remediate, and repeat CI
@@ -111,6 +113,13 @@ approvals. Applicable findings require resolution confirmation by their origin.
 
 Controllers publish plans, draft PRs, lane reviews and readiness comments using
 stable markers. Workers do not receive GitHub publication credentials.
+The dedicated commit-signing key is controller-only as well. Signing preserves
+the accepted tree exactly and uses a validated parent and automation identity;
+it never edits the accepted worker result to substitute a new SHA. Retain the
+original source commit before replacing workspace refs or reclaiming storage.
+CI, reviews and final readiness bind the published signed SHA, not its unsigned
+source SHA. Replacing an existing unsigned publication requires an audited
+recovery decision and fresh head-bound CI and reviews.
 Automatic merge is deferred; it is not part of the lean runtime's required
 execution path and cannot be enabled accidentally by a generic configuration.
 
