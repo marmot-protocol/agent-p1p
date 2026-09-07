@@ -388,14 +388,15 @@ fn valid_evidence_bundle(value: Option<&serde_json::Value>) -> bool {
     let Some(bundle) = value.and_then(serde_json::Value::as_object) else {
         return false;
     };
-    bundle
-        .get("schema_version")
-        .and_then(serde_json::Value::as_u64)
-        == Some(1)
-        && bundle
-            .get("sha256")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|digest| valid_hex(digest, 64))
+    matches!(
+        bundle
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64),
+        Some(1 | 2)
+    ) && bundle
+        .get("sha256")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|digest| valid_hex(digest, 64))
 }
 
 fn valid_hex(value: &str, length: usize) -> bool {

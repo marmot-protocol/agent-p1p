@@ -26,11 +26,19 @@ Installation preserved the stopped ledger and paused policy byte-for-byte.
 - GitHub reviews `5129269820` (general, changes requested) and `5129270044`
   (security/performance, approved) are published on that exact head under the
   separate App identities. Both include reported verification and limitations.
-  The case advanced to `REMEDIATING` revision 17; builder attempt 13 is executing.
-  A remediated head, fresh required reviews and final readiness remain unproven.
+  The case advanced to `REMEDIATING` revision 17. Builder attempt 13 created
+  clean local commit `625bb4299187139461a64fd6eb5337ea35804261`, but result
+  acceptance incorrectly compared its new commit with the incoming PR head
+  (and required a PR number absent from the builder output contract). It failed
+  and the case escalated at revision 18; all six case-local failures remain.
+  The commit is retained, not published. A supported retry must reverify it.
+  Regression tests now distinguish incoming planner/builder context from exact
+  review/final output bindings. Full Rust tests and Clippy pass locally; this
+  fix still requires a signed deployment and a real accepted remediation.
 - #891, #1228 and #1639 are abandoned with history retained.
 - Hermes remains the upstream installation; Pip has not introduced a fork.
-  Conversational Hermes was untouched. Pip execution timers and ingress are active.
+  Conversational Hermes was untouched. Pip execution timers are paused; ingress
+  remains active. The dedicated Pip gateway is idle pending upgrade.
 
 These are dated observations, not a promise that a process is still running.
 Inspect the current ledger, services and GitHub evidence before acting.
@@ -104,7 +112,11 @@ pass. The next native review must prove the new layout in its actual sandbox.
 Jobs reference a retained SHA-256-bound evidence file; new Cursor files support
 bounded line reads. Existing jobs keep their artifact bytes and references.
 Transport tests cover large histories and drift, but job definitions still
-duplicate full history. Compact role-specific inputs remain a completion gate.
+include full history. A locally tested format-2 export removes identical
+accepted-result copies from events using exact run/digest references; stored
+ledger records and existing format-1 jobs remain unchanged. This is a bounded
+deduplication improvement, not yet compact role-specific inputs, which remain
+a completion gate.
 
 ## Remaining completion gates
 

@@ -1,6 +1,6 @@
 //! Policy-driven worker dispatch projection.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::num::{NonZeroU32, NonZeroU64};
 use std::str::FromStr;
@@ -386,10 +386,39 @@ fn immutable_evidence_bundle(store: &Store, case: &StoredCase) -> Result<Value, 
     if history.events.last().map(|event| event.state_revision) != Some(case.state_revision) {
         return Err(DispatchError::InvalidEvidenceBundle);
     }
-    let records =
-        serde_json::to_value(history).map_err(|_| DispatchError::InvalidEvidenceBundle)?;
+    let mut records =
+        serde_json::to_value(&history).map_err(|_| DispatchError::InvalidEvidenceBundle)?;
+    // Accepted results occur in both the event journal and run index. Keep
+    // one payload in exported jobs and reference it by its immutable identity
+    // and digest. The authoritative ledger remains unchanged and fully readable.
+    let runs = history
+        .runs
+        .iter()
+        .map(|run| (run.event_id.as_str(), run))
+        .collect::<BTreeMap<_, _>>();
+    for event in records["events"]
+        .as_array_mut()
+        .ok_or(DispatchError::InvalidEvidenceBundle)?
+    {
+        let event_id = event["event_id"]
+            .as_str()
+            .ok_or(DispatchError::InvalidEvidenceBundle)?;
+        if let Some(run) = runs.get(event_id)
+            && event["payload_sha256"].as_str() == Some(run.payload_sha256.as_str())
+            && event["payload"] == run.payload
+        {
+            let event = event
+                .as_object_mut()
+                .ok_or(DispatchError::InvalidEvidenceBundle)?;
+            event.remove("payload");
+            event.insert(
+                "payload_ref".into(),
+                json!({"run_id":run.run_id,"payload_sha256":run.payload_sha256}),
+            );
+        }
+    }
     let unsigned = json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "case_key": case.case_key,
         "bound_state_revision": case.state_revision,
         "records": records,

@@ -783,6 +783,34 @@ fn lease_expired_before_execution_is_an_outage_not_a_work_failure() {
 }
 
 #[test]
+fn remediation_builder_can_return_a_new_head_for_an_existing_pull_request() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = queued_builder_with(directory.path(), |task| {
+        task["body"]["pr_number"] = json!(77);
+        task["body"]["expected_head_sha"] = json!("c".repeat(40));
+    });
+    let policy = active_policy();
+    let queue = queue(directory.path());
+    let runtime = runtime(Ok(builder_result()));
+    reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 100, 30, true).unwrap();
+    execute_direct_queue_once(&runtime, &queue, 101).unwrap();
+    let result =
+        reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 102, 30, true)
+            .unwrap();
+    assert!(matches!(result, DirectQueueCycle::Ingested { .. }));
+    assert_eq!(
+        store.run_by_task_id(task_id()).unwrap().unwrap().payload["head_sha"],
+        "b".repeat(40)
+    );
+    assert!(
+        store
+            .claim_effect_matching("publisher", 103, 30, &["PUBLISH_DRAFT_PULL_REQUEST"])
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
 fn completed_result_survives_controller_restart_without_rerunning_provider() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = queued_builder(directory.path());
@@ -872,6 +900,34 @@ fn stale_authorization_never_prepares_a_direct_job() {
     assert_eq!(status.outbox_pending, 1);
     assert_eq!(status.outbox_leased, 0);
     assert_eq!(status.direct_attempts_running, 0);
+}
+
+#[test]
+fn direct_queue_accepts_saved_and_compact_evidence_formats_only() {
+    for version in [0, 1, 2, 3] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = queued_builder_with(directory.path(), |task| {
+            task["body"]["immutable_evidence_bundle"]["schema_version"] = json!(version);
+        });
+        let queue = queue(directory.path());
+        let result = reconcile_direct_queue_once(
+            &mut store,
+            &active_policy(),
+            &queue,
+            "controller",
+            100,
+            30,
+            true,
+        );
+        if matches!(version, 1 | 2) {
+            assert!(
+                matches!(result, Ok(DirectQueueCycle::Prepared { .. })),
+                "{version}: {result:?}"
+            );
+        } else {
+            assert!(matches!(result, Err(DirectQueueError::InvalidEnvelope)));
+        }
+    }
 }
 
 #[test]
@@ -965,8 +1021,10 @@ fn queued_builder_with(root: &std::path::Path, mutate: impl FnOnce(&mut Value)) 
                 next_state: "READY_TO_BUILD".into(),
                 remediation_round: 1,
                 plan_version: 1,
-                pr_number: None,
-                head_sha: None,
+                pr_number: task["body"]["pr_number"].as_u64(),
+                head_sha: task["body"]["expected_head_sha"]
+                    .as_str()
+                    .map(str::to_owned),
                 observed_at: 2,
                 event: EventInput {
                     event_id: "event-plan-published".into(),

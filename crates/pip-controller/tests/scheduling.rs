@@ -605,11 +605,46 @@ fn final_reviewer_receives_the_committed_preflight_and_complete_history() {
             effects: Vec::new(),
         })
         .unwrap();
+    let mut plan = serde_json::from_str::<serde_json::Value>(include_str!(
+        "../../../migration/target-v1/worker-results.json"
+    ))
+    .unwrap()["results"][0]
+        .clone();
+    plan["evidence"]["diagnostic_rows"] = json!(vec!["x".repeat(300); 1000]);
     store
         .apply_transition(
             &pip_store::TransitionInput {
                 case_key: case_key.into(),
                 expected_revision: 1,
+                next_state: "READY_TO_BUILD".into(),
+                remediation_round: 0,
+                plan_version: 1,
+                pr_number: None,
+                head_sha: None,
+                observed_at: 2,
+                event: pip_store::EventInput {
+                    event_id: "accepted-plan".into(),
+                    event_type: "PLAN_RECORDED".into(),
+                    payload: plan.clone(),
+                },
+                run: Some(pip_store::RunInput {
+                    run_id: "run-plan".into(),
+                    task_id: "task-plan".into(),
+                    role: "planner".into(),
+                    payload: plan.clone(),
+                }),
+                evidence: vec![],
+                findings: vec![],
+                effects: vec![],
+            },
+            None,
+        )
+        .unwrap();
+    store
+        .apply_transition(
+            &pip_store::TransitionInput {
+                case_key: case_key.into(),
+                expected_revision: 2,
                 next_state: "FINAL_REVIEW".into(),
                 remediation_round: 2,
                 plan_version: 1,
@@ -659,8 +694,24 @@ fn final_reviewer_receives_the_committed_preflight_and_complete_history() {
 
     assert_eq!(dispatch.role, WorkerRole::FinalReviewer);
     let bundle = &dispatch.worker_body["immutable_evidence_bundle"];
-    assert_eq!(bundle["bound_state_revision"], 2);
-    assert_eq!(bundle["records"]["events"].as_array().unwrap().len(), 2);
+    assert_eq!(bundle["schema_version"], 2);
+    assert_eq!(bundle["bound_state_revision"], 3);
+    assert_eq!(bundle["records"]["events"].as_array().unwrap().len(), 3);
+    let event = &bundle["records"]["events"][1];
+    let run = &bundle["records"]["runs"][0];
+    assert!(event.get("payload").is_none());
+    assert_eq!(
+        event["payload_ref"],
+        json!({"run_id":"run-plan","payload_sha256":run["payload_sha256"]})
+    );
+    assert_eq!(run["payload"], plan);
+    assert_eq!(event["payload_sha256"], run["payload_sha256"]);
+    assert!(serde_json::to_vec(bundle).unwrap().len() < 350_000);
+    // Export compaction never rewrites accepted ledger records.
+    assert_eq!(
+        store.immutable_history_for_case(case_key).unwrap().events[1].payload,
+        plan
+    );
     assert_eq!(
         bundle["records"]["evidence"][0]["kind"],
         "GITHUB_FINAL_PREFLIGHT"

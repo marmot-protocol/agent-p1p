@@ -232,7 +232,7 @@ fn planner_dispatch_freezes_intent_and_projects_only_worker_then_acks_outbox() {
         worker_body["immutable_evidence_ref"]["sha256"],
         hex_digest(&Sha256::digest(serde_json::to_vec(bundle).unwrap()))
     );
-    assert_eq!(bundle["schema_version"], 1);
+    assert_eq!(bundle["schema_version"], 2);
     assert_eq!(bundle["case_key"], "repo:1055628515#1240@3");
     assert_eq!(bundle["bound_state_revision"], 1);
     assert_eq!(

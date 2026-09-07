@@ -10,9 +10,14 @@ Cursor queue, bound to a controller-owned task. The stored assignment, not
 the worker result, supplies the immutable task identity.
 The controller rejects task, role, profile, case, plan, PR, head, model, or
 skills-commit drift before writing a run or advancing a case.
+The job's PR/head describe incoming context for planners and builders; they
+are not output fields a builder must echo. A remediation builder returns its
+new commit in `head_sha`. The controller checks that commit in the assigned
+checkout before publishing it to the existing PR. Review and final-review
+results, by contrast, must name the exact PR/head they were assigned to review.
 
 Every controller-owned worker projection supplies
-`immutable_evidence_bundle` schema version 1, inline or through
+`immutable_evidence_bundle` schema version 1 or 2, inline or through
 `immutable_evidence_ref` (`schema_version: 1`, absolute `path`, `sha256`). For
 a reference, first verify the file's SHA-256 over its exact bytes (for example
 with `sha256sum`); parse the file as the bundle only after that matches.
@@ -24,6 +29,12 @@ effect is claimed. Each record retains its stored payload digest. The top-level
 digest is SHA-256 over the compact, lexicographically key-ordered JSON bundle
 after removing only the top-level `sha256` field. Workers fail closed on a
 missing or mismatched bundle; the result contract does not echo the bundle.
+Version 2 avoids duplicate accepted-result payloads: an event can contain
+`payload_ref: {"run_id": "…", "payload_sha256": "…"}` instead of `payload`.
+Find that exact `run_id` in `records.runs`, require its digest to match both the
+reference and the event's `payload_sha256`, and use the run's `payload`.
+All records remain present; only identical copies of payloads are replaced.
+Version 1 retains inline event payloads and remains valid for saved jobs.
 For final review, the atomically preceding `GITHUB_FINAL_PREFLIGHT` record also
 contains the freshly fetched issue title/body, bounded issue comments and body
 digests, trusted authorization event, PR, complete CI history, published
