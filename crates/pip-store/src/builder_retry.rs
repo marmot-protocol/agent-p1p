@@ -45,8 +45,8 @@ pub(crate) fn validate_retry(
         || current.plan_version == 0
         || input.plan_version != current.plan_version
         || input.remediation_round != current.remediation_round
-        || current.pr_number.is_some() != review
-        || current.head_sha.is_some() != review
+        || current.pr_number.is_some() != current.head_sha.is_some()
+        || review && current.pr_number.is_none()
         || input.pr_number != current.pr_number
         || input.head_sha != current.head_sha
         || input.run.is_some()
@@ -99,7 +99,8 @@ pub(crate) fn validate_retry(
     let effect_revision = if escalated {
         let recoverable: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM events WHERE case_key=?1 AND state_revision=?2
-             AND event_type='OPERATIONAL_BOUND_REACHED' AND previous_state=?3
+             AND event_type='OPERATIONAL_BOUND_REACHED'
+             AND (previous_state=?3 OR (?4=1 AND previous_state='REMEDIATING'))
              AND next_state='ESCALATED' AND json_extract(payload_json,'$.bound')='PROVIDER_FAILURES'
              AND json_extract(payload_json,'$.details.source')='direct-worker')",
             params![
@@ -109,7 +110,8 @@ pub(crate) fn validate_retry(
                     "REVIEWING"
                 } else {
                     "READY_TO_BUILD"
-                }
+                },
+                !review
             ],
             |row| row.get(0),
         )?;
@@ -126,15 +128,15 @@ pub(crate) fn validate_retry(
           AND effect_type='RUN_DIRECT_WORKER' AND json_extract(payload_json,'$.role')=?7
           AND (?8=0 OR json_extract(payload_json,'$.body.review_mode')='required')
           AND delivered_at IS NULL AND (superseded_at IS NOT NULL)=?5 AND lease_owner IS NULL AND lease_until IS NULL)
-         AND NOT EXISTS(SELECT 1 FROM direct_attempts WHERE case_key=?2 AND (status='RUNNING' OR (status='COMPLETE' AND (?8=0 OR effect_id=?1))))
+         AND NOT EXISTS(SELECT 1 FROM direct_attempts WHERE case_key=?2 AND (status='RUNNING' OR (status='COMPLETE' AND effect_id=?1)))
          AND (SELECT COUNT(*) FROM outbox WHERE case_key=?2 AND delivered_at IS NULL AND superseded_at IS NULL AND effect_type!='ESCALATE')=?6
          AND NOT EXISTS(SELECT 1 FROM outbox WHERE case_key=?2 AND (lease_owner IS NOT NULL OR lease_until IS NOT NULL))
          AND EXISTS(SELECT 1 FROM direct_attempts WHERE effect_id=?1 AND case_key=?2 AND status='FAILED')
          AND EXISTS(SELECT 1 FROM runs WHERE case_key=?2 AND role='planner')
-         AND (?8=0 OR EXISTS(SELECT 1 FROM runs WHERE case_key=?2 AND role='builder'))
+         AND (?9=0 OR EXISTS(SELECT 1 FROM runs WHERE case_key=?2 AND role='builder'))
          AND NOT EXISTS(SELECT 1 FROM events WHERE case_key=?2 AND event_type IN ('BUILDER_RETRY_AUTHORIZED','REVIEW_RETRY_AUTHORIZED')
              AND json_extract(payload_json,'$.failed_attempts')>=?4)",
-        params![authorization.effect_id,current.case_key,sql_u64(effect_revision)?,failed,escalated,if escalated {0} else {1},if review { "reviewer-secperf" } else { "builder" },review],|row|row.get(0))?;
+        params![authorization.effect_id,current.case_key,sql_u64(effect_revision)?,failed,escalated,if escalated {0} else {1},if review { "reviewer-secperf" } else { "builder" },review,current.pr_number.is_some()],|row|row.get(0))?;
     if !admissible {
         return Err(invalid());
     }

@@ -12,6 +12,104 @@ use serde_json::json;
 const CASE: &str = "repo:42#9@3";
 
 #[test]
+fn remediation_builder_retry_preserves_existing_pr_head_plan_and_round() {
+    let (_dir, mut store, paused, accepted, mut request) = fixture();
+    let old = store.claim_effect("worker", 132, 5).unwrap().unwrap();
+    let id = store.begin_direct_attempt(&old, "old-task", 132).unwrap();
+    store
+        .complete_direct_attempt(id, "worker", 133, &json!({"accepted_build":true}))
+        .unwrap();
+    store
+        .acknowledge_effect(&old.effect_id, "worker", 133)
+        .unwrap();
+    store
+        .apply_transition(
+            &TransitionInput {
+                case_key: CASE.into(),
+                expected_revision: 2,
+                next_state: "REMEDIATING".into(),
+                remediation_round: 1,
+                plan_version: 1,
+                pr_number: Some(77),
+                head_sha: Some("b".repeat(40)),
+                observed_at: 135,
+                event: EventInput {
+                    event_id: "reviews-published".into(),
+                    event_type: "REVIEWS_PUBLISHED".into(),
+                    payload: json!({}),
+                },
+                run: Some(RunInput {
+                    run_id: "accepted-build".into(),
+                    task_id: "old-task".into(),
+                    role: "builder".into(),
+                    payload: json!({"head_sha":"b".repeat(40)}),
+                }),
+                evidence: vec![],
+                findings: vec![],
+                effects: vec![EffectInput {
+                    effect_id: "remediation-builder".into(),
+                    effect_type: "RUN_DIRECT_WORKER".into(),
+                    payload: json!({"role":"builder","task_id":"remediation-task"}),
+                }],
+            },
+            None,
+        )
+        .unwrap();
+    let effect = store.claim_effect("worker", 136, 5).unwrap().unwrap();
+    let id = store
+        .begin_direct_attempt(&effect, "remediation-task", 136)
+        .unwrap();
+    store
+        .fail_direct_attempt(id, "worker", 137, "invalid output binding")
+        .unwrap();
+    store.release_effect(&effect.effect_id, "worker").unwrap();
+    enforce_operational_bounds(&mut store, &accepted, 140).unwrap();
+    request.expected_revision = 4;
+    request.expected_failures = 4;
+    request.effect_id = effect.effect_id;
+    let history = store.immutable_history_for_case(CASE).unwrap();
+    assert_eq!(
+        authorize_builder_retry(&mut store, &paused, &request, 141, 0).unwrap(),
+        ApplyResult::Applied
+    );
+    let case = store.case(CASE).unwrap().unwrap();
+    assert_eq!(case.state, "READY_TO_BUILD");
+    assert_eq!(case.pr_number, Some(77));
+    assert_eq!(case.head_sha, Some("b".repeat(40)));
+    assert_eq!(case.plan_version, 1);
+    assert_eq!(case.remediation_round, 1);
+    assert_eq!(store.failed_direct_attempt_count_for_case(CASE).unwrap(), 4);
+    assert_eq!(
+        store.immutable_history_for_case(CASE).unwrap().runs,
+        history.runs
+    );
+    assert_eq!(
+        authorize_builder_retry(&mut store, &paused, &request, 142, 0).unwrap(),
+        ApplyResult::Replayed
+    );
+}
+
+#[test]
+fn retry_cannot_replace_a_running_or_completed_target_attempt() {
+    for complete in [false, true] {
+        let (_dir, mut store, paused, _accepted, request) = fixture();
+        let effect = store.claim_effect("worker", 132, 5).unwrap().unwrap();
+        let id = store
+            .begin_direct_attempt(&effect, "old-task", 132)
+            .unwrap();
+        if complete {
+            store
+                .complete_direct_attempt(id, "worker", 133, &json!({"completed":true}))
+                .unwrap();
+        }
+        store.release_effect(&effect.effect_id, "worker").unwrap();
+        let before = store.status(140).unwrap();
+        assert!(authorize_builder_retry(&mut store, &paused, &request, 140, 0).is_err());
+        assert_eq!(store.status(140).unwrap(), before);
+    }
+}
+
+#[test]
 fn review_retry_preserves_the_build_and_requires_fresh_ci() {
     let (_dir, mut store, paused, accepted, mut request) = fixture();
     store.apply_transition(&TransitionInput {

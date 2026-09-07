@@ -133,22 +133,16 @@ fn authorize_retry(
         ),
         remediation_round: case.remediation_round,
         plan_version: NonZeroU32::new(case.plan_version).map(PlanVersion::new),
-        pr_number: if review_retry {
-            case.pr_number
-                .and_then(NonZeroU64::new)
-                .map(PullRequestNumber::new)
-        } else {
-            None
-        },
-        head_sha: if review_retry {
-            case.head_sha
-                .as_deref()
-                .map(GitSha::from_str)
-                .transpose()
-                .map_err(error)?
-        } else {
-            None
-        },
+        pr_number: case
+            .pr_number
+            .and_then(NonZeroU64::new)
+            .map(PullRequestNumber::new),
+        head_sha: case
+            .head_sha
+            .as_deref()
+            .map(GitSha::from_str)
+            .transpose()
+            .map_err(error)?,
         event,
         accepted_plan_version: None,
         next_pr_number: None,

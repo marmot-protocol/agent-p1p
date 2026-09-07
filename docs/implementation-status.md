@@ -35,6 +35,10 @@ Installation preserved the stopped ledger and paused policy byte-for-byte.
   Regression tests now distinguish incoming planner/builder context from exact
   review/final output bindings. Full Rust tests and Clippy pass locally; this
   fix still requires a signed deployment and a real accepted remediation.
+  The same regression pass found the offline builder-retry guard only supported
+  pre-PR failures. It now preserves an existing PR/head and remediation round,
+  permits prior accepted builds, and still fences running or completed target
+  attempts. Both changes are required before this case can resume.
 - #891, #1228 and #1639 are abandoned with history retained.
 - Hermes remains the upstream installation; Pip has not introduced a fork.
   Conversational Hermes was untouched. Pip execution timers are paused; ingress
