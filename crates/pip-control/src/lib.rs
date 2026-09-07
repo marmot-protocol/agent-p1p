@@ -19,6 +19,7 @@ mod install;
 mod intake;
 mod plans;
 mod policy;
+mod publication_retry;
 mod publication_text;
 mod release;
 mod results;
@@ -82,6 +83,7 @@ pub use policy::{
     GitHubConfiguration, IntakeConfiguration, MergeConfiguration, PolicyError, RepositoryIdentity,
     RepositoryPolicy, RoleConfiguration, WorkspaceStorageConfiguration, load_repository_policy,
 };
+pub use publication_retry::{PublicationRetryRequest, authorize_publication_retry};
 pub use release::{
     ArtifactManifest, ReleaseError, ReleaseManifest, ReleaseMetadata, VerifiedRelease,
     create_release_manifest, resource_set_digest, sign_manifest, verify_release, verifying_key,

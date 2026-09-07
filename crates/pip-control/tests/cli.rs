@@ -489,3 +489,34 @@ fn digest(bytes: &[u8]) -> String {
     let value = Sha256::digest(bytes);
     value.iter().map(|byte| format!("{byte:02x}")).collect()
 }
+
+#[test]
+fn publication_retry_is_a_strict_offline_operator_command() {
+    let args = [
+        "authorize-publication-retry",
+        "--policy",
+        "/missing/policy",
+        "--database",
+        "/missing/ledger",
+        "--direct-queue",
+        "/missing/queue",
+        "--case",
+        "repo:42#1@1",
+        "--expected-revision",
+        "2",
+        "--expected-head",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--request-id",
+        "sign-build",
+        "--reason",
+        "Sign accepted build",
+    ];
+    let error = pip_control::run_cli(args.into_iter().map(String::from))
+        .unwrap_err()
+        .to_string();
+    if rustix::process::geteuid().as_raw() != 0 {
+        assert!(error.contains("requires root"), "{error}");
+    } else {
+        assert!(error.contains("filesystem"), "{error}");
+    }
+}

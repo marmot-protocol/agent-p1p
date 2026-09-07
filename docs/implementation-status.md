@@ -294,7 +294,7 @@ Deployment remains a separate gate. Healthy-case advancement still
 uses the repository-wide authorization gate; this is not complete per-case
 failure isolation.
 
-### Controller commit signing and Git publication (local, not wired into the controller)
+### Controller commit signing and Git publication (implemented, not deployed)
 
 `pip-executor::sign_commit` creates one SSH-signed commit from the exact accepted
 source tree and an explicitly supplied ancestor parent. It leaves source refs,
@@ -377,6 +377,37 @@ Twenty-two focused tests pass and cover initial and remediated signed publicatio
 results, malformed/misbound evidence, retry-lease release, stale GitHub approvals,
 missing origin confirmations and successful fresh-head confirmation. Full
 workspace validation and signed-release CI remain separate gates.
+
+The signing integration at `b326a0aff27c0ae1d46b94b95bb6d7aa6e2e3446` subsequently
+passed CI `34123194095` and deployment build `34123194049`. The real Linux
+lifecycle job emitted `CONTROLLER_SIGNING_CREDENTIAL_SANDBOX_OK`; this supersedes
+the pending sandbox gate above, but is not a live GitHub signed-publication proof.
+Pirate was rechecked and still runs `8d3dde4`; the new signing key is not yet
+listed on the `agent-p1p` account. No canary head has been rewritten.
+
+### Offline signed-publication recovery (implemented locally, not deployed)
+
+`authorize-publication-retry` shares the existing root-only, inert-policy,
+stopped-execution and drained-queue checks with builder/review recovery. It
+accepts an exact case revision/head, request ID and human reason. It appends one
+publication-only authorization without rewriting accepted runs, resetting
+attempts, incrementing remediation or starting a model. Recovery signs the
+latest accepted build tree on the accepted plan's original base; retaining the
+previous unsigned PR head as parent would leave unsigned ancestors in the PR.
+The regular publication path updates that same owned PR under the old-head
+lease and returns the case to exact-head CI and independent reviews.
+
+The controller revalidates the accepted publication/build evidence before both
+authorization and execution. Already-signed publications and conflicting request
+replays are rejected; an identical request replays without additional effects.
+Recovery explicitly rejects an unsigned publisher result. Local tests and the
+Linux root/queue/service-state checks must pass before deployment. GitHub signing
+key registration remains a separate prerequisite to live republication.
+The local publication suite, CLI and existing builder/review recovery tests,
+signed final-preflight regressions, and workspace all-target Clippy pass. The
+recovery test exercises both initial and remediated accepted builds. The Linux
+lifecycle test now checks this command against real non-root execution, a
+nonempty queue and enabled execution units; its CI result is still pending.
 
 ### Human-readable GitHub publication (local, not deployed)
 

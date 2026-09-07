@@ -1,4 +1,4 @@
-# Exhausted builder recovery
+# Offline work and publication recovery
 
 Use this only after diagnosing and repairing a failed builder execution.
 It is not a general retry switch or a substitute for repairing provider errors.
@@ -95,3 +95,44 @@ understand its retry allowance. Do not downgrade an authorized live ledger to
 a pre-retry release; retain a compatible release for rollback, or remain paused
 and explicitly assess recovery. A schema-version match alone is not proof of
 behavioral compatibility.
+
+## Replace an unsigned publication
+
+`authorize-publication-retry` is a separate, publication-only recovery for an
+already accepted build. Use it after installing controller signing support and
+registering the controller's public **signing** key with the policy's automation
+account. Keep the private key restricted to the controller. Confirm its signing
+identity, the assigned local branch and the exact remote PR head before starting.
+The same root, inert policy, stopped execution and drained queue requirements
+above apply; this command does not stop a worker for you.
+
+The case must be `WAITING_CI`, `REVIEWING` or `FINAL_REVIEW`, with an unsigned
+publication joined to its accepted builder result and plan. Obtain the current
+revision/head from the ledger and compare the head with GitHub. Then run:
+
+```sh
+sudo /opt/pip/current/bin/pip-control authorize-publication-retry \
+  --policy /etc/pip/repositories/REPOSITORY.json \
+  --database /var/lib/pip/ledger.db \
+  --direct-queue /var/lib/pip/direct-queue \
+  --case 'VERIFIED_CASE_KEY' \
+  --expected-revision VERIFIED_STATE_REVISION \
+  --expected-head VERIFIED_UNSIGNED_PR_HEAD \
+  --request-id 'operator-sign-publication-UNIQUE_ID' \
+  --reason 'Publish the accepted build with the registered controller signing identity'
+```
+
+`Applied` appends `PUBLICATION_RETRY_AUTHORIZED` and queues only publication.
+It grants **zero** model attempts, does not change the accepted plan, remediation
+round or deadline, and does not erase old events, reviews or build results.
+Repeat the identical request ID/arguments after an uncertain response; `Replayed`
+does not add another effect. Changed arguments under that ID are rejected.
+
+Resume separately. The controller signs the exact accepted tree on the original
+planned base, replacing the unsigned range rather than retaining unsigned
+ancestors. It retains the source commit and publishes under an exact-old-head
+lease. If GitHub has moved, inspect the conflict; do not force through it.
+The new head returns to CI and independent reviews; earlier head-bound approvals
+do not count. Final review and human merge remain required. Keep a compatible
+release with this new event if rollback is needed; schema compatibility alone
+does not make an older workflow engine safe to resume.

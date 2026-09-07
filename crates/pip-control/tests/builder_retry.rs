@@ -543,6 +543,32 @@ fn root_cli_retry_checks_real_uid_stopped_units_and_empty_queue() {
     let run = || Command::new(binary).args(args).output().unwrap();
     let mut review_args = args;
     review_args[0] = "authorize-review-retry";
+    let publication_args = [
+        "authorize-publication-retry",
+        "--policy",
+        policy.to_str().unwrap(),
+        "--database",
+        store.path().to_str().unwrap(),
+        "--direct-queue",
+        queue.to_str().unwrap(),
+        "--case",
+        CASE,
+        "--expected-revision",
+        "2",
+        "--expected-head",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--request-id",
+        "sign-accepted-build",
+        "--reason",
+        "Sign the accepted build",
+    ];
+    let publication_denied = Command::new("runuser")
+        .args(["-u", "pip-worker", "--", binary])
+        .args(publication_args)
+        .output()
+        .unwrap();
+    assert!(!publication_denied.status.success());
+    assert!(String::from_utf8_lossy(&publication_denied.stderr).contains("requires root"));
     let review_denied = Command::new("runuser")
         .args(["-u", "pip-worker", "--", binary])
         .args(review_args)
@@ -558,6 +584,12 @@ fn root_cli_retry_checks_real_uid_stopped_units_and_empty_queue() {
     assert!(!denied.status.success());
     assert!(String::from_utf8_lossy(&denied.stderr).contains("requires root"));
     fs::write(queue.join("inbox/stale.json"), b"{}").unwrap();
+    let publication_stale = Command::new(binary)
+        .args(publication_args)
+        .output()
+        .unwrap();
+    assert!(!publication_stale.status.success());
+    assert!(String::from_utf8_lossy(&publication_stale.stderr).contains("queue must be drained"));
     let stale = run();
     assert!(!stale.status.success());
     assert!(
@@ -574,6 +606,12 @@ fn root_cli_retry_checks_real_uid_stopped_units_and_empty_queue() {
             .success()
     );
     let active = run();
+    let publication_active = Command::new(binary)
+        .args(publication_args)
+        .output()
+        .unwrap();
+    assert!(!publication_active.status.success());
+    assert!(String::from_utf8_lossy(&publication_active.stderr).contains("execution units"));
     assert!(
         Command::new("systemctl")
             .args(["disable", "--runtime", "pip-controller@mdk.timer"])

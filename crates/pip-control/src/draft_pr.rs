@@ -278,7 +278,7 @@ pub fn publish_draft_pull_request_once_with<W: DraftPullRequestWriter, P: Branch
         store.release_effect(&claimed.effect_id, owner)?;
         return Err(DraftPullRequestError::InvalidCase);
     }
-    let (build, parent) = match active_build(store, &case) {
+    let (build, parent, requires_signing) = match active_build(store, &case) {
         Ok(build) => build,
         Err(error) => {
             store.release_effect(&claimed.effect_id, owner)?;
@@ -318,13 +318,15 @@ pub fn publish_draft_pull_request_once_with<W: DraftPullRequestWriter, P: Branch
             return Err(error.into());
         }
     };
-    if publication.signed.as_ref().is_some_and(|signed| {
-        signed.source_head.to_string() != head_sha
-            || signed.parent != parent
-            || signed.head == signed.source_head
-            || !signed.signer_fingerprint.starts_with("SHA256:")
-            || signed.signer_fingerprint.len() <= 7
-    }) {
+    if (requires_signing && publication.signed.is_none())
+        || publication.signed.as_ref().is_some_and(|signed| {
+            signed.source_head.to_string() != head_sha
+                || signed.parent != parent
+                || signed.head == signed.source_head
+                || !signed.signer_fingerprint.starts_with("SHA256:")
+                || signed.signer_fingerprint.len() <= 7
+        })
+    {
         store.release_effect(&claimed.effect_id, owner)?;
         return Err(DraftPullRequestError::InvalidBuildJoin);
     }
@@ -414,11 +416,20 @@ pub fn publish_draft_pull_request_once_with<W: DraftPullRequestWriter, P: Branch
 fn active_build(
     store: &Store,
     case: &StoredCase,
-) -> Result<(BuilderResult, GitSha), DraftPullRequestError> {
+) -> Result<(BuilderResult, GitSha, bool), DraftPullRequestError> {
     // The pending effect and this revision were committed with one accepted
     // build. That event/run identity is authoritative, not a worker's counter
     // or an ambiguous scan of all earlier builds in the same plan.
     let history = store.immutable_history_for_case(&case.case_key)?;
+    if history
+        .events
+        .last()
+        .is_some_and(|event| event.event_type == "PUBLICATION_RETRY_AUTHORIZED")
+    {
+        return crate::publication_retry::authorized_build(&history, case)
+            .map(|(build, parent)| (build, parent, true))
+            .map_err(|_| DraftPullRequestError::InvalidBuildJoin);
+    }
     let event = history
         .events
         .last()
@@ -444,28 +455,9 @@ fn active_build(
                 head.parse()
                     .map_err(|_| DraftPullRequestError::InvalidBuildJoin)?
             } else {
-                let mut planned = Vec::new();
-                for run in &history.runs {
-                    if run.role != "planner" {
-                        continue;
-                    }
-                    let result: WorkerResult = serde_json::from_value(run.payload.clone())
-                        .map_err(|error| DraftPullRequestError::Serialization(error.to_string()))?;
-                    if let WorkerResult::Planner(plan) = result
-                        && plan.outcome == PlannerOutcome::Proceed
-                        && plan.plan_version == case.plan_version
-                        && plan.common.task_id == run.task_id
-                    {
-                        planned.push(plan.planned_base_sha);
-                    }
-                }
-                let [head] = planned.as_slice() else {
-                    return Err(DraftPullRequestError::InvalidBuildJoin);
-                };
-                head.parse()
-                    .map_err(|_| DraftPullRequestError::InvalidBuildJoin)?
+                planned_base(&history, case)?
             };
-            Ok((build, parent))
+            Ok((build, parent, false))
         }
         _ => Err(DraftPullRequestError::InvalidBuildJoin),
     }
@@ -477,7 +469,6 @@ pub(crate) fn published_builder(
     history: &ImmutableCaseHistory,
     case: &StoredCase,
 ) -> Result<Option<BuilderResult>, DraftPullRequestError> {
-    let invalid = || DraftPullRequestError::InvalidBuildJoin;
     let Some(event) = history
         .events
         .iter()
@@ -491,14 +482,34 @@ pub(crate) fn published_builder(
     if signing.is_null() {
         return Ok(None); // Historical unsigned publications retain their exact-head join.
     }
+    publication_source(history, case, true).map(|(build, _)| Some(build))
+}
+
+/// Both initial signing recovery and final review use the same immutable join.
+pub(crate) fn publication_source(
+    history: &ImmutableCaseHistory,
+    case: &StoredCase,
+    signed: bool,
+) -> Result<(BuilderResult, String), DraftPullRequestError> {
+    let invalid = || DraftPullRequestError::InvalidBuildJoin;
+    let event = history
+        .events
+        .iter()
+        .rev()
+        .find(|event| event.event_type == "REVIEW_READY")
+        .ok_or_else(invalid)?;
+    let publication = &event.payload["publication"];
+    let signing = &publication["signing"];
     let head = case.head_sha.as_deref().ok_or_else(invalid)?;
     if !payload_matches(&event.payload, &event.payload_sha256)
         || publication["head_sha"].as_str() != Some(head)
-        || signing["head"].as_str() != Some(head)
         || publication["pull_request_number"].as_u64() != case.pr_number
-        || !signing["signer_fingerprint"]
-            .as_str()
-            .is_some_and(|value| value.starts_with("SHA256:") && value.len() > 7)
+        || (signed
+            && (signing["head"].as_str() != Some(head)
+                || !signing["signer_fingerprint"]
+                    .as_str()
+                    .is_some_and(|value| value.starts_with("SHA256:") && value.len() > 7)))
+        || (!signed && !signing.is_null())
         || !history.evidence.iter().any(|evidence| {
             evidence.kind == "GITHUB_DRAFT_PULL_REQUEST_PUBLICATION"
                 && evidence.payload == *publication
@@ -507,7 +518,10 @@ pub(crate) fn published_builder(
     {
         return Err(invalid());
     }
-    for field in ["source_head", "head", "tree", "parent"] {
+    for field in ["source_head", "head", "tree", "parent"]
+        .into_iter()
+        .filter(|_| signed)
+    {
         signing[field]
             .as_str()
             .ok_or_else(invalid)?
@@ -546,15 +560,41 @@ pub(crate) fn published_builder(
     if build.common.task_id != run.task_id
         || build.plan_version != case.plan_version
         || build.outcome != BuilderOutcome::ReviewReady
-        || build.head_sha.as_deref() != signing["source_head"].as_str()
-        || build.head_sha.as_deref() == Some(head)
+        || (signed
+            && (build.head_sha.as_deref() != signing["source_head"].as_str()
+                || build.head_sha.as_deref() == Some(head)))
+        || (!signed && build.head_sha.as_deref() != Some(head))
     {
         return Err(invalid());
     }
-    Ok(Some(build))
+    Ok((build, accepted.event_id.clone()))
 }
 
-fn payload_matches(payload: &serde_json::Value, expected: &str) -> bool {
+pub(crate) fn planned_base(
+    history: &ImmutableCaseHistory,
+    case: &StoredCase,
+) -> Result<GitSha, DraftPullRequestError> {
+    let mut planned = Vec::new();
+    for run in history.runs.iter().filter(|run| run.role == "planner") {
+        let result: WorkerResult = serde_json::from_value(run.payload.clone())
+            .map_err(|error| DraftPullRequestError::Serialization(error.to_string()))?;
+        if let WorkerResult::Planner(plan) = result
+            && plan.outcome == PlannerOutcome::Proceed
+            && plan.plan_version == case.plan_version
+            && plan.common.task_id == run.task_id
+            && payload_matches(&run.payload, &run.payload_sha256)
+        {
+            planned.push(plan.planned_base_sha);
+        }
+    }
+    let [head] = planned.as_slice() else {
+        return Err(DraftPullRequestError::InvalidBuildJoin);
+    };
+    head.parse()
+        .map_err(|_| DraftPullRequestError::InvalidBuildJoin)
+}
+
+pub(crate) fn payload_matches(payload: &serde_json::Value, expected: &str) -> bool {
     serde_json::to_vec(payload).is_ok_and(|bytes| {
         Sha256::digest(bytes)
             .iter()

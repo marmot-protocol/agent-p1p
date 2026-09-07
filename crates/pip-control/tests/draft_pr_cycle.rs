@@ -77,6 +77,187 @@ impl BranchPublisher for FixturePublisher {
 }
 
 #[test]
+fn signed_republication_reuses_the_accepted_tree_and_plan_without_rewriting_history() {
+    for remediated in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let policy = active_policy();
+        let mut store = if remediated {
+            remediation_store_with_head(temp.path().join("ledger.db"), 2, &"f".repeat(40))
+        } else {
+            build_store(temp.path().join("ledger.db"))
+        };
+        store
+            .record_policy(&pip_store::PolicyInput {
+                repository_id: policy.repository.id,
+                revision: policy.revision,
+                accepted_at: 1,
+                payload: serde_json::to_value(&policy).unwrap(),
+            })
+            .unwrap();
+        let writer = FixtureWriter::default();
+        publish_draft_pull_request_once_with(
+            &writer,
+            &FixturePublisher {
+                remote_head: RefCell::new(remediated.then(|| "b".repeat(40))),
+                ..FixturePublisher::default()
+            },
+            &policy,
+            &mut store,
+            100,
+            "publisher",
+            30,
+            true,
+        )
+        .unwrap();
+        let case = store.case("repo:984321#1240@1").unwrap().unwrap();
+        let before = store.immutable_history_for_case(&case.case_key).unwrap();
+        let mut paused = policy.clone();
+        paused.intake.enabled = false;
+        paused.intake.paused = true;
+        paused.dispatch_enabled = false;
+        let request = pip_control::PublicationRetryRequest {
+            case_key: case.case_key.clone(),
+            expected_revision: case.state_revision,
+            expected_head: case.head_sha.clone().unwrap(),
+            request_id: "event-sign-publication".into(),
+            reason: "Replace unsigned publication with controller-signed accepted tree".into(),
+        };
+        for (invalid, uid, active) in [
+            (request.clone(), 1000, false),
+            (request.clone(), 0, true),
+            (request.clone(), 0, false),
+            (request.clone(), 0, false),
+            (request.clone(), 0, false),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (mut req, uid, active))| {
+            match index {
+                2 => req.expected_revision += 1,
+                3 => req.expected_head = "a".repeat(40),
+                4 => req.reason.clear(),
+                _ => (),
+            }
+            (req, uid, active)
+        }) {
+            assert!(
+                pip_control::authorize_publication_retry(
+                    &mut store,
+                    if active { &policy } else { &paused },
+                    &invalid,
+                    101,
+                    uid
+                )
+                .is_err()
+            );
+            assert_eq!(
+                store.immutable_history_for_case(&case.case_key).unwrap(),
+                before
+            );
+        }
+        assert_eq!(
+            pip_control::authorize_publication_retry(&mut store, &paused, &request, 101, 0)
+                .unwrap(),
+            pip_store::ApplyResult::Applied
+        );
+        let prepared = store.case(&case.case_key).unwrap().unwrap();
+        assert_eq!(prepared.state, "BUILDING");
+        assert_eq!(prepared.plan_version, case.plan_version);
+        assert_eq!(prepared.remediation_round, case.remediation_round);
+        assert_eq!(prepared.head_sha, case.head_sha);
+        let unsigned = FixturePublisher {
+            remote_head: RefCell::new(case.head_sha.clone()),
+            ..FixturePublisher::default()
+        };
+        assert!(
+            publish_draft_pull_request_once_with(
+                &writer,
+                &unsigned,
+                &policy,
+                &mut store,
+                102,
+                "publisher",
+                30,
+                true
+            )
+            .is_err()
+        );
+        assert_eq!(
+            store.case(&case.case_key).unwrap().unwrap().state,
+            "BUILDING"
+        );
+        assert_eq!(store.status(102).unwrap().outbox_leased, 0);
+        let publisher = FixturePublisher {
+            remote_head: RefCell::new(case.head_sha.clone()),
+            signed: Some(SignedCommit {
+                source_head: case.head_sha.as_ref().unwrap().parse().unwrap(),
+                head: "d".repeat(40).parse().unwrap(),
+                parent: "c".repeat(40).parse().unwrap(),
+                tree: "e".repeat(40).parse().unwrap(),
+                signer_fingerprint: "SHA256:fixture".into(),
+            }),
+            ..FixturePublisher::default()
+        };
+        publish_draft_pull_request_once_with(
+            &writer,
+            &publisher,
+            &policy,
+            &mut store,
+            102,
+            "publisher",
+            30,
+            true,
+        )
+        .unwrap();
+        assert_eq!(publisher.requests.borrow()[0].parent_head, "c".repeat(40));
+        let after = store.immutable_history_for_case(&case.case_key).unwrap();
+        assert_eq!(after.runs, before.runs);
+        assert_eq!(
+            &after.events[..before.events.len()],
+            before.events.as_slice()
+        );
+        assert_eq!(
+            store.case(&case.case_key).unwrap().unwrap().state,
+            "WAITING_CI"
+        );
+        assert_eq!(
+            store.case(&case.case_key).unwrap().unwrap().head_sha,
+            Some("d".repeat(40))
+        );
+        assert_eq!(
+            pip_control::authorize_publication_retry(&mut store, &paused, &request, 103, 0)
+                .unwrap(),
+            pip_store::ApplyResult::Replayed
+        );
+        assert_eq!(
+            store.immutable_history_for_case(&case.case_key).unwrap(),
+            after
+        );
+        let mut conflicting = request.clone();
+        conflicting.reason = "Different request".into();
+        assert!(
+            pip_control::authorize_publication_retry(&mut store, &paused, &conflicting, 103, 0)
+                .is_err()
+        );
+        let current = store.case(&case.case_key).unwrap().unwrap();
+        let signed_retry = pip_control::PublicationRetryRequest {
+            expected_revision: current.state_revision,
+            expected_head: current.head_sha.unwrap(),
+            request_id: "event-sign-again".into(),
+            ..request
+        };
+        assert!(
+            pip_control::authorize_publication_retry(&mut store, &paused, &signed_retry, 103, 0)
+                .is_err()
+        );
+        assert_eq!(
+            store.immutable_history_for_case(&case.case_key).unwrap(),
+            after
+        );
+    }
+}
+
+#[test]
 fn missing_signing_credentials_only_block_pending_publication() {
     let temp = tempfile::tempdir().unwrap();
     let mut empty = Store::open(temp.path().join("empty.db")).unwrap();
@@ -569,10 +750,14 @@ fn remediation_store(path: std::path::PathBuf) -> Store {
 }
 
 fn remediation_store_with_round(path: std::path::PathBuf, reported_round: u32) -> Store {
+    remediation_store_with_head(path, reported_round, &"c".repeat(40))
+}
+
+fn remediation_store_with_head(path: std::path::PathBuf, reported_round: u32, head: &str) -> Store {
     let mut result = builder_fixture();
     result["task_id"] = json!("builder-2");
     result["build_round"] = json!(reported_round);
-    result["head_sha"] = json!("c".repeat(40));
+    result["head_sha"] = json!(head);
     let mut store = build_store(path);
     store
         .apply_transition(

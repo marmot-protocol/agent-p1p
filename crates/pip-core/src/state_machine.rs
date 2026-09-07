@@ -46,6 +46,7 @@ pub enum Event {
     BuilderDispatched,
     BuilderRetryAuthorized,
     ReviewRetryAuthorized,
+    PublicationRetryAuthorized,
     BuildRecorded,
     ReviewReady,
     ReturnToPlanning,
@@ -73,7 +74,7 @@ pub enum Event {
 }
 
 impl Event {
-    pub const ALL: [Self; 40] = [
+    pub const ALL: [Self; 41] = [
         Self::PlanRecorded,
         Self::Proceed,
         Self::WaitingForIssueCreator,
@@ -90,6 +91,7 @@ impl Event {
         Self::BuilderDispatched,
         Self::BuilderRetryAuthorized,
         Self::ReviewRetryAuthorized,
+        Self::PublicationRetryAuthorized,
         Self::BuildRecorded,
         Self::ReviewReady,
         Self::ReturnToPlanning,
@@ -200,6 +202,7 @@ string_enum!(Event, "event", {
     "BUILDER_DISPATCHED" => BuilderDispatched,
     "BUILDER_RETRY_AUTHORIZED" => BuilderRetryAuthorized,
     "REVIEW_RETRY_AUTHORIZED" => ReviewRetryAuthorized,
+    "PUBLICATION_RETRY_AUTHORIZED" => PublicationRetryAuthorized,
     "BUILD_RECORDED" => BuildRecorded,
     "REVIEW_READY" => ReviewReady,
     "RETURN_TO_PLANNING" => ReturnToPlanning,
@@ -366,6 +369,10 @@ pub fn transition(
         (State::Escalated, Ev::ReviewRetryAuthorized) => {
             decision(State::WaitingCi, &[Fx::ObserveCi])
         }
+        (
+            State::WaitingCi | State::Reviewing | State::FinalReview,
+            Ev::PublicationRetryAuthorized,
+        ) => decision(State::Building, &[Fx::PublishDraftPullRequest]),
         (State::Building | State::Remediating, Ev::BuildRecorded) => {
             decision(state, &[Fx::PublishDraftPullRequest])
         }

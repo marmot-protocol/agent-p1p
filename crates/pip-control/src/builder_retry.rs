@@ -66,30 +66,7 @@ fn authorize_retry(
     event: Event,
 ) -> Result<ApplyResult, String> {
     let review_retry = event == Event::ReviewRetryAuthorized;
-    if operator_uid != 0 {
-        return Err("work retry requires root authorization".into());
-    }
-    if paused.intake.enabled || !paused.intake.paused || paused.dispatch_enabled {
-        return Err("work retry requires an inert installed policy".into());
-    }
-    let case = store
-        .case(&request.case_key)
-        .map_err(error)?
-        .ok_or("case is missing")?;
-    let policy_value = store
-        .accepted_policy(case.repository_id, case.policy_revision)
-        .map_err(error)?;
-    let accepted = load_repository_policy(&serde_json::to_vec(&policy_value).map_err(error)?)
-        .map_err(error)?;
-    if paused.repository != accepted.repository
-        || paused.workflow_version != accepted.workflow_version
-        || paused.checkout != accepted.checkout
-        || paused.workspace != accepted.workspace
-        || serde_json::to_value(&paused.roles).map_err(error)?
-            != serde_json::to_value(&accepted.roles).map_err(error)?
-    {
-        return Err("installed and accepted repository/runtime bindings differ".into());
-    }
+    let (case, accepted) = recovery_context(store, paused, &request.case_key, operator_uid)?;
     let event_id = EventId::from_str(&request.request_id).map_err(error)?;
     let authorization = BuilderRetryAuthorization {
         schema_version: 1,
@@ -116,7 +93,59 @@ fn authorize_retry(
         }
         return Err("retry request id conflicts with recorded authorization".into());
     }
-    let command = WorkflowCommand {
+    let command = recovery_command(
+        &case,
+        request.expected_revision,
+        event_id,
+        event,
+        payload,
+        now,
+    )?;
+    LedgerController::apply(store, &accepted.case_policy(), &command).map_err(error)
+}
+
+pub(crate) fn recovery_context(
+    store: &Store,
+    paused: &RepositoryPolicy,
+    case_key: &str,
+    operator_uid: u32,
+) -> Result<(pip_store::StoredCase, RepositoryPolicy), String> {
+    if operator_uid != 0 {
+        return Err("work retry requires root authorization".into());
+    }
+    if paused.intake.enabled || !paused.intake.paused || paused.dispatch_enabled {
+        return Err("work retry requires an inert installed policy".into());
+    }
+    let case = store
+        .case(case_key)
+        .map_err(error)?
+        .ok_or("case is missing")?;
+    let policy_value = store
+        .accepted_policy(case.repository_id, case.policy_revision)
+        .map_err(error)?;
+    let accepted = load_repository_policy(&serde_json::to_vec(&policy_value).map_err(error)?)
+        .map_err(error)?;
+    if paused.repository != accepted.repository
+        || paused.workflow_version != accepted.workflow_version
+        || paused.checkout != accepted.checkout
+        || paused.workspace != accepted.workspace
+        || serde_json::to_value(&paused.roles).map_err(error)?
+            != serde_json::to_value(&accepted.roles).map_err(error)?
+    {
+        return Err("installed and accepted repository/runtime bindings differ".into());
+    }
+    Ok((case, accepted))
+}
+
+pub(crate) fn recovery_command(
+    case: &pip_store::StoredCase,
+    expected_revision: u64,
+    event_id: EventId,
+    event: Event,
+    payload: serde_json::Value,
+    now: u64,
+) -> Result<WorkflowCommand, String> {
+    Ok(WorkflowCommand {
         case_id: CaseId::new(
             RepositoryId::new(NonZeroU64::new(case.repository_id).ok_or("invalid repository")?),
             IssueNumber::new(NonZeroU64::new(case.issue_number).ok_or("invalid issue")?),
@@ -126,7 +155,7 @@ fn authorize_retry(
         observed_at: ObservedAt::new(now),
         expected_state: CaseState::from_str(&case.state).map_err(error)?,
         expected_state_revision: StateRevision::new(
-            NonZeroU64::new(request.expected_revision).ok_or("invalid state revision")?,
+            NonZeroU64::new(expected_revision).ok_or("invalid state revision")?,
         ),
         accepted_policy_revision: PolicyRevision::new(
             NonZeroU64::new(case.policy_revision).ok_or("invalid policy revision")?,
@@ -151,8 +180,7 @@ fn authorize_retry(
         run: None,
         evidence: vec![],
         findings: vec![],
-    };
-    LedgerController::apply(store, &accepted.case_policy(), &command).map_err(error)
+    })
 }
 
 fn error(value: impl std::fmt::Display) -> String {
