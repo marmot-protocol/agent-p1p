@@ -24,6 +24,13 @@ both PR commits are unsigned. Signing/publication identity needs correction;
 replacement commits require fresh CI and reviews. The holistic final reviewer
 has not started. The PR is still draft; no merge occurred.
 
+Controller-only signing and audited publication-only recovery are now implemented
+through source `36e3a66e67fb53676e957690408967f246862ba1`. CI `34125632649` and
+signed deployment build `34125632730` passed, including actual Linux signing
+credentials/sandbox and root/queue/service-state recovery checks. Pirate still
+runs `8d3dde4`; the approved new signing key is not yet registered on GitHub.
+Source acceptance is not signed live publication or completion of the final gate.
+
 Live acceptance gates (partially satisfied):
 
 1. Required CI is green on the current head; any further head change must repeat it.
@@ -46,7 +53,7 @@ Live acceptance gates (partially satisfied):
 | Independent required and comparison reviews | Required and shadow results accepted independently; comparisons do not consume work-failure allowance. Required pending jobs have priority. An already-running comparison can still delay the serial worker. |
 | Failure isolation and ordinary recovery | Completed-result collection precedes GitHub access. Confirmed non-start backoff and bounded audited retry exist. Per-case/capability isolation and ordinary pause/resume still need completion. |
 | Immutable jobs across upgrades | Saved dispatch definitions are reused. Full preservation of actual execution settings and skill content across upgrades remains incomplete. Restrictive controls must still apply immediately. |
-| Compact evidence with durable provenance | Installed exports deduplicate accepted event/run payloads and provide role-specific indexes. New local schema-10 storage retains each distinct input bundle once per frozen batch and references its exact jobs from persisted projections/outbox messages. Legacy records remain untouched. Full Rust tests, adapter compatibility, corruption/replay tests and Clippy pass; Linux release validation, deployment and live proof remain gates. |
+| Compact evidence with durable provenance | Installed exports deduplicate accepted event/run payloads and provide role-specific indexes. Undeployed schema-10 storage retains each distinct input bundle once per frozen batch and references its exact jobs from persisted projections/outbox messages. Legacy records remain untouched. Rust tests, adapter compatibility, corruption/replay tests, Clippy and Linux release validation pass; deployment and live proof remain gates. |
 | Safe workers and storage | Real service-identity builder execution and controlled publication work; managed storage and credential isolation are installed. Fresh native re-review ran tests successfully in its scratch layout. The direct adapter now assigns short private per-execution temporary storage, with real socket/permission/cleanup regression tests; deployment and live-provider proof remain pending. Cleanup must remain independent of unrelated work. |
 | Small packaging and operating surface | Signed install/rollback, policy preservation and schema-8 ordered migrations are verified. Remove obsolete operational scaffolding; normal operation must not require case-specific shell scripts. |
 | Retire legacy Pip Python | Pending complete live cutover proof. Keep upstream Hermes and useful small probes/fixtures; remove the obsolete Pip runtime, packaging and CI rather than maintaining two implementations. |
