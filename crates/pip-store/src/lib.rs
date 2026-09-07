@@ -29,6 +29,8 @@ const MIGRATIONS: &[&str] = &[
     MIGRATION_7,
     dispatch_intents::MIGRATION,
     MIGRATION_9,
+    // Format boundary: older binaries must not execute compact dispatch records.
+    "-- Frozen dispatch inputs and output references; existing rows stay unchanged.",
 ];
 const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
 
@@ -1785,7 +1787,7 @@ impl Store {
                     let observed: String = row.get(5)?;
                     Ok((
                         row.get(0)?,
-                        row.get(1)?,
+                        row.get::<_, String>(1)?,
                         row.get(2)?,
                         row.get(3)?,
                         desired,
@@ -1798,10 +1800,11 @@ impl Store {
                 |(projection_id, effect_id, board, task_id, desired, observed)| -> Result<TaskProjectionInput> {
                     Ok(TaskProjectionInput {
                         projection_id,
-                        effect_id,
+                        effect_id: effect_id.clone(),
                         board,
                         task_id,
-                        desired: serde_json::from_str(&desired)?,
+                        desired: dispatch_intents::resolve_output(&self.connection, &effect_id,
+                            DispatchTransport::Hermes, serde_json::from_str(&desired)?)?,
                         observed: serde_json::from_str(&observed)?,
                     })
                 },
@@ -1833,10 +1836,15 @@ impl Store {
                 let (projection_id, effect_id, board, task_id, desired, observed) = row?;
                 Ok(TaskProjectionInput {
                     projection_id,
-                    effect_id,
+                    effect_id: effect_id.clone(),
                     board,
                     task_id,
-                    desired: serde_json::from_str(&desired)?,
+                    desired: dispatch_intents::resolve_output(
+                        &self.connection,
+                        &effect_id,
+                        DispatchTransport::Hermes,
+                        serde_json::from_str(&desired)?,
+                    )?,
                     observed: serde_json::from_str(&observed)?,
                 })
             })
@@ -1915,9 +1923,9 @@ impl Store {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let candidate: Option<(String, String, i64, String, String)> = {
+        let candidate: Option<(String, String, i64, String, String, String)> = {
             let mut statement = transaction.prepare(
-                "SELECT effect_id, case_key, state_revision, effect_type, payload_json
+                "SELECT effect_id, case_key, state_revision, effect_type, payload_json, payload_sha256
                  FROM outbox
                  WHERE delivered_at IS NULL AND superseded_at IS NULL
                    AND (lease_until IS NULL OR lease_until < ?1)
@@ -1939,13 +1947,15 @@ impl Store {
                         row.get(2)?,
                         effect_type,
                         row.get(4)?,
+                        row.get(5)?,
                     ));
                     break;
                 }
             }
             found
         };
-        let Some((effect_id, case_key, state_revision, effect_type, payload_json)) = candidate
+        let Some((effect_id, case_key, state_revision, effect_type, payload_json, payload_hash)) =
+            candidate
         else {
             transaction.commit()?;
             return Ok(None);
@@ -1960,13 +1970,30 @@ impl Store {
             transaction.commit()?;
             return Ok(None);
         }
+        let value = serde_json::from_str(&payload_json)?;
+        if payload(&value)?.1 != payload_hash {
+            return Err(StoreError::IdempotencyConflict { id: effect_id });
+        }
+        let value = if matches!(
+            effect_type.as_str(),
+            "RUN_DIRECT_WORKER" | "RUN_DIRECT_OBSERVER"
+        ) {
+            dispatch_intents::resolve_output(
+                &transaction,
+                &effect_id,
+                DispatchTransport::Direct,
+                value,
+            )?
+        } else {
+            value
+        };
         transaction.commit()?;
         Ok(Some(ClaimedEffect {
             effect_id,
             case_key,
             state_revision: unsigned(state_revision),
             effect_type,
-            payload: serde_json::from_str(&payload_json)?,
+            payload: value,
             lease_owner: owner.to_owned(),
             lease_until,
         }))
@@ -2460,7 +2487,12 @@ impl Store {
             .map(|input| {
                 Ok((
                     input,
-                    serde_json::to_string(&input.desired)?,
+                    serde_json::to_string(&dispatch_intents::encode_output(
+                        &self.connection,
+                        source_effect_id,
+                        DispatchTransport::Hermes,
+                        &input.desired,
+                    )?)?,
                     serde_json::to_string(&input.observed)?,
                 ))
             })
@@ -2468,7 +2500,12 @@ impl Store {
         let serialized_jobs = direct_jobs
             .iter()
             .map(|job| {
-                let (payload_json, payload_hash) = payload(&job.payload)?;
+                let (payload_json, payload_hash) = payload(&dispatch_intents::encode_output(
+                    &self.connection,
+                    source_effect_id,
+                    DispatchTransport::Direct,
+                    &job.payload,
+                )?)?;
                 Ok((job, payload_json, payload_hash))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -2495,7 +2532,7 @@ impl Store {
                     id: source_effect_id.to_owned(),
                 });
             }
-            for (input, desired_json, observed_json) in &serialized {
+            for (input, _, observed_json) in &serialized {
                 let existing: Option<(String, String, String, String, String)> = transaction
                     .query_row(
                         "SELECT effect_id, board, task_id, desired_json, observed_json
@@ -2512,21 +2549,27 @@ impl Store {
                         },
                     )
                     .optional()?;
-                if existing.as_ref()
-                    != Some(&(
-                        input.effect_id.clone(),
-                        input.board.clone(),
-                        input.task_id.clone(),
-                        desired_json.clone(),
-                        observed_json.clone(),
-                    ))
-                {
+                let same = if let Some((effect, board, task, desired, observed)) = existing {
+                    effect == input.effect_id
+                        && board == input.board
+                        && task == input.task_id
+                        && observed == *observed_json
+                        && dispatch_intents::resolve_output(
+                            &transaction,
+                            &effect,
+                            DispatchTransport::Hermes,
+                            serde_json::from_str(&desired)?,
+                        )? == input.desired
+                } else {
+                    false
+                };
+                if !same {
                     return Err(StoreError::IdempotencyConflict {
                         id: input.projection_id.clone(),
                     });
                 }
             }
-            for (job, payload_json, payload_hash) in &serialized_jobs {
+            for (job, _, _) in &serialized_jobs {
                 let existing: Option<(String, i64, String, String, String)> = transaction
                     .query_row(
                         "SELECT case_key, state_revision, effect_type, payload_json, payload_sha256
@@ -2543,15 +2586,22 @@ impl Store {
                         },
                     )
                     .optional()?;
-                if existing.as_ref()
-                    != Some(&(
-                        case_key.clone(),
-                        state_revision,
-                        job.effect_type.clone(),
-                        payload_json.clone(),
-                        payload_hash.clone(),
-                    ))
-                {
+                let same = if let Some((case, revision, kind, json, digest)) = existing {
+                    let value: Value = serde_json::from_str(&json)?;
+                    case == case_key
+                        && revision == state_revision
+                        && kind == job.effect_type
+                        && payload(&value)?.1 == digest
+                        && dispatch_intents::resolve_output(
+                            &transaction,
+                            &job.effect_id,
+                            DispatchTransport::Direct,
+                            value,
+                        )? == job.payload
+                } else {
+                    false
+                };
+                if !same {
                     return Err(StoreError::IdempotencyConflict {
                         id: job.effect_id.clone(),
                     });

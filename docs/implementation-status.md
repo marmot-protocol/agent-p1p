@@ -50,6 +50,10 @@ Installation preserved the stopped ledger and paused policy byte-for-byte.
   CI and reviews. The registered Pip signing public key was located; the private
   key was not found in the scoped standard Pirate locations. Its location was
   requested from Jeff; no private keys were read, created or registered.
+  GitHub's documented [`createCommitOnBranch` signing API](https://docs.github.com/en/graphql/reference/commits#createcommitonbranch)
+  may avoid a separate signing key. This is an investigation, not live proof:
+  file-mode support, exact tree/parent/actor verification, recovery and the
+  source-build-to-published-head binding must be established before adoption.
 - #891, #1228 and #1639 are abandoned with history retained.
 - Hermes remains the upstream installation; Pip has not introduced a fork.
   Conversational Hermes was untouched. Pip execution timers and its dedicated
@@ -126,16 +130,33 @@ pass. The fresh native review above also proved the layout in its actual sandbox
 
 Jobs reference a retained SHA-256-bound evidence file; new Cursor files support
 bounded line reads. Existing jobs keep their artifact bytes and references.
-Transport tests cover large histories and drift, but job definitions still
-include full history. The installed format-2 export removes identical
+Transport tests cover large histories and drift. The installed format-2 export removes identical
 accepted-result copies from events using exact run/digest references; stored
 ledger records and existing format-1 jobs remain unchanged. This is a bounded
 deduplication improvement. A subsequent locally tested role-specific index
 points into the same artifact without copying payloads. It selects the current
 plan, exact-head build/CI, applicable findings and final-review evidence;
 independent reviewer indexes omit peer verdicts. Full history stays readable.
-This index is installed; eliminating full-history duplication in
-saved job definitions remains unfinished. The product-naming test has moved
+This index is installed. A subsequent local storage change keeps each distinct
+evidence bundle once per frozen dispatch batch. Persisted native projections
+and direct outbox messages reference that batch's exact job definition instead
+of copying it. Store reads verify and resolve those references for the existing
+adapters, so the worker contract and execution inputs do not change. Older
+inline batches, projections and messages remain readable and replay without
+rewriting their bytes. Schema 10 fences older binaries from interpreting the
+new representation; it adds no tables and does not rewrite historical rows.
+Tests cover exact replay/restart, old schema-9 records, evidence/hash corruption,
+foreign cases, wrong transports, and rejection before committing a lease.
+The three-reviewer fixture retains less than one quarter of its previous
+definition/output JSON size. Full evidence remains available, and controller-to-
+worker handoff files still carry their bounded inputs; this is not removal of
+the retained history or a claim that existing deployed records were compacted.
+The full Rust suite, Clippy, formatting and shell syntax checks pass for this
+storage change, including native/direct dispatch and result-collection tests.
+New Linux release validation and installation remain separate gates. Outbox
+payload digests are checked before a claim commits, so corrupted references
+cannot strand a committed work lease. This change is not installed.
+The product-naming test has moved
 from Python into Rust in preparation for legacy runtime removal after cutover.
 
 ## Remaining completion gates
@@ -184,6 +205,11 @@ repositories, replay, restart, schema-8 migration and schema-1 forward upgrade.
 The full Rust suite, Clippy and formatting checks pass, including all 13 local
 installer lifecycle tests. Signed Linux lifecycle verification and installation
 remain separate gates; the Pirate ledger remains schema 8.
+The first schema-9 CI/deployment runs (`34108834809`, `34108834874`) failed at
+an old schema-8 assertion in `tests/lifecycle/run-in-container.sh`. That separate
+assertion was corrected in `165af50`; no failed cohort was deployed.
+CI `34109634658` and signed deployment build `34109634710` for that correction
+subsequently passed, including the Linux lifecycle checks.
 
 A subsequent local TDD change attempts both accepted review-lane publications
 even if one App is unavailable. The ledger advances only after both succeed;

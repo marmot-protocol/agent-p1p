@@ -56,7 +56,7 @@ docker exec "$container" bash -lc '
   test "$(stat -c %U:%G:%a /var/spool/pip-webhooks/pending)" = pip-ingress:pip-control:2770
   test "$(stat -c %U:%G:%a /var/spool/pip-webhooks/processed)" = pip-control:pip-control:711
   /opt/pip/current/bin/pip-control status --database /var/lib/pip/ledger.db --now 1787220001 \
-    | jq -e ".ok and .ledger.schema_version == 9" >/dev/null
+    | jq -e ".ok and .ledger.schema_version == 10" >/dev/null
 '
 
 echo '{"ok":true,"clean_install":true,"reinstall":true,"upgrade":true,"rollback":true,"restart_recovery":true,"timer_enabled":false}'

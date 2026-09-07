@@ -4,11 +4,11 @@
 //! never reissued, including after lease expiry. Recovery must reconcile the
 //! external task against the frozen intent; absence requires operator attention.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::{ApplyResult, ClaimedEffect, Result, Store, StoreError, payload, sql_u64};
 
@@ -64,6 +64,25 @@ pub struct DispatchIntent {
     pub desired: Value,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct FrozenBatch {
+    format: u32,
+    intents: Vec<DispatchIntent>,
+    evidence: BTreeMap<String, Value>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct IntentReference {
+    schema_version: u32,
+    effect_id: String,
+    intent_id: String,
+    sha256: String,
+}
+
+const REFERENCE: &str = "dispatch_intent_ref";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CreateReservation {
     /// Persisted before invoking the external create command. Use once only.
@@ -102,20 +121,13 @@ impl Store {
         // Ordering is not identity: callers may enumerate reviewers differently.
         let mut ordered = intents.to_vec();
         ordered.sort_by(|left, right| left.intent_id.cmp(&right.intent_id));
-        let (json, hash) = payload(&serde_json::to_value(&ordered)?)?;
+        let (json, hash) = payload(&freeze_inputs(&ordered)?)?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         require_dispatch_claim(&transaction, claimed, now)?;
-        let existing: Option<String> = transaction
-            .query_row(
-                "SELECT payload_sha256 FROM dispatch_batches WHERE effect_id = ?1",
-                [&claimed.effect_id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if let Some(existing) = existing {
-            if existing != hash {
+        if let Some(existing) = read_intents(&transaction, &claimed.effect_id)? {
+            if existing != ordered {
                 return Err(StoreError::IdempotencyConflict {
                     id: claimed.effect_id.clone(),
                 });
@@ -189,9 +201,142 @@ fn read_intents(connection: &Connection, effect_id: &str) -> Result<Option<Vec<D
                 id: effect_id.to_owned(),
             });
         }
-        Ok(serde_json::from_value(value)?)
+        thaw_inputs(value)
     })
     .transpose()
+}
+
+fn freeze_inputs(intents: &[DispatchIntent]) -> Result<Value> {
+    let mut batch = FrozenBatch {
+        format: 1,
+        intents: intents.to_vec(),
+        evidence: BTreeMap::new(),
+    };
+    for intent in &mut batch.intents {
+        if let Some(bundle) = intent
+            .desired
+            .get_mut("body")
+            .and_then(|body| body.get_mut("immutable_evidence_bundle"))
+        {
+            if !bundle.is_object() {
+                return Err(StoreError::InvalidInput(
+                    "dispatch evidence must be an object",
+                ));
+            }
+            let digest = payload(bundle)?.1;
+            batch.evidence.insert(digest.clone(), bundle.take());
+            *bundle = json!({"$ref":digest});
+        }
+    }
+    Ok(serde_json::to_value(batch)?)
+}
+
+fn thaw_inputs(value: Value) -> Result<Vec<DispatchIntent>> {
+    // Existing arrays are immutable historical definitions, not migration targets.
+    if value.is_array() {
+        return Ok(serde_json::from_value(value)?);
+    }
+    let mut batch: FrozenBatch = serde_json::from_value(value)?;
+    if batch.format != 1 {
+        return Err(StoreError::InvalidInput(
+            "unsupported frozen dispatch format",
+        ));
+    }
+    for (digest, bundle) in &batch.evidence {
+        if !bundle.is_object() || payload(bundle)?.1 != *digest {
+            return Err(StoreError::InvalidInput(
+                "frozen dispatch evidence digest differs",
+            ));
+        }
+    }
+    for intent in &mut batch.intents {
+        if let Some(bundle) = intent
+            .desired
+            .get_mut("body")
+            .and_then(|body| body.get_mut("immutable_evidence_bundle"))
+        {
+            let digest = bundle
+                .get("$ref")
+                .and_then(Value::as_str)
+                .filter(|_| bundle.as_object().is_some_and(|object| object.len() == 1))
+                .ok_or(StoreError::InvalidInput(
+                    "invalid frozen evidence reference",
+                ))?;
+            *bundle = batch
+                .evidence
+                .get(digest)
+                .ok_or(StoreError::InvalidInput("missing frozen dispatch evidence"))?
+                .clone();
+        }
+    }
+    Ok(batch.intents)
+}
+
+pub(crate) fn encode_output(
+    connection: &Connection,
+    effect_id: &str,
+    transport: DispatchTransport,
+    desired: &Value,
+) -> Result<Value> {
+    if desired.get(REFERENCE).is_some() {
+        return Err(StoreError::InvalidInput(
+            "dispatch outputs must contain resolved inputs",
+        ));
+    }
+    let Some(intents) = read_intents(connection, effect_id)? else {
+        // Pre-freezing historical dispatches remain readable and replayable.
+        return Ok(desired.clone());
+    };
+    let intent = intents
+        .iter()
+        .find(|intent| intent.transport == transport && intent.desired == *desired)
+        .ok_or_else(|| StoreError::IdempotencyConflict {
+            id: effect_id.into(),
+        })?;
+    Ok(json!({REFERENCE: IntentReference {
+        schema_version: 1, effect_id: effect_id.into(), intent_id: intent.intent_id.clone(),
+        sha256: payload(desired)?.1,
+    }}))
+}
+
+pub(crate) fn resolve_output(
+    connection: &Connection,
+    output_effect_id: &str,
+    transport: DispatchTransport,
+    value: Value,
+) -> Result<Value> {
+    let Some(reference) = value.get(REFERENCE) else {
+        return Ok(value);
+    };
+    let reference: IntentReference = serde_json::from_value(reference.clone())?;
+    let valid = value.as_object().is_some_and(|object| object.len() == 1)
+        && reference.schema_version == 1
+        && (transport != DispatchTransport::Hermes || reference.effect_id == output_effect_id);
+    let same_case: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM dispatch_batches b JOIN outbox o ON o.case_key=b.case_key
+         WHERE b.effect_id=?1 AND o.effect_id=?2)",
+        params![reference.effect_id, output_effect_id],
+        |row| row.get(0),
+    )?;
+    if !valid || !same_case {
+        return Err(StoreError::InvalidInput(
+            "foreign or invalid frozen dispatch reference",
+        ));
+    }
+    let desired = read_intents(connection, &reference.effect_id)?
+        .and_then(|intents| {
+            intents.into_iter().find(|intent| {
+                intent.intent_id == reference.intent_id && intent.transport == transport
+            })
+        })
+        .ok_or(StoreError::InvalidInput("missing frozen dispatch intent"))?
+        .desired;
+    if payload(&desired)?.1 != reference.sha256 {
+        return Err(StoreError::InvalidInput(
+            "frozen dispatch intent digest differs",
+        ));
+    }
+    Ok(desired)
 }
 
 fn require_dispatch_claim(

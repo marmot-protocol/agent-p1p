@@ -232,7 +232,7 @@ fn schema_eight_findings_upgrade_preserves_payloads_digests_and_immutability() {
         .unwrap();
     drop(connection);
     let upgraded = Store::open(&path).unwrap();
-    assert_eq!(upgraded.schema_version().unwrap(), 9);
+    assert_eq!(upgraded.schema_version().unwrap(), 10);
     assert_eq!(
         upgraded
             .immutable_history_for_case(&new_case().case_key)
@@ -255,13 +255,13 @@ fn schema_eight_findings_upgrade_preserves_payloads_digests_and_immutability() {
             .is_none()
     );
     drop(connection);
-    assert_eq!(Store::open(&path).unwrap().schema_version().unwrap(), 9);
+    assert_eq!(Store::open(&path).unwrap().schema_version().unwrap(), 10);
 }
 
 #[test]
 fn migration_creates_hardened_authoritative_schema() {
     let (_directory, store) = open();
-    assert_eq!(store.schema_version().unwrap(), 9);
+    assert_eq!(store.schema_version().unwrap(), 10);
     assert!(store.foreign_keys_enabled().unwrap());
     assert_eq!(store.journal_mode().unwrap(), "wal");
 }
@@ -875,7 +875,7 @@ fn operator_status_separates_pending_leased_and_delivered_work() {
         .unwrap();
 
     let status = store.status(110).unwrap();
-    assert_eq!(status.schema_version, 9);
+    assert_eq!(status.schema_version, 10);
     assert_eq!(status.cases.len(), 1);
     assert_eq!(status.cases[0].case_key, "repo:984321#1240@1");
     assert_eq!(status.events, 1);
@@ -1410,7 +1410,7 @@ fn schema_one_upgrades_forward_without_losing_existing_projections() {
     drop(connection);
 
     let upgraded = Store::open(&path).unwrap();
-    assert_eq!(upgraded.schema_version().unwrap(), 9);
+    assert_eq!(upgraded.schema_version().unwrap(), 10);
     assert_eq!(
         upgraded
             .task_projection("legacy-projection")
