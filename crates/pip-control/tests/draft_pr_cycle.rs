@@ -1,10 +1,10 @@
 use std::cell::RefCell;
 
 use pip_control::{
-    BranchPublicationRequest, BranchPublisher, DraftPullRequestCycle, DraftPullRequestWriter,
-    load_repository_policy, publish_draft_pull_request_once_with,
+    BranchPublication, BranchPublicationRequest, BranchPublisher, DraftPullRequestCycle,
+    DraftPullRequestWriter, load_repository_policy, publish_draft_pull_request_once_with,
 };
-use pip_executor::{PublicationError, PublicationResult};
+use pip_executor::{PublicationError, PublicationResult, SignedCommit};
 use pip_github::{GitHubError, MutationResult, PullRequestSpec};
 use pip_store::{EffectInput, EventInput, NewCase, RunInput, Store, TransitionInput};
 use serde_json::{Value, json};
@@ -34,20 +34,29 @@ struct FixturePublisher {
     requests: RefCell<Vec<BranchPublicationRequest>>,
     remote_head: RefCell<Option<String>>,
     fail: bool,
+    signed: Option<SignedCommit>,
 }
 
 impl BranchPublisher for FixturePublisher {
     fn publish_branch(
         &self,
         request: &BranchPublicationRequest,
-    ) -> Result<PublicationResult, PublicationError> {
+    ) -> Result<BranchPublication, PublicationError> {
         self.requests.borrow_mut().push(request.clone());
         if self.fail {
             Err(PublicationError::RemoteRace)
         } else {
             let mut remote = self.remote_head.borrow_mut();
-            if remote.as_deref() == Some(request.local_head.as_str()) {
-                return Ok(PublicationResult::Existing);
+            let head = self
+                .signed
+                .as_ref()
+                .map(|signed| signed.head.to_string())
+                .unwrap_or_else(|| request.local_head.clone());
+            if remote.as_deref() == Some(head.as_str()) {
+                return Ok(BranchPublication {
+                    result: PublicationResult::Existing,
+                    signed: self.signed.clone(),
+                });
             }
             if *remote != request.expected_remote_head {
                 return Err(PublicationError::RemoteRace);
@@ -57,9 +66,100 @@ impl BranchPublisher for FixturePublisher {
             } else {
                 PublicationResult::Created
             };
-            *remote = Some(request.local_head.clone());
-            Ok(result)
+            *remote = Some(head);
+            Ok(BranchPublication {
+                result,
+                signed: self.signed.clone(),
+            })
         }
+    }
+}
+
+#[test]
+fn signed_publication_records_the_mapping_without_rewriting_the_builder_result() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = build_store(directory.path().join("ledger.db"));
+    let before = store.runs_for_case("repo:984321#1240@1").unwrap();
+    let publisher = FixturePublisher {
+        signed: Some(SignedCommit {
+            source_head: "b".repeat(40).parse().unwrap(),
+            head: "d".repeat(40).parse().unwrap(),
+            tree: "e".repeat(40).parse().unwrap(),
+            parent: "c".repeat(40).parse().unwrap(),
+            signer_fingerprint: "SHA256:fixture".into(),
+        }),
+        ..FixturePublisher::default()
+    };
+    let writer = FixtureWriter::default();
+    publish_draft_pull_request_once_with(
+        &writer,
+        &publisher,
+        &active_policy(),
+        &mut store,
+        100,
+        "publisher",
+        30,
+        true,
+    )
+    .unwrap();
+    assert_eq!(writer.specs.borrow()[0].head_sha, "d".repeat(40));
+    assert!(writer.specs.borrow()[0].body.contains(&"d".repeat(40)));
+    assert!(!writer.specs.borrow()[0].body.contains(&"b".repeat(40)));
+    assert_eq!(store.runs_for_case("repo:984321#1240@1").unwrap(), before);
+    let case = store.case("repo:984321#1240@1").unwrap().unwrap();
+    assert_eq!(case.head_sha, Some("d".repeat(40)));
+    assert_eq!(case.state, "WAITING_CI");
+    let history = store.immutable_history_for_case(&case.case_key).unwrap();
+    let publication = history
+        .evidence
+        .iter()
+        .find(|e| e.kind == "GITHUB_DRAFT_PULL_REQUEST_PUBLICATION")
+        .unwrap();
+    assert_eq!(
+        publication.payload["signing"]["source_head"],
+        "b".repeat(40)
+    );
+    assert_eq!(publication.payload["signing"]["head"], "d".repeat(40));
+    assert_eq!(publication.payload["signing"]["parent"], "c".repeat(40));
+    assert_eq!(publication.payload["signing"]["tree"], "e".repeat(40));
+}
+
+#[test]
+fn invalid_signing_bindings_never_reach_the_pr_writer() {
+    for (source, parent, head, fingerprint) in [
+        ("a", "c", "d", "SHA256:fixture"),
+        ("b", "a", "d", "SHA256:fixture"),
+        ("b", "c", "b", "SHA256:fixture"),
+        ("b", "c", "d", "SHA256:"),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = build_store(temp.path().join("ledger.db"));
+        let writer = FixtureWriter::default();
+        let publisher = FixturePublisher {
+            signed: Some(SignedCommit {
+                source_head: source.repeat(40).parse().unwrap(),
+                head: head.repeat(40).parse().unwrap(),
+                tree: "e".repeat(40).parse().unwrap(),
+                parent: parent.repeat(40).parse().unwrap(),
+                signer_fingerprint: fingerprint.into(),
+            }),
+            ..FixturePublisher::default()
+        };
+        assert!(
+            publish_draft_pull_request_once_with(
+                &writer,
+                &publisher,
+                &active_policy(),
+                &mut store,
+                100,
+                "publisher",
+                30,
+                true
+            )
+            .is_err()
+        );
+        assert!(writer.specs.borrow().is_empty());
+        assert_eq!(store.status(100).unwrap().outbox_leased, 0);
     }
 }
 
@@ -251,12 +351,21 @@ fn publication_uses_the_accepted_event_not_a_legacy_worker_round_counter() {
     )
     .unwrap();
     assert_eq!(writer.specs.borrow()[0].head_sha, "c".repeat(40));
-    assert_eq!(store.runs_for_case("repo:984321#1240@1").unwrap().len(), 2);
+    assert_eq!(
+        store
+            .runs_for_case("repo:984321#1240@1")
+            .unwrap()
+            .iter()
+            .filter(|run| run.role == "builder")
+            .count(),
+        2
+    );
     assert!(
         store
             .runs_for_case("repo:984321#1240@1")
             .unwrap()
             .iter()
+            .filter(|run| run.role == "builder")
             .all(|run| run.payload["build_round"] == 1)
     );
 }
@@ -342,6 +451,11 @@ fn build_store_with_event(path: std::path::PathBuf, event_type: &str) -> Store {
             effects: Vec::new(),
         })
         .unwrap();
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../migration/target-v1/worker-results.json"
+    ))
+    .unwrap();
+    let plan = fixture["results"][0].clone();
     store
         .apply_transition(
             &TransitionInput {
@@ -353,6 +467,35 @@ fn build_store_with_event(path: std::path::PathBuf, event_type: &str) -> Store {
                 pr_number: None,
                 head_sha: None,
                 observed_at: 2,
+                event: EventInput {
+                    event_id: "event-plan-recorded".into(),
+                    event_type: "PLAN_RECORDED".into(),
+                    payload: plan.clone(),
+                },
+                run: Some(RunInput {
+                    run_id: "run-planner-1".into(),
+                    task_id: plan["task_id"].as_str().unwrap().into(),
+                    role: "planner".into(),
+                    payload: plan,
+                }),
+                evidence: Vec::new(),
+                findings: Vec::new(),
+                effects: Vec::new(),
+            },
+            None,
+        )
+        .unwrap();
+    store
+        .apply_transition(
+            &TransitionInput {
+                case_key: "repo:984321#1240@1".into(),
+                expected_revision: 2,
+                next_state: "BUILDING".into(),
+                remediation_round: 0,
+                plan_version: 1,
+                pr_number: None,
+                head_sha: None,
+                observed_at: 3,
                 event: EventInput {
                     event_id: "event-build-recorded".into(),
                     event_type: event_type.into(),
@@ -392,13 +535,13 @@ fn remediation_store_with_round(path: std::path::PathBuf, reported_round: u32) -
         .apply_transition(
             &TransitionInput {
                 case_key: "repo:984321#1240@1".into(),
-                expected_revision: 2,
+                expected_revision: 3,
                 next_state: "REMEDIATING".into(),
                 remediation_round: 1,
                 plan_version: 1,
                 pr_number: Some(77),
                 head_sha: Some("b".repeat(40)),
-                observed_at: 3,
+                observed_at: 4,
                 event: EventInput {
                     event_id: "event-build-recorded-2".into(),
                     event_type: "BUILD_RECORDED".into(),

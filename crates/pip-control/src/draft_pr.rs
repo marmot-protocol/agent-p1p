@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-use pip_contracts::{BuilderOutcome, BuilderResult, WorkerResult};
+use pip_contracts::{BuilderOutcome, BuilderResult, PlannerOutcome, WorkerResult};
 use pip_controller::{ControllerError, LedgerController, WorkflowCommand};
 use pip_core::{
     CaseId, CaseState, Event, EventId, GitSha, IssueNumber, ObservedAt, PlanVersion,
@@ -15,12 +15,13 @@ use pip_core::{
 };
 use pip_executor::{
     GitPublicationSpec, GitPublisher, GitRunner, ProcessGitRunner, PublicationError,
-    PublicationResult,
+    PublicationResult, SignedCommit,
 };
 use pip_github::{GitHubError, GitHubWriter, MutationResult, MutationTransport, PullRequestSpec};
-use pip_store::{EvidenceInput, Store, StoreError, StoredCase};
+use pip_store::{EvidenceInput, ImmutableCaseHistory, Store, StoreError, StoredCase};
 use serde::Serialize;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 
 use crate::RepositoryPolicy;
 
@@ -50,21 +51,28 @@ pub struct BranchPublicationRequest {
     pub expected_remote_url: String,
     pub branch: String,
     pub local_head: String,
+    pub parent_head: String,
     pub expected_remote_head: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BranchPublication {
+    pub result: PublicationResult,
+    pub signed: Option<SignedCommit>,
 }
 
 pub trait BranchPublisher {
     fn publish_branch(
         &self,
         request: &BranchPublicationRequest,
-    ) -> Result<PublicationResult, PublicationError>;
+    ) -> Result<BranchPublication, PublicationError>;
 }
 
 impl<R: GitRunner> BranchPublisher for GitPublisher<R> {
     fn publish_branch(
         &self,
         request: &BranchPublicationRequest,
-    ) -> Result<PublicationResult, PublicationError> {
+    ) -> Result<BranchPublication, PublicationError> {
         let local_head =
             GitSha::from_str(&request.local_head).map_err(|_| PublicationError::InvalidSpec)?;
         let expected_remote_head = request
@@ -99,7 +107,10 @@ impl<R: GitRunner> BranchPublisher for GitPublisher<R> {
             )
         })
         .map_err(|error| PublicationError::Process(error.to_string()))?;
-        self.publish(&spec)
+        self.publish(&spec).map(|result| BranchPublication {
+            result,
+            signed: None,
+        })
     }
 }
 
@@ -243,7 +254,7 @@ pub fn publish_draft_pull_request_once_with<W: DraftPullRequestWriter, P: Branch
         store.release_effect(&claimed.effect_id, owner)?;
         return Err(DraftPullRequestError::InvalidCase);
     }
-    let build = match active_build(store, &case) {
+    let (build, parent) = match active_build(store, &case) {
         Ok(build) => build,
         Err(error) => {
             store.release_effect(&claimed.effect_id, owner)?;
@@ -273,18 +284,44 @@ pub fn publish_draft_pull_request_once_with<W: DraftPullRequestWriter, P: Branch
         ),
         branch: branch.clone(),
         local_head: head_sha.into(),
+        parent_head: parent.to_string(),
         expected_remote_head: case.head_sha.clone(),
     });
-    let branch_publication = match publication {
-        Ok(PublicationResult::Created) => "created",
-        Ok(PublicationResult::Updated) => "updated",
-        Ok(PublicationResult::Existing) => "existing",
+    let publication = match publication {
+        Ok(publication) => publication,
         Err(error) => {
             store.release_effect(&claimed.effect_id, owner)?;
             return Err(error.into());
         }
     };
-    let body = render_body(&case, &build)?;
+    if publication.signed.as_ref().is_some_and(|signed| {
+        signed.source_head.to_string() != head_sha
+            || signed.parent != parent
+            || signed.head == signed.source_head
+            || !signed.signer_fingerprint.starts_with("SHA256:")
+            || signed.signer_fingerprint.len() <= 7
+    }) {
+        store.release_effect(&claimed.effect_id, owner)?;
+        return Err(DraftPullRequestError::InvalidBuildJoin);
+    }
+    let head_sha = publication
+        .signed
+        .as_ref()
+        .map(|signed| signed.head.to_string())
+        .unwrap_or_else(|| head_sha.into());
+    let branch_publication = match publication.result {
+        PublicationResult::Created => "created",
+        PublicationResult::Updated => "updated",
+        PublicationResult::Existing => "existing",
+    };
+    let signing = publication.signed.as_ref().map(|signed| {
+        json!({
+            "source_head": signed.source_head.to_string(), "head": signed.head.to_string(),
+            "tree": signed.tree.to_string(), "parent": signed.parent.to_string(),
+            "signer_fingerprint": signed.signer_fingerprint,
+        })
+    });
+    let body = render_body(&case, &build, &head_sha);
     let result = writer.ensure_draft_pull_request(&PullRequestSpec {
         owner: policy.repository.owner.clone(),
         repository: policy.repository.name.clone(),
@@ -297,7 +334,7 @@ pub fn publish_draft_pull_request_once_with<W: DraftPullRequestWriter, P: Branch
         ),
         body,
         head_branch: branch.clone(),
-        head_sha: head_sha.into(),
+        head_sha: head_sha.clone(),
         base_branch: policy.repository.default_branch.clone(),
     });
     let (mutation, pr_number) = match result {
@@ -329,9 +366,10 @@ pub fn publish_draft_pull_request_once_with<W: DraftPullRequestWriter, P: Branch
             "mutation": mutation,
             "pull_request_number": pr_number,
             "task_id": build.common.task_id,
+            "signing": signing,
         }),
     };
-    let command = match published_command(&case, &build, pr_number, now, evidence) {
+    let command = match published_command(&case, &build, &head_sha, pr_number, now, evidence) {
         Ok(command) => command,
         Err(error) => {
             store.release_effect(&claimed.effect_id, owner)?;
@@ -345,11 +383,14 @@ pub fn publish_draft_pull_request_once_with<W: DraftPullRequestWriter, P: Branch
     Ok(DraftPullRequestCycle::Published {
         case_key: case.case_key,
         pull_request_number: pr_number,
-        head_sha: head_sha.into(),
+        head_sha,
     })
 }
 
-fn active_build(store: &Store, case: &StoredCase) -> Result<BuilderResult, DraftPullRequestError> {
+fn active_build(
+    store: &Store,
+    case: &StoredCase,
+) -> Result<(BuilderResult, GitSha), DraftPullRequestError> {
     // The pending effect and this revision were committed with one accepted
     // build. That event/run identity is authoritative, not a worker's counter
     // or an ambiguous scan of all earlier builds in the same plan.
@@ -375,13 +416,131 @@ fn active_build(store: &Store, case: &StoredCase) -> Result<BuilderResult, Draft
                 && build.plan_version == case.plan_version
                 && build.common.task_id == run.task_id =>
         {
-            Ok(build)
+            let parent = if let Some(head) = &case.head_sha {
+                head.parse()
+                    .map_err(|_| DraftPullRequestError::InvalidBuildJoin)?
+            } else {
+                let mut planned = Vec::new();
+                for run in &history.runs {
+                    if run.role != "planner" {
+                        continue;
+                    }
+                    let result: WorkerResult = serde_json::from_value(run.payload.clone())
+                        .map_err(|error| DraftPullRequestError::Serialization(error.to_string()))?;
+                    if let WorkerResult::Planner(plan) = result
+                        && plan.outcome == PlannerOutcome::Proceed
+                        && plan.plan_version == case.plan_version
+                        && plan.common.task_id == run.task_id
+                    {
+                        planned.push(plan.planned_base_sha);
+                    }
+                }
+                let [head] = planned.as_slice() else {
+                    return Err(DraftPullRequestError::InvalidBuildJoin);
+                };
+                head.parse()
+                    .map_err(|_| DraftPullRequestError::InvalidBuildJoin)?
+            };
+            Ok((build, parent))
         }
         _ => Err(DraftPullRequestError::InvalidBuildJoin),
     }
 }
 
-fn render_body(case: &StoredCase, build: &BuilderResult) -> Result<String, DraftPullRequestError> {
+/// Join a controller publication to the exact accepted source result. Signing
+/// changes commit identity, never the worker's result or the reviewed PR head.
+pub(crate) fn published_builder(
+    history: &ImmutableCaseHistory,
+    case: &StoredCase,
+) -> Result<Option<BuilderResult>, DraftPullRequestError> {
+    let invalid = || DraftPullRequestError::InvalidBuildJoin;
+    let Some(event) = history
+        .events
+        .iter()
+        .rev()
+        .find(|event| event.event_type == "REVIEW_READY")
+    else {
+        return Ok(None);
+    };
+    let publication = &event.payload["publication"];
+    let signing = &publication["signing"];
+    if signing.is_null() {
+        return Ok(None); // Historical unsigned publications retain their exact-head join.
+    }
+    let head = case.head_sha.as_deref().ok_or_else(invalid)?;
+    if !payload_matches(&event.payload, &event.payload_sha256)
+        || publication["head_sha"].as_str() != Some(head)
+        || signing["head"].as_str() != Some(head)
+        || publication["pull_request_number"].as_u64() != case.pr_number
+        || !signing["signer_fingerprint"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("SHA256:") && value.len() > 7)
+        || !history.evidence.iter().any(|evidence| {
+            evidence.kind == "GITHUB_DRAFT_PULL_REQUEST_PUBLICATION"
+                && evidence.payload == *publication
+                && payload_matches(&evidence.payload, &evidence.payload_sha256)
+        })
+    {
+        return Err(invalid());
+    }
+    for field in ["source_head", "head", "tree", "parent"] {
+        signing[field]
+            .as_str()
+            .ok_or_else(invalid)?
+            .parse::<GitSha>()
+            .map_err(|_| invalid())?;
+    }
+    let accepted = history
+        .events
+        .iter()
+        .rev()
+        .find(|candidate| {
+            candidate.state_revision < event.state_revision
+                && candidate.event_type == "BUILD_RECORDED"
+        })
+        .ok_or_else(invalid)?;
+    let run = history
+        .runs
+        .iter()
+        .find(|run| run.event_id == accepted.event_id)
+        .ok_or_else(invalid)?;
+    if run.case_key != case.case_key
+        || run.role != "builder"
+        || publication["task_id"].as_str() != Some(run.task_id.as_str())
+        || run.payload != event.payload["builder_result"]
+        || run.payload != accepted.payload
+        || !payload_matches(&run.payload, &run.payload_sha256)
+        || !payload_matches(&accepted.payload, &accepted.payload_sha256)
+    {
+        return Err(invalid());
+    }
+    let WorkerResult::Builder(build) =
+        serde_json::from_value(run.payload.clone()).map_err(|_| invalid())?
+    else {
+        return Err(invalid());
+    };
+    if build.common.task_id != run.task_id
+        || build.plan_version != case.plan_version
+        || build.outcome != BuilderOutcome::ReviewReady
+        || build.head_sha.as_deref() != signing["source_head"].as_str()
+        || build.head_sha.as_deref() == Some(head)
+    {
+        return Err(invalid());
+    }
+    Ok(Some(build))
+}
+
+fn payload_matches(payload: &serde_json::Value, expected: &str) -> bool {
+    serde_json::to_vec(payload).is_ok_and(|bytes| {
+        Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+            == expected
+    })
+}
+
+fn render_body(case: &StoredCase, build: &BuilderResult, head_sha: &str) -> String {
     use crate::publication_text::{bullets, prose};
     let checks = bullets(&build.local_checks, "No local checks reported.");
     let resolutions = if build.finding_resolutions.is_empty() {
@@ -401,29 +560,20 @@ fn render_body(case: &StoredCase, build: &BuilderResult) -> Result<String, Draft
             .collect::<Vec<_>>()
             .join("\n\n")
     };
-    Ok(format!(
+    format!(
         "## Pip implementation for #{}\n\nPlan version: {} · Remediation round: {}\n\nCommit: `{}`\n\n### Local checks\n\n{checks}\n\n### Findings addressed\n\n{resolutions}\n\nChecks are builder-reported; required CI and independent reviews are evaluated separately. Full structured build evidence is retained by Pip.",
-        case.issue_number,
-        build.plan_version,
-        case.remediation_round,
-        build
-            .head_sha
-            .as_deref()
-            .ok_or(DraftPullRequestError::InvalidBuildJoin)?,
-    ))
+        case.issue_number, build.plan_version, case.remediation_round, head_sha,
+    )
 }
 
 fn published_command(
     case: &StoredCase,
     build: &BuilderResult,
+    head_sha: &str,
     pr_number: u64,
     now: u64,
     evidence: EvidenceInput,
 ) -> Result<WorkflowCommand, DraftPullRequestError> {
-    let head_sha = build
-        .head_sha
-        .as_deref()
-        .ok_or(DraftPullRequestError::InvalidBuildJoin)?;
     Ok(WorkflowCommand {
         case_id: CaseId::new(
             RepositoryId::new(

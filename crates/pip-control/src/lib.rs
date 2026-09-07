@@ -58,8 +58,9 @@ pub use disposition::{
     DispositionCycle, DispositionError, DispositionWriter, consume_disposition_once,
 };
 pub use draft_pr::{
-    BranchPublicationRequest, BranchPublisher, DraftPullRequestCycle, DraftPullRequestError,
-    DraftPullRequestWriter, publish_draft_pull_request_once, publish_draft_pull_request_once_with,
+    BranchPublication, BranchPublicationRequest, BranchPublisher, DraftPullRequestCycle,
+    DraftPullRequestError, DraftPullRequestWriter, publish_draft_pull_request_once,
+    publish_draft_pull_request_once_with,
 };
 pub use final_preflight::{
     FinalPreflightCycle, FinalPreflightError, FinalPreflightSource, reconcile_final_preflight_once,

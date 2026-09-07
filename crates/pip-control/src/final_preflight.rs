@@ -400,7 +400,14 @@ fn validate_ledger_join(
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
     let mut mandatory_findings: BTreeMap<String, String> = BTreeMap::new();
-    for stored in store.runs_for_case(&case.case_key)? {
+    let history = store.immutable_history_for_case(&case.case_key)?;
+    let published_build = crate::draft_pr::published_builder(&history, case)
+        .map_err(|error| FinalPreflightError::InvalidWorkerEvidence(error.to_string()))?;
+    let source_head = published_build
+        .as_ref()
+        .and_then(|build| build.head_sha.as_deref())
+        .unwrap_or(head_sha);
+    for stored in history.runs {
         let result: WorkerResult = serde_json::from_value(stored.payload)
             .map_err(|error| FinalPreflightError::InvalidWorkerEvidence(error.to_string()))?;
         match result {
@@ -413,7 +420,10 @@ fn validate_ledger_join(
             WorkerResult::Builder(result)
                 if result.outcome == BuilderOutcome::ReviewReady
                     && result.plan_version == case.plan_version
-                    && result.head_sha.as_deref() == Some(head_sha) =>
+                    && result.head_sha.as_deref() == Some(source_head)
+                    && published_build
+                        .as_ref()
+                        .is_none_or(|build| *build == result) =>
             {
                 builder = true;
                 resolutions.extend(result.finding_resolutions);
@@ -469,7 +479,7 @@ fn validate_ledger_join(
     }
     for (finding_id, origin_reviewer) in mandatory_findings {
         if !resolutions.iter().any(|resolution| {
-            resolution.finding_id == finding_id && resolution.resolved_head_sha == head_sha
+            resolution.finding_id == finding_id && resolution.resolved_head_sha == source_head
         }) {
             push_unique(blockers, format!("MISSING_FINDING_RESOLUTION:{finding_id}"));
         }

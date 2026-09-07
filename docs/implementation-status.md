@@ -327,12 +327,25 @@ publication-text change. Signed Linux CI is a separate pending gate. The existin
 service-identity lifecycle test does not yet exercise the new signing path.
 
 This is **not yet a live signing path**. Still required: validated identity and
-credential wiring, recording the publication binding in the controller ledger,
-and an audited republish of the current canary followed by fresh
-CI/reviews. In particular, final-preflight currently joins builder finding
-resolutions directly against the PR head; that join must use the verified
-source-to-published binding without changing the original result. No accepted
-result, branch, PR or live unit was changed by this work.
+credential wiring and an audited republish of the current canary followed by
+fresh CI/reviews. No accepted result, branch, PR or live unit was changed by this
+work.
+
+The controller publication boundary now accepts the signed commit identity,
+checks its source and parent against the accepted build and preceding head (or
+planned base), and records the source/tree/parent/published-head mapping as
+publication evidence. The original builder result is unchanged. Final preflight
+joins that evidence to its publication event and exact accepted build event/run,
+verifying stored payload digests. Builder finding resolutions refer to that
+source build; CI, review approvals and origin confirmations still require the
+published head. Historical unsigned publications retain their original exact-head
+checks. Production still uses the unsigned publisher until the signing-only
+credential path is wired; this adapter work is not deployment proof.
+
+Twenty-two focused tests pass and cover initial and remediated signed publication, preserved worker
+results, malformed/misbound evidence, retry-lease release, stale GitHub approvals,
+missing origin confirmations and successful fresh-head confirmation. Full
+workspace validation and signed-release CI remain separate gates.
 
 ### Human-readable GitHub publication (local, not deployed)
 

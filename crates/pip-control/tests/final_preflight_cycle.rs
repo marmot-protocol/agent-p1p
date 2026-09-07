@@ -11,7 +11,7 @@ use pip_github::{
     IssueCommentSnapshot, IssueContentSnapshot, IssueSnapshot, LabelEvent, PullRequestEvidence,
     PullRequestSnapshot, RepositorySnapshot, ReviewSnapshot, ReviewState, ReviewThreadSnapshot,
 };
-use pip_store::{EffectInput, EventInput, NewCase, Store, TransitionInput};
+use pip_store::{EffectInput, EventInput, EvidenceInput, NewCase, Store, TransitionInput};
 use serde_json::{Value, json};
 
 #[derive(Clone)]
@@ -186,6 +186,165 @@ fn every_policy_required_reviewer_instance_must_approve_the_exact_head() {
         FinalPreflightCycle::Pending { blockers, .. }
             if blockers.contains(&"MISSING_LEDGER_APPROVAL:secperf-opus".into())
     ));
+}
+
+#[test]
+fn final_preflight_joins_a_signed_publication_to_its_original_build_only() {
+    let policy = active_policy();
+    let mut source = accepted_source();
+    source.evidence.pull_request.head_sha = "d".repeat(40);
+    source.evidence.check_runs[0].head_sha = "d".repeat(40);
+    for review in &mut source.evidence.reviews {
+        review.commit_id = Some("d".repeat(40));
+    }
+    let publication = json!({
+        "head_sha": "d".repeat(40), "pull_request_number":77, "task_id":"builder-1",
+        "signing": {"source_head":"b".repeat(40), "head":"d".repeat(40), "parent":"c".repeat(40),
+            "tree":"e".repeat(40), "signer_fingerprint":"SHA256:fixture"}
+    });
+    let temp = tempfile::tempdir().unwrap();
+    let mut store = final_review_store_with_publication(
+        temp.path().join("ledger.db"),
+        &policy,
+        &source,
+        Some(publication),
+    );
+    let before = store.runs_for_case("repo:984321#1240@1").unwrap();
+    let result =
+        reconcile_final_preflight_once(&source, &policy, &mut store, 200, "preflight", 30, true)
+            .unwrap();
+    assert!(
+        matches!(result, FinalPreflightCycle::Accepted { head_sha, .. } if head_sha == "d".repeat(40))
+    );
+    assert_eq!(store.runs_for_case("repo:984321#1240@1").unwrap(), before);
+    assert_eq!(
+        before
+            .iter()
+            .find(|run| run.role == "builder")
+            .unwrap()
+            .payload["head_sha"],
+        "b".repeat(40)
+    );
+}
+
+#[test]
+fn signed_publication_rejects_misbound_evidence_and_releases_the_lease() {
+    for (field, value) in [
+        ("/head_sha", json!("a".repeat(40))),
+        ("/pull_request_number", json!(78)),
+        ("/task_id", json!("different-builder")),
+        ("/signing/source_head", json!("a".repeat(40))),
+        ("/signing/head", json!("a".repeat(40))),
+        ("/signing/tree", json!("invalid")),
+        ("/signing/parent", json!("invalid")),
+        ("/signing/signer_fingerprint", json!("")),
+    ] {
+        let policy = active_policy();
+        let mut source = accepted_source();
+        source.evidence.pull_request.head_sha = "d".repeat(40);
+        source.evidence.check_runs[0].head_sha = "d".repeat(40);
+        for review in &mut source.evidence.reviews {
+            review.commit_id = Some("d".repeat(40));
+        }
+        let mut publication = signed_publication("builder-1", "b", "c");
+        *publication.pointer_mut(field).unwrap() = value;
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = final_review_store_with_publication(
+            temp.path().join("ledger.db"),
+            &policy,
+            &source,
+            Some(publication),
+        );
+        let before = store.runs_for_case("repo:984321#1240@1").unwrap();
+        assert!(
+            reconcile_final_preflight_once(
+                &source,
+                &policy,
+                &mut store,
+                200,
+                "preflight",
+                30,
+                true
+            )
+            .is_err(),
+            "{field}"
+        );
+        assert_eq!(store.status(200).unwrap().outbox_leased, 0, "{field}");
+        assert_eq!(store.runs_for_case("repo:984321#1240@1").unwrap(), before);
+    }
+}
+
+#[test]
+fn signing_never_translates_stale_github_approvals_to_the_published_head() {
+    let policy = active_policy();
+    let mut source = accepted_source();
+    source.evidence.pull_request.head_sha = "d".repeat(40);
+    source.evidence.check_runs[0].head_sha = "d".repeat(40);
+    // GitHub approvals remain on b even though ledger reviews are fresh on d.
+    let temp = tempfile::tempdir().unwrap();
+    let mut store = final_review_store_with_publication(
+        temp.path().join("ledger.db"),
+        &policy,
+        &source,
+        Some(signed_publication("builder-1", "b", "c")),
+    );
+    let result =
+        reconcile_final_preflight_once(&source, &policy, &mut store, 200, "preflight", 30, true)
+            .unwrap();
+    assert!(
+        matches!(result, FinalPreflightCycle::Pending { blockers, .. }
+        if blockers.iter().any(|blocker| blocker.contains("APPROVAL"))
+            && !blockers.contains(&"MISSING_EXACT_BUILDER_RESULT".into()))
+    );
+}
+
+#[test]
+fn signed_remediation_maps_source_resolutions_but_still_requires_fresh_origin_confirmation() {
+    let policy = active_policy();
+    let mut source = accepted_source();
+    let temp = tempfile::tempdir().unwrap();
+    let mut store = remediated_final_review_store_with_publication(
+        temp.path().join("ledger.db"),
+        &policy,
+        &mut source,
+        Some(signed_publication("builder-2", "c", "b")),
+        false,
+    );
+    let result =
+        reconcile_final_preflight_once(&source, &policy, &mut store, 300, "preflight", 30, true)
+            .unwrap();
+    assert!(
+        matches!(result, FinalPreflightCycle::Pending { blockers, .. }
+        if blockers == ["MISSING_ORIGIN_CONFIRMATION:GENERAL-R1-001"])
+    );
+}
+
+#[test]
+fn signed_remediation_passes_with_fresh_published_head_origin_confirmation() {
+    let policy = active_policy();
+    let mut source = accepted_source();
+    let temp = tempfile::tempdir().unwrap();
+    let mut store = remediated_final_review_store_with_publication(
+        temp.path().join("ledger.db"),
+        &policy,
+        &mut source,
+        Some(signed_publication("builder-2", "c", "b")),
+        true,
+    );
+    let result =
+        reconcile_final_preflight_once(&source, &policy, &mut store, 300, "preflight", 30, true)
+            .unwrap();
+    assert!(
+        matches!(result, FinalPreflightCycle::Accepted { head_sha, .. } if head_sha == "d".repeat(40))
+    );
+}
+
+fn signed_publication(task: &str, source: &str, parent: &str) -> Value {
+    json!({
+        "head_sha": "d".repeat(40), "pull_request_number":77, "task_id":task,
+        "signing": {"source_head":source.repeat(40), "head":"d".repeat(40), "parent":parent.repeat(40),
+            "tree":"e".repeat(40), "signer_fingerprint":"SHA256:fixture"}
+    })
 }
 
 #[test]
@@ -401,6 +560,15 @@ fn final_review_store(
     policy: &pip_control::RepositoryPolicy,
     source: &FixtureSource,
 ) -> Store {
+    final_review_store_with_publication(path, policy, source, None)
+}
+
+fn final_review_store_with_publication(
+    path: std::path::PathBuf,
+    policy: &pip_control::RepositoryPolicy,
+    source: &FixtureSource,
+    publication: Option<Value>,
+) -> Store {
     let mut store = planning_store(path);
     let results = results();
     ingest_worker_result(
@@ -418,13 +586,23 @@ fn final_review_store(
         &results[1],
     )
     .unwrap();
-    publish_build(&mut store, &results[1]);
+    publish_build_with_binding(&mut store, &results[1], publication);
     assert!(matches!(
         reconcile_ci_once(source, policy, &mut store, 100).unwrap(),
         CiCycle::Transitioned { .. }
     ));
     for result in &results[2..4] {
-        ingest_worker_result(&mut store, &policy.case_policy(), &binding(result), result).unwrap();
+        let mut result = result.clone();
+        if let WorkerResult::Review(review) = &mut result {
+            review.reviewed_head_sha = source.evidence.pull_request.head_sha.clone();
+        }
+        ingest_worker_result(
+            &mut store,
+            &policy.case_policy(),
+            &binding(&result),
+            &result,
+        )
+        .unwrap();
     }
     assert_eq!(
         store.case("repo:984321#1240@1").unwrap().unwrap().state,
@@ -464,6 +642,16 @@ fn remediated_final_review_store(
     path: std::path::PathBuf,
     policy: &pip_control::RepositoryPolicy,
     source: &mut FixtureSource,
+) -> Store {
+    remediated_final_review_store_with_publication(path, policy, source, None, false)
+}
+
+fn remediated_final_review_store_with_publication(
+    path: std::path::PathBuf,
+    policy: &pip_control::RepositoryPolicy,
+    source: &mut FixtureSource,
+    publication: Option<Value>,
+    confirm_resolution: bool,
 ) -> Store {
     let mut store = planning_store(path);
     let mut results = results();
@@ -519,12 +707,17 @@ fn remediated_final_review_store(
         &builder,
     )
     .unwrap();
-    publish_build(&mut store, &builder);
+    let published_head = if publication.is_some() {
+        "d".repeat(40)
+    } else {
+        "c".repeat(40)
+    };
+    publish_build_with_binding(&mut store, &builder, publication);
 
-    source.evidence.pull_request.head_sha = "c".repeat(40);
-    source.evidence.check_runs[0].head_sha = "c".repeat(40);
+    source.evidence.pull_request.head_sha = published_head.clone();
+    source.evidence.check_runs[0].head_sha = published_head.clone();
     for review in &mut source.evidence.reviews {
-        review.commit_id = Some("c".repeat(40));
+        review.commit_id = Some(published_head.clone());
     }
     reconcile_ci_once(source, policy, &mut store, 200).unwrap();
 
@@ -533,9 +726,15 @@ fn remediated_final_review_store(
         review["task_id"] = json!(format!("review-{}-2", index + 1));
         review["outcome"] = json!("APPROVE");
         review["review_round"] = json!(2);
-        review["reviewed_head_sha"] = json!("c".repeat(40));
+        review["reviewed_head_sha"] = json!(published_head);
         review["blocking_findings"] = json!([]);
         review["finding_confirmations"] = json!([]);
+        if confirm_resolution && index == 0 {
+            review["finding_confirmations"] = json!([{
+                "finding_id":"GENERAL-R1-001", "status":"CONFIRMED_RESOLVED",
+                "reviewed_fix_sha":published_head, "evidence":["edge regression"]
+            }]);
+        }
         let review: WorkerResult = serde_json::from_value(review).unwrap();
         ingest_worker_result(
             &mut store,
@@ -589,6 +788,14 @@ fn accept_plan(store: &mut Store, result: &WorkerResult) {
 }
 
 fn publish_build(store: &mut Store, result: &WorkerResult) {
+    publish_build_with_binding(store, result, None);
+}
+
+fn publish_build_with_binding(
+    store: &mut Store,
+    result: &WorkerResult,
+    publication: Option<Value>,
+) {
     let WorkerResult::Builder(build) = result else {
         panic!("builder result required");
     };
@@ -602,15 +809,27 @@ fn publish_build(store: &mut Store, result: &WorkerResult) {
                 remediation_round: case.remediation_round,
                 plan_version: case.plan_version,
                 pr_number: Some(77),
-                head_sha: build.head_sha.clone(),
+                head_sha: if publication.is_some() {
+                    Some("d".repeat(40))
+                } else {
+                    build.head_sha.clone()
+                },
                 observed_at: 4 + u64::from(build.build_round),
                 event: EventInput {
                     event_id: format!("event-draft-pr-published-{}", build.build_round),
                     event_type: "REVIEW_READY".into(),
-                    payload: json!({"builder_result": build}),
+                    payload: json!({"builder_result": build, "publication": publication}),
                 },
                 run: None,
-                evidence: Vec::new(),
+                evidence: publication
+                    .into_iter()
+                    .map(|payload| EvidenceInput {
+                        evidence_id: "evidence-signed-publication".into(),
+                        kind: "GITHUB_DRAFT_PULL_REQUEST_PUBLICATION".into(),
+                        source: "github-pr-77".into(),
+                        payload,
+                    })
+                    .collect(),
                 findings: Vec::new(),
                 effects: vec![EffectInput {
                     effect_id: format!("effect-ci-{}", build.build_round),

@@ -83,6 +83,7 @@ fn worker_configuration_is_validated_before_authenticated_publication() {
         expected_remote_url: "https://github.com/example/fixture.git".into(),
         branch: branch.into(),
         local_head: git(&worktree, &["rev-parse", "HEAD"]),
+        parent_head: git(&worktree, &["rev-parse", "HEAD"]),
         expected_remote_head: None,
     };
     let calls = Rc::new(Cell::new(0));
