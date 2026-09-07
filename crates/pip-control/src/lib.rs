@@ -85,6 +85,7 @@ pub use release::{
 };
 pub use results::{
     ResultCycle, ResultCycleError, ingest_completed_once, ingest_completed_once_with,
+    reconcile_completed_once_with,
 };
 pub use reviews::{
     ReviewPublicationCycle, ReviewPublicationError, ReviewWriter, publish_reviews_once,

@@ -32,6 +32,180 @@ impl CommandRunner for FakeRunner {
 }
 
 #[test]
+fn paused_native_completion_is_retained_and_resumed_without_hermes() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("ledger.db");
+    let mut store = Store::open(&path).unwrap();
+    project_planner(&mut store);
+    let before = store.status(10).unwrap();
+    let runner = FakeRunner::default();
+    runner.json(completed_planner("planner", planner_result()));
+    let collect = pip_control::reconcile_completed_once_with(
+        &mut store,
+        &active_policy(),
+        runner,
+        "hermes",
+        10,
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        collect,
+        ResultCycle::Retained {
+            task_id: "planner-1".into()
+        }
+    );
+    let after = store.status(10).unwrap();
+    assert_eq!(after.cases, before.cases);
+    assert_eq!(after.events, before.events);
+    assert_eq!(after.runs, before.runs);
+    assert_eq!(after.outbox_total, before.outbox_total);
+    assert_eq!(after.evidence, before.evidence + 1);
+    let retained = store.retained_task_result("planner-1").unwrap().unwrap();
+    assert_eq!(
+        store
+            .retain_task_result("planner-1", &retained, 11)
+            .unwrap(),
+        pip_store::ApplyResult::Replayed
+    );
+    assert!(
+        store
+            .retain_task_result("planner-1", &json!({"different":true}), 11)
+            .is_err()
+    );
+    assert!(store.retain_task_result("unknown", &retained, 11).is_err());
+    assert_eq!(store.status(10).unwrap(), after);
+    drop(store);
+    let mut store = Store::open(&path).unwrap();
+    // Neither repeated collection nor resume needs a live Hermes process.
+    assert_eq!(
+        pip_control::reconcile_completed_once_with(
+            &mut store,
+            &active_policy(),
+            FakeRunner::default(),
+            "hermes",
+            11,
+            false,
+        )
+        .unwrap(),
+        ResultCycle::Idle
+    );
+    assert!(matches!(
+        ingest_completed_once_with(
+            &mut store,
+            &active_policy(),
+            FakeRunner::default(),
+            "hermes",
+            12,
+        )
+        .unwrap(),
+        ResultCycle::Ingested {
+            transition_count: 1,
+            ..
+        }
+    ));
+    assert_eq!(store.run_count().unwrap(), 1);
+}
+
+#[test]
+fn paused_native_collection_rejects_a_foreign_result_before_retention() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    project_planner(&mut store);
+    let before = store.status(10).unwrap();
+    let mut result = planner_result();
+    result["task_id"] = json!("foreign-task");
+    let runner = FakeRunner::default();
+    runner.json(completed_planner("planner", result));
+    assert!(
+        pip_control::reconcile_completed_once_with(
+            &mut store,
+            &active_policy(),
+            runner,
+            "hermes",
+            10,
+            false,
+        )
+        .is_err()
+    );
+    assert_eq!(store.status(10).unwrap(), before);
+}
+
+#[test]
+fn paused_controller_collects_native_results_without_github_credentials() {
+    paused_controller_collects_native(false);
+}
+
+#[test]
+fn broken_direct_queue_does_not_hide_a_native_completion_during_pause() {
+    paused_controller_collects_native(true);
+}
+
+fn paused_controller_collects_native(broken_direct_queue: bool) {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("ledger.db");
+    let mut store = Store::open(&path).unwrap();
+    project_planner(&mut store);
+    let response = directory.path().join("response.json");
+    std::fs::write(
+        &response,
+        serde_json::to_vec(&completed_planner("planner", planner_result())).unwrap(),
+    )
+    .unwrap();
+    let hermes = directory.path().join("hermes");
+    std::fs::write(
+        &hermes,
+        format!("#!/bin/sh\nexec /bin/cat '{}'\n", response.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&hermes, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut policy = active_policy();
+    policy.dispatch_enabled = false;
+    let policy_path = directory.path().join("policy.json");
+    std::fs::write(&policy_path, serde_json::to_vec(&policy).unwrap()).unwrap();
+    let missing = directory.path().join("missing").display().to_string();
+    let mut args = vec!["controller-cycle".to_owned()];
+    for child in ["inbox", "results", "archive"] {
+        if !broken_direct_queue {
+            std::fs::create_dir_all(directory.path().join("queue").join(child)).unwrap();
+        }
+    }
+    for (name, value) in [
+        ("--policy", policy_path.display().to_string()),
+        ("--database", path.display().to_string()),
+        ("--hermes", hermes.display().to_string()),
+        (
+            "--direct-queue",
+            directory.path().join("queue").display().to_string(),
+        ),
+        ("--owner", "test-controller".into()),
+        ("--now", "10".into()),
+    ] {
+        args.extend([name.into(), value]);
+    }
+    for name in [
+        "--github-token",
+        "--github-reviewer-general-app",
+        "--github-reviewer-general-key",
+        "--github-reviewer-secperf-app",
+        "--github-reviewer-secperf-key",
+        "--git-askpass",
+        "--skills-commit-file",
+    ] {
+        args.extend([name.into(), missing.clone()]);
+    }
+    let report = pip_control::run_cli(args).unwrap();
+    assert_eq!(report["worker_result"]["result"], "retained");
+    assert_eq!(report["ok"], !broken_direct_queue);
+    if broken_direct_queue {
+        assert_eq!(report["direct_worker"]["result"], "error");
+    }
+    assert_eq!(store.run_count().unwrap(), 0);
+    assert!(store.retained_task_result("planner-1").unwrap().is_some());
+}
+
+#[test]
 fn completed_hermes_result_is_bound_to_the_owned_projection_and_ingested_once() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = Store::open(directory.path().join("ledger.db")).unwrap();

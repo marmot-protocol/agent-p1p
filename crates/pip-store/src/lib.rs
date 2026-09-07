@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 
 mod builder_retry;
 mod dispatch_intents;
+mod task_results;
 pub use builder_retry::BuilderRetryAuthorization;
 pub use dispatch_intents::{CreateReservation, DispatchIntent, DispatchTransport};
 

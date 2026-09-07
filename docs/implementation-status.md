@@ -5,20 +5,24 @@ live proof. The target is [the lean architecture](pip-architecture-plan.md).
 
 ## Latest verified live state
 
-Pirate was checked after the `d67f65f43af5e99ef8d6656bb71bd398708cd339`
+Pirate was checked after the `e6f7eec4d92a26d7e141591c285fcbcdc350154c`
 installation:
 
-- Signed deployment run `34066131761` and CI `34066131788` passed, including
+- Signed deployment run `34087957423` and CI `34087957390` passed, including
   the Linux service-lifecycle suite. Installation preserved the stopped ledger
-  byte-for-byte and preserved the intentionally paused policy.
+  byte-for-byte and preserved the active revision-7 policy. Execution was
+  quiesced for installation and then resumed; conversational Hermes was untouched.
 - #993 remains the sole labeled canary, with accepted plan version 1. Its
   retained implementation commit is `05070de3ef5e151bba702f85fd4c9e510f7e0df4`.
   Attempts 7 and 8 performed useful work but failed result parsing/typing.
 - The supported root retry command preserved failures and the escalation, then
   granted one additional attempt. Active policy revision 7 was restored.
-  Attempt 9 was observed RUNNING under the normal execution service.
-- No accepted builder result, PR, required review set or final readiness is
-  proven yet. Reported local test failures are not equivalent to green CI.
+  Attempt 9 completed and was accepted through the normal controller.
+- Draft PR [MDK #1726](https://github.com/marmot-protocol/mdk/pull/1726) exists
+  at that exact head. Its required GitHub CI passed. Full status-history parsing
+  was corrected without discarding historical failures; the controller accepted
+  CI and transitioned to `REVIEWING`, dispatching one native and two direct
+  reviewer jobs. Required reviews and final readiness are not proven yet.
 - #891, #1228 and #1639 are abandoned with history retained.
 - Hermes remains the upstream installation; Pip has not introduced a fork.
   Conversational Hermes is separate and must not be interrupted.
@@ -61,14 +65,16 @@ coverage. They do not by themselves establish end-to-end success.
 
 ## Local work, not yet deployed
 
-Direct result collection is being separated from workflow advancement.
+Direct result collection is deployed separately from workflow advancement.
 The paused controller can retain an exactly bound completed result without
 credentials, publication, a new task, or a case transition. Resume accepts the
 saved result without rerunning the provider. Tests cover restart, expired
 dispatch lease after retention, malformed bindings, failures and queue traversal.
-Native Hermes collection, cross-case failure isolation and saved-policy
-compatibility still need work; this is not a claim that all pause semantics
-are complete.
+Native Hermes collection now has local coverage for the same pause/restart
+behavior using the existing immutable evidence table, not another workflow
+database. A broken direct queue does not prevent native collection while paused.
+Native collection is not yet deployed. Active-cycle/cross-case failure isolation
+and saved-policy compatibility still need work; not all pause semantics are done.
 
 New managed Hermes tasks and direct Cursor prompts now reference a retained
 SHA-256-bound evidence file instead of embedding the full history. Saved older
@@ -76,7 +82,8 @@ Hermes projections keep their original body. Tests cover 200 KB histories with
 sub-4 KB transport/prompt fixtures, exact artifact bytes, replay, drift, unsafe
 paths and secret rejection. Role guides describe selective evidence reading;
 model choices live in the task binding rather than duplicated skill prose.
-Full Rust tests and Clippy pass locally; live compatibility is not yet proven.
+This compact-input boundary is deployed and has dispatched the first real
+reviewer set; completion compatibility is not yet proven.
 
 ## Remaining completion gates
 

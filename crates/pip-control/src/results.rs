@@ -15,6 +15,9 @@ use crate::RepositoryPolicy;
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum ResultCycle {
     Idle,
+    Retained {
+        task_id: String,
+    },
     Ingested {
         task_id: String,
         transition_count: u32,
@@ -93,6 +96,17 @@ pub fn ingest_completed_once_with<R: CommandRunner>(
     hermes_program: &str,
     observed_at: u64,
 ) -> Result<ResultCycle, ResultCycleError> {
+    reconcile_completed_once_with(store, policy, runner, hermes_program, observed_at, true)
+}
+
+pub fn reconcile_completed_once_with<R: CommandRunner>(
+    store: &mut Store,
+    policy: &RepositoryPolicy,
+    runner: R,
+    hermes_program: &str,
+    observed_at: u64,
+    advance: bool,
+) -> Result<ResultCycle, ResultCycleError> {
     let reader = HermesReader::new(
         runner,
         hermes_program,
@@ -128,54 +142,70 @@ pub fn ingest_completed_once_with<R: CommandRunner>(
         // Only current, runnable work is checked against today's role policy;
         // retired or superseded evidence must not block unrelated new cases.
         validate_projection(&projection.task_id, &desired, policy)?;
-        let completed = match reader.show_completed_result(&policy.board, &projection.task_id) {
-            Ok(completed) => completed,
-            Err(HermesError::IncompleteTask | HermesError::IncompleteRun) => continue,
-            Err(HermesError::RetryLimitReached) => {
-                let configured = policy
-                    .workflow_policy()
-                    .map_err(|_| ResultCycleError::InvalidProjection)?
-                    .roles()
-                    .iter()
-                    .find(|configured| configured.profile == desired.assignee)
-                    .cloned()
-                    .ok_or(ResultCycleError::InvalidProjection)?;
-                crate::bounds::escalate_case_for_bound(
-                    store,
-                    policy,
-                    case_key,
-                    observed_at,
-                    crate::bounds::BoundObservation {
-                        bound: crate::OperationalBound::ProviderFailures,
-                        observed: u64::from(desired.max_retries),
-                        limit: u64::from(desired.max_retries),
-                        details: serde_json::json!({
-                            "source": "hermes-circuit-breaker",
-                            "task_id": projection.task_id,
-                            "profile": desired.assignee,
-                            "provider": configured.provider,
-                            "model": configured.model,
-                        }),
-                    },
-                )
-                .map_err(|error| ResultCycleError::MalformedResult(error.to_string()))?;
-                return Ok(ResultCycle::ProviderFailureEscalated {
-                    task_id: projection.task_id,
-                });
-            }
-            Err(error) => return Err(error.into()),
-        };
-        if completed.profile != desired.assignee
-            || completed.task.assignee.as_deref() != Some(desired.assignee.as_str())
-            || completed.task.created_by.as_deref() != Some("pip-controller")
-            || completed.task.title != desired.title
-            || projection_key(&completed.task.body).as_deref()
-                != Some(desired.projection_key.as_str())
-        {
-            return Err(ResultCycleError::ProfileMismatch);
+        let retained = store.retained_task_result(&projection.task_id)?;
+        if retained.is_some() && !advance {
+            continue;
         }
+        let metadata = if let Some(retained) = retained {
+            retained
+        } else {
+            let completed = match reader.show_completed_result(&policy.board, &projection.task_id) {
+                Ok(completed) => completed,
+                Err(HermesError::IncompleteTask | HermesError::IncompleteRun) => continue,
+                Err(HermesError::RetryLimitReached) => {
+                    // Collection is not a workflow decision, including escalation.
+                    if !advance {
+                        continue;
+                    }
+                    let configured = policy
+                        .workflow_policy()
+                        .map_err(|_| ResultCycleError::InvalidProjection)?
+                        .roles()
+                        .iter()
+                        .find(|configured| configured.profile == desired.assignee)
+                        .cloned()
+                        .ok_or(ResultCycleError::InvalidProjection)?;
+                    crate::bounds::escalate_case_for_bound(
+                        store,
+                        policy,
+                        case_key,
+                        observed_at,
+                        crate::bounds::BoundObservation {
+                            bound: crate::OperationalBound::ProviderFailures,
+                            observed: u64::from(desired.max_retries),
+                            limit: u64::from(desired.max_retries),
+                            details: serde_json::json!({
+                                "source": "hermes-circuit-breaker",
+                                "task_id": projection.task_id,
+                                "profile": desired.assignee,
+                                "provider": configured.provider,
+                                "model": configured.model,
+                            }),
+                        },
+                    )
+                    .map_err(|error| ResultCycleError::MalformedResult(error.to_string()))?;
+                    return Ok(ResultCycle::ProviderFailureEscalated {
+                        task_id: projection.task_id,
+                    });
+                }
+                Err(error) => return Err(error.into()),
+            };
+            if completed.profile != desired.assignee
+                || completed.task.assignee.as_deref() != Some(desired.assignee.as_str())
+                || completed.task.created_by.as_deref() != Some("pip-controller")
+                || completed.task.title != desired.title
+                || projection_key(&completed.task.body).as_deref()
+                    != Some(desired.projection_key.as_str())
+            {
+                return Err(ResultCycleError::ProfileMismatch);
+            }
+            completed.worker_contract_metadata()?
+        };
         let binding = binding(&projection.task_id, &desired)?;
-        let result: WorkerResult = serde_json::from_value(completed.worker_contract_metadata()?)
+        let result = WorkerResult::decode(metadata)
+            .map_err(|error| ResultCycleError::MalformedResult(error.to_string()))?;
+        result
+            .validate_binding(&binding)
             .map_err(|error| ResultCycleError::MalformedResult(error.to_string()))?;
         if desired.body.get("storage").is_some()
             && let WorkerResult::Planner(plan) = &result
@@ -189,6 +219,14 @@ pub fn ingest_completed_once_with<R: CommandRunner>(
             return Err(ResultCycleError::MalformedResult(
                 "managed-storage planners require a nonempty inline plan of at most 16 KiB".into(),
             ));
+        }
+        if !advance {
+            let value = serde_json::to_value(&result)
+                .map_err(|error| ResultCycleError::MalformedResult(error.to_string()))?;
+            store.retain_task_result(&projection.task_id, &value, observed_at)?;
+            return Ok(ResultCycle::Retained {
+                task_id: projection.task_id,
+            });
         }
         let workflow_policy = policy
             .workflow_policy()

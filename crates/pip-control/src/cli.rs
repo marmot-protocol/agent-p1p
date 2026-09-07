@@ -468,19 +468,19 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         .transpose()?
         .map_or_else(current_time, Ok)?;
     if global_paused || policy.intake.paused || !policy.dispatch_enabled {
-        // A dispatch pause does not require credentials or a provider, and must
-        // not strand a completed direct result outside the durable ledger.
+        // Collection needs no GitHub credentials or model invocation. One
+        // unavailable adapter must not strand the other adapter's completion.
         // A never-bootstrapped inert installation still creates no database.
         let database = Path::new(required(&options, "--database")?);
-        let direct_worker = if database
+        let (direct_worker, worker_result) = if database
             .try_exists()
             .map_err(|error| CliError::Filesystem(error.to_string()))?
         {
-            let queue = crate::DirectQueue::new(required(&options, "--direct-queue")?)
-                .map_err(|error| CliError::Reconciliation(error.to_string()))?;
             let mut store =
                 Store::open(database).map_err(|error| CliError::Ledger(error.to_string()))?;
-            serde_json::to_value(
+            let direct_worker = cycle_observation((|| {
+                let queue = crate::DirectQueue::new(required(&options, "--direct-queue")?)
+                    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
                 crate::reconcile_direct_queue_once(
                     &mut store,
                     &policy,
@@ -490,18 +490,28 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
                     1,
                     false,
                 )
-                .map_err(|error| CliError::Reconciliation(error.to_string()))?,
-            )
-            .map_err(|error| CliError::Reconciliation(error.to_string()))?
+                .map_err(|error| CliError::Reconciliation(error.to_string()))
+            })());
+            let worker_result = cycle_observation(crate::reconcile_completed_once_with(
+                &mut store,
+                &policy,
+                pip_hermes::ProcessRunner::default(),
+                required(&options, "--hermes")?,
+                now,
+                false,
+            ));
+            (direct_worker, worker_result)
         } else {
-            json!({"result":"not_initialized"})
+            let absent = json!({"result":"not_initialized"});
+            (absent.clone(), absent)
         };
         return Ok(json!({
-            "ok": true,
+            "ok": direct_worker["result"] != "error" && worker_result["result"] != "error",
             "result": "disabled",
             "repository": policy.repository.full_name(),
             "policy_revision": policy.revision,
             "direct_worker": direct_worker,
+            "worker_result": worker_result,
         }));
     }
     let token = read_secret(Path::new(required(&options, "--github-token")?), 1024)?;
@@ -706,6 +716,14 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         "disposition": disposition,
         "dispatch": dispatch,
     }))
+}
+
+fn cycle_observation<T: serde::Serialize, E: fmt::Display>(result: Result<T, E>) -> Value {
+    match result {
+        Ok(value) => serde_json::to_value(value)
+            .unwrap_or_else(|error| json!({"result":"error", "error":error.to_string()})),
+        Err(error) => json!({"result":"error", "error":error.to_string()}),
+    }
 }
 
 struct AppReviewWriter<'a> {
