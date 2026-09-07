@@ -359,7 +359,7 @@ fn direct_builder_is_durably_queued_without_any_hermes_command() {
     assert_eq!(job.state_revision, 2);
     assert_eq!(
         job.payload["task_id"],
-        "repo:1055628515#1240@3:builder:round:1:revision:2:worker"
+        "repo:1055628515#1240@3:builder:round:2:revision:2:worker"
     );
     assert_eq!(job.payload["role"], "builder");
     assert_eq!(job.payload["provider"], "cursor");
@@ -369,6 +369,7 @@ fn direct_builder_is_durably_queued_without_any_hermes_command() {
         "/var/lib/pip/worktrees/mdk/repo-1055628515-issue-1240-workflow-3"
     );
     assert_eq!(job.payload["body"]["state_revision"], 2);
+    assert_eq!(job.payload["body"]["build_round"], 2);
     assert_eq!(job.payload["body"]["execution"], "direct");
 }
 

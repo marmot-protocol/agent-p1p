@@ -586,7 +586,7 @@ fn dispatch(
     let review_round = context.remediation_round.saturating_add(1);
     let round = match role {
         WorkerRole::Planner => context.plan_version.map_or(1, |version| version.get() + 1),
-        WorkerRole::Builder => context.remediation_round.max(1),
+        WorkerRole::Builder => review_round,
         WorkerRole::ReviewerGeneral | WorkerRole::ReviewerSecperf | WorkerRole::FinalReviewer => {
             review_round
         }
@@ -656,6 +656,7 @@ fn dispatch(
         );
     }
     if role == WorkerRole::Builder {
+        body.insert("build_round".into(), json!(round));
         body.insert(
             "assigned_branch".into(),
             json!(format!(

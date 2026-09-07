@@ -1,7 +1,7 @@
 ---
 name: workflow-contract
 description: Use for every Pip case task. Enforce shared invariants.
-version: 0.13.0
+version: 0.14.0
 author: agent-p1p
 license: MIT
 metadata:

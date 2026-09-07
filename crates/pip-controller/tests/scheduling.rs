@@ -124,6 +124,21 @@ fn policy() -> WorkflowPolicy {
 }
 
 #[test]
+fn builders_receive_an_explicit_one_based_build_round() {
+    for remediation in 0..3 {
+        let mut ctx = context();
+        ctx.remediation_round = remediation;
+        let jobs = schedule_effect("builder", Effect::DispatchBuilder, &ctx, &policy()).unwrap();
+        assert_eq!(jobs[0].worker_body["build_round"], remediation + 1);
+        assert!(
+            jobs[0]
+                .worker_projection_key
+                .contains(&format!(":round:{}:", remediation + 1))
+        );
+    }
+}
+
+#[test]
 fn role_evidence_focus_uses_exact_current_records_without_copying_history() {
     let mut ctx = context();
     ctx.immutable_evidence_bundle["records"] = json!({
@@ -371,7 +386,7 @@ fn planner_and_builder_use_ledger_authorized_workspaces_without_gate_dependencie
         builder[0].worker_body["requested_model"],
         "cursor/cursor-grok-4.6-high-fast"
     );
-    assert!(builder[0].worker_projection_key.contains("round:2"));
+    assert!(builder[0].worker_projection_key.contains("round:3"));
 }
 
 #[test]
@@ -430,7 +445,7 @@ fn remediation_is_dynamic_and_final_review_requires_exact_head() {
     )
     .unwrap();
     assert_eq!(builder[0].worker_body["remediation_round"], 7);
-    assert!(builder[0].worker_projection_key.contains("round:7"));
+    assert!(builder[0].worker_projection_key.contains("round:8"));
 
     let final_review = schedule_effect(
         "effect-final-r7",

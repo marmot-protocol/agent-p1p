@@ -129,7 +129,11 @@ Additional fields:
 
 - `outcome`: `REVIEW_READY`, `RETURN_TO_PLANNING`, `BLOCKED`, `ABANDON`, or
   `BLOCKED_UNEXPECTED_MODEL`;
-- positive `plan_version` and `build_round`;
+- positive `plan_version` and `build_round`; copy the task's explicit
+  `build_round`. For a saved job without that field, it is
+  `remediation_round + 1` (initial build 1, first remediation 2). A retry does
+  not itself increment the remediation round. Historical task IDs may contain
+  the old ambiguous round label; do not infer the result field from that label;
 - nullable `head_sha`;
 - `local_checks`: an array of strings describing commands and outcomes, such as
   `["cargo test -p example: 42 passed", "cargo clippy: passed"]`. Never an object

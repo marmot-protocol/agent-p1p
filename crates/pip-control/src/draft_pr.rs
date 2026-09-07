@@ -141,7 +141,7 @@ impl fmt::Display for DraftPullRequestError {
             }
             Self::InvalidCase => formatter.write_str("draft PR publication case is invalid"),
             Self::InvalidBuildJoin => formatter
-                .write_str("draft PR publication requires one exact active-round builder result"),
+                .write_str("draft PR publication requires the builder result bound to its accepted build event"),
             Self::PullRequestIdentityDrift => {
                 formatter.write_str("draft PR publication changed the case pull request")
             }
@@ -350,21 +350,33 @@ pub fn publish_draft_pull_request_once_with<W: DraftPullRequestWriter, P: Branch
 }
 
 fn active_build(store: &Store, case: &StoredCase) -> Result<BuilderResult, DraftPullRequestError> {
-    let expected_round = case.remediation_round.saturating_add(1);
-    let mut matching = Vec::new();
-    for run in store.runs_for_case(&case.case_key)? {
-        let result: WorkerResult = serde_json::from_value(run.payload)
-            .map_err(|error| DraftPullRequestError::Serialization(error.to_string()))?;
-        if let WorkerResult::Builder(build) = result
-            && build.outcome == BuilderOutcome::ReviewReady
-            && build.plan_version == case.plan_version
-            && build.build_round == expected_round
+    // The pending effect and this revision were committed with one accepted
+    // build. That event/run identity is authoritative, not a worker's counter
+    // or an ambiguous scan of all earlier builds in the same plan.
+    let history = store.immutable_history_for_case(&case.case_key)?;
+    let event = history
+        .events
+        .last()
+        .filter(|event| {
+            event.state_revision == case.state_revision && event.event_type == "BUILD_RECORDED"
+        })
+        .ok_or(DraftPullRequestError::InvalidBuildJoin)?;
+    let run = history
+        .runs
+        .iter()
+        .find(|run| run.event_id == event.event_id)
+        .filter(|run| run.role == "builder" && run.payload_sha256 == event.payload_sha256)
+        .ok_or(DraftPullRequestError::InvalidBuildJoin)?;
+    let result: WorkerResult = serde_json::from_value(run.payload.clone())
+        .map_err(|error| DraftPullRequestError::Serialization(error.to_string()))?;
+    match result {
+        WorkerResult::Builder(build)
+            if build.outcome == BuilderOutcome::ReviewReady
+                && build.plan_version == case.plan_version
+                && build.common.task_id == run.task_id =>
         {
-            matching.push(build);
+            Ok(build)
         }
-    }
-    match matching.as_slice() {
-        [build] => Ok(build.clone()),
         _ => Err(DraftPullRequestError::InvalidBuildJoin),
     }
 }
@@ -375,10 +387,10 @@ fn render_body(case: &StoredCase, build: &BuilderResult) -> Result<String, Draft
     let resolutions = serde_json::to_string_pretty(&build.finding_resolutions)
         .map_err(|error| DraftPullRequestError::Serialization(error.to_string()))?;
     Ok(format!(
-        "## Pip controller-owned draft PR\n\nCase: `{}`\n\nPlan version: {}\n\nBuild round: {}\n\nExact head: `{}`\n\n### Local checks\n\n```json\n{checks}\n```\n\n### Finding resolutions\n\n```json\n{resolutions}\n```\n\nPip builder task: `{}`",
+        "## Pip controller-owned draft PR\n\nCase: `{}`\n\nPlan version: {}\n\nRemediation round: {}\n\nExact head: `{}`\n\n### Local checks\n\n```json\n{checks}\n```\n\n### Finding resolutions\n\n```json\n{resolutions}\n```\n\nPip builder task: `{}`",
         case.case_key,
         build.plan_version,
-        build.build_round,
+        case.remediation_round,
         build
             .head_sha
             .as_deref()

@@ -9,41 +9,30 @@ Pirate runs signed `e4106a988a70d8c76d31f6c3fedc86f5fc3048cf`, verified by
 CI `34100251695` and deployment `34100251650`, including Linux lifecycle tests.
 Installation preserved the stopped ledger and paused policy byte-for-byte.
 
-- #993 is the sole labeled canary, with accepted plan 1 and builder attempt 9.
+- #993 is the sole labeled canary, with accepted plan 1.
   Draft [MDK #1726](https://github.com/marmot-protocol/mdk/pull/1726) remains at
   `05070de3ef5e151bba702f85fd4c9e510f7e0df4`, with required GitHub CI green.
-- The supported review retry preserved the build, five case-local failed
-  attempts and prior escalation. Fresh same-head CI retained a separate
-  observation and dispatched the review generation at revision 14.
-- Paused collection retained completed general review `t_6b15c1cd` in the
-  ledger without a case transition; repeat collection was an idempotent no-op.
-  That old-generation result is evidence, not an accepted current review. It
-  found unsanitized daemon error writers; its root-only recovery copy remains.
-- General task `t_9bb53a26` was accepted as `REQUEST_CHANGES`. Required Kimi
-  attempt 11 and shadow Opus attempt 12 completed; both disclosed denied
-  verification commands. The new release retained both while paused without
-  advancing the case. Resume accepted Kimi after the general review's revision.
 - GitHub reviews `5129269820` (general, changes requested) and `5129270044`
   (security/performance, approved) are published on that exact head under the
   separate App identities. Both include reported verification and limitations.
-  The case advanced to `REMEDIATING` revision 17. Builder attempt 13 created
-  clean local commit `625bb4299187139461a64fd6eb5337ea35804261`, but result
-  acceptance incorrectly compared its new commit with the incoming PR head
-  (and required a PR number absent from the builder output contract). It failed
-  and the case escalated at revision 18; all six case-local failures remain.
-  The commit is retained, not published. A supported retry must reverify it.
-  Regression tests now distinguish incoming planner/builder context from exact
-  review/final output bindings. Full Rust tests, Clippy and signed Linux gates
-  pass; this fix is installed but a real accepted remediation remains unproven.
-  The same regression pass found the offline builder-retry guard only supported
-  pre-PR failures. It now preserves an existing PR/head and remediation round,
-  permits prior accepted builds, and still fences running or completed target
-  attempts. The supported retry applied successfully at revision 19, preserving
-  PR 1726, its old head, plan 1 and round 1. Normal execution has resumed.
+  Required Kimi attempt 11 and shadow Opus attempt 12 disclosed denied commands;
+  the next review must prove the installed noninteractive-execution fix.
+- The installed binding/retry fixes preserved six case-local failures and the
+  completed remediation. Builder attempt 14 reverified and reused clean commit
+  `625bb4299187139461a64fd6eb5337ea35804261`. Its result is accepted, with the
+  case `BUILDING` at revision 21, plan 1 and remediation round 1. The worker
+  reported passing CLI checks and `just fast-ci`, plus a Marmot parallel-test
+  timeout whose isolated rerun passed. That limitation remains in its result.
+- Publication is paused: the old dispatcher used an ambiguous builder round
+  counter while publication expected a different number. A regression-tested
+  fix selects the exact run attached to the accepted `BUILD_RECORDED` event;
+  new jobs also get an explicit one-based `build_round`. The accepted result
+  and history are not rewritten, and no new model attempt is required. This
+  publication fix still needs signed deployment and real GitHub verification.
 - #891, #1228 and #1639 are abandoned with history retained.
 - Hermes remains the upstream installation; Pip has not introduced a fork.
-  Conversational Hermes was untouched. Pip execution timers, the dedicated
-  gateway and ingress are active.
+  Conversational Hermes was untouched. Pip execution timers and its dedicated
+  gateway are stopped under paused policy 6; ingress remains active.
 
 These are dated observations, not a promise that a process is still running.
 Inspect the current ledger, services and GitHub evidence before acting.

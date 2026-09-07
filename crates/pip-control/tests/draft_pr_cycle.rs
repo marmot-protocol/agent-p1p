@@ -228,6 +228,60 @@ fn branch_publication_failure_never_calls_github_and_leaves_the_effect_retryable
 }
 
 #[test]
+fn publication_uses_the_accepted_event_not_a_legacy_worker_round_counter() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = remediation_store_with_round(directory.path().join("ledger.db"), 1);
+    let writer = FixtureWriter::default();
+    let publisher = FixturePublisher {
+        remote_head: RefCell::new(Some("b".repeat(40))),
+        ..FixturePublisher::default()
+    };
+    publish_draft_pull_request_once_with(
+        &writer,
+        &publisher,
+        &active_policy(),
+        &mut store,
+        100,
+        "publisher",
+        30,
+        true,
+    )
+    .unwrap();
+    assert_eq!(writer.specs.borrow()[0].head_sha, "c".repeat(40));
+    assert_eq!(store.runs_for_case("repo:984321#1240@1").unwrap().len(), 2);
+    assert!(
+        store
+            .runs_for_case("repo:984321#1240@1")
+            .unwrap()
+            .iter()
+            .all(|run| run.payload["build_round"] == 1)
+    );
+}
+
+#[test]
+fn publication_requires_the_current_build_recorded_event_before_external_writes() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = build_store_with_event(directory.path().join("ledger.db"), "UNRELATED_EVENT");
+    let writer = FixtureWriter::default();
+    let publisher = FixturePublisher::default();
+    assert!(
+        publish_draft_pull_request_once_with(
+            &writer,
+            &publisher,
+            &active_policy(),
+            &mut store,
+            100,
+            "publisher",
+            30,
+            true
+        )
+        .is_err()
+    );
+    assert!(writer.specs.borrow().is_empty());
+    assert!(publisher.requests.borrow().is_empty());
+}
+
+#[test]
 fn remediation_updates_the_same_owned_pr_to_the_new_exact_head() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = remediation_store(directory.path().join("ledger.db"));
@@ -262,6 +316,10 @@ fn remediation_updates_the_same_owned_pr_to_the_new_exact_head() {
 }
 
 fn build_store(path: std::path::PathBuf) -> Store {
+    build_store_with_event(path, "BUILD_RECORDED")
+}
+
+fn build_store_with_event(path: std::path::PathBuf, event_type: &str) -> Store {
     let result = builder_fixture();
     let mut store = Store::open(path).unwrap();
     store
@@ -294,7 +352,7 @@ fn build_store(path: std::path::PathBuf) -> Store {
                 observed_at: 2,
                 event: EventInput {
                     event_id: "event-build-recorded".into(),
-                    event_type: "BUILD_RECORDED".into(),
+                    event_type: event_type.into(),
                     payload: result.clone(),
                 },
                 run: Some(RunInput {
@@ -318,39 +376,26 @@ fn build_store(path: std::path::PathBuf) -> Store {
 }
 
 fn remediation_store(path: std::path::PathBuf) -> Store {
+    remediation_store_with_round(path, 2)
+}
+
+fn remediation_store_with_round(path: std::path::PathBuf, reported_round: u32) -> Store {
     let mut result = builder_fixture();
     result["task_id"] = json!("builder-2");
-    result["build_round"] = json!(2);
+    result["build_round"] = json!(reported_round);
     result["head_sha"] = json!("c".repeat(40));
-    let mut store = Store::open(path).unwrap();
-    store
-        .create_case(&NewCase {
-            case_key: "repo:984321#1240@1".into(),
-            repository_id: 984_321,
-            issue_number: 1240,
-            workflow_version: 1,
-            policy_revision: active_policy().revision,
-            initial_state: "REMEDIATING".into(),
-            observed_at: 1,
-            event: EventInput {
-                event_id: "event-remediation".into(),
-                event_type: "REQUEST_CHANGES".into(),
-                payload: json!({"fixture":true}),
-            },
-            effects: Vec::new(),
-        })
-        .unwrap();
+    let mut store = build_store(path);
     store
         .apply_transition(
             &TransitionInput {
                 case_key: "repo:984321#1240@1".into(),
-                expected_revision: 1,
+                expected_revision: 2,
                 next_state: "REMEDIATING".into(),
                 remediation_round: 1,
                 plan_version: 1,
                 pr_number: Some(77),
                 head_sha: Some("b".repeat(40)),
-                observed_at: 2,
+                observed_at: 3,
                 event: EventInput {
                     event_id: "event-build-recorded-2".into(),
                     event_type: "BUILD_RECORDED".into(),
