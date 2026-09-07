@@ -38,16 +38,7 @@ impl DirectWorkerRuntime for FakeRuntime {
 #[test]
 fn serial_worker_leases_only_one_job_until_its_handoff_is_reconciled() {
     let directory = tempfile::tempdir().unwrap();
-    let mut required = shadow_task();
-    required.task_id = required.task_id.replace("secperf-opus", "secperf-kimi");
-    required.title = format!("Run secperf-kimi for {}", case_key());
-    required.priority = 50;
-    required.profile = "reviewer-secperf-kimi".into();
-    required.model = "kimi-k3-max".into();
-    required.body["reviewer_id"] = json!("secperf-kimi");
-    required.body["review_mode"] = json!("required");
-    required.body["model"] = json!("kimi-k3-max");
-    required.body["requested_model"] = json!("cursor/kimi-k3-max");
+    let required = required_review_task();
     let mut store = queued_shadow_review_with(
         directory.path(),
         vec![EffectInput {
@@ -89,6 +80,113 @@ fn serial_worker_leases_only_one_job_until_its_handoff_is_reconciled() {
             .unwrap(),
         DirectQueueCycle::Prepared { attempt_id: 2, .. }
     ));
+}
+
+fn required_review_task() -> DirectTaskSpec {
+    let mut required = shadow_task();
+    required.task_id = required.task_id.replace("secperf-opus", "secperf-kimi");
+    required.title = format!("Run secperf-kimi for {}", case_key());
+    required.priority = 50;
+    required.profile = "reviewer-secperf-kimi".into();
+    required.model = "kimi-k3-max".into();
+    required.body["reviewer_id"] = json!("secperf-kimi");
+    required.body["review_mode"] = json!("required");
+    required.body["model"] = json!("kimi-k3-max");
+    required.body["requested_model"] = json!("cursor/kimi-k3-max");
+    required
+}
+
+#[test]
+fn required_review_is_retained_under_changed_policy_and_accepted_after_peer_only_progress() {
+    for intervening_event in ["REVIEW_RECORDED", "CI_ACCEPTED"] {
+        let directory = tempfile::tempdir().unwrap();
+        let task = required_review_task();
+        let mut result = serde_json::to_value(shadow_review_result()).unwrap();
+        result["task_id"] = json!(task.task_id);
+        result["reviewer_id"] = json!("secperf-kimi");
+        result["requested_model"] = json!("cursor/kimi-k3-max");
+        result["actual_model"] = json!("cursor/kimi-k3-max");
+        let mut store = queued_shadow_review_with(
+            directory.path(),
+            vec![EffectInput {
+                effect_id: "effect-dispatch-reviewers:direct:secperf-kimi".into(),
+                effect_type: "RUN_DIRECT_WORKER".into(),
+                payload: serde_json::to_value(task).unwrap(),
+            }],
+        );
+        let queue = queue(directory.path());
+        let policy = active_policy();
+        assert!(matches!(
+            reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 100, 30, true,)
+                .unwrap(),
+            DirectQueueCycle::Prepared { attempt_id: 1, .. }
+        ));
+        let runtime = runtime(Ok(serde_json::from_value(result).unwrap()));
+        execute_direct_queue_once(&runtime, &queue, 101).unwrap();
+        store
+            .apply_transition(
+                &TransitionInput {
+                    case_key: case_key().into(),
+                    expected_revision: 2,
+                    next_state: "REVIEWING".into(),
+                    remediation_round: 0,
+                    plan_version: 1,
+                    pr_number: Some(77),
+                    head_sha: Some("b".repeat(40)),
+                    observed_at: 102,
+                    event: EventInput {
+                        event_id: "peer-or-retry".into(),
+                        event_type: intervening_event.into(),
+                        payload: json!({}),
+                    },
+                    run: None,
+                    evidence: vec![],
+                    findings: vec![],
+                    effects: vec![],
+                },
+                None,
+            )
+            .unwrap();
+        let mut paused = policy.clone();
+        paused.revision += 1;
+        for role in &mut paused.roles {
+            if role.reviewer_id.as_deref() == Some("secperf-kimi") {
+                role.model = "different-model".into();
+            }
+        }
+        paused.intake.paused = true;
+        paused.dispatch_enabled = false;
+        for now in [103, 104] {
+            assert_eq!(
+                reconcile_direct_queue_once(
+                    &mut store,
+                    &paused,
+                    &queue,
+                    "controller",
+                    now,
+                    30,
+                    false
+                )
+                .unwrap(),
+                DirectQueueCycle::Retained { attempt_id: 1 }
+            );
+            assert_eq!(store.case(case_key()).unwrap().unwrap().state_revision, 3);
+            assert_eq!(store.run_count().unwrap(), 0);
+        }
+        let collected =
+            reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 105, 30, true)
+                .unwrap();
+        if intervening_event == "REVIEW_RECORDED" {
+            assert!(matches!(collected, DirectQueueCycle::Ingested { .. }));
+            assert_eq!(store.run_count().unwrap(), 1);
+        } else {
+            assert_eq!(collected, DirectQueueCycle::Cleaned { attempt_id: 1 });
+            assert_eq!(store.run_count().unwrap(), 0);
+            assert_eq!(store.case(case_key()).unwrap().unwrap().state_revision, 3);
+        }
+        assert_eq!(store.status(105).unwrap().direct_attempts_complete, 1);
+        assert_eq!(runtime.tasks.borrow().len(), 1);
+    }
 }
 
 #[test]
@@ -367,7 +465,7 @@ fn shadow_reviewer_finishes_after_required_path_advances_without_changing_case_s
             &active_policy(),
             &queue,
             "controller",
-            13,
+            1_000,
             30,
             true,
         )
@@ -810,7 +908,7 @@ fn queued_builder_with(root: &std::path::Path, mutate: impl FnOnce(&mut Value)) 
             repository_id: 1_055_628_515,
             revision: policy.revision,
             accepted_at: 1,
-            payload: json!({"fixture": true}),
+            payload: serde_json::to_value(&policy).unwrap(),
         })
         .unwrap();
     store
@@ -915,7 +1013,7 @@ fn queued_shadow_review_with(root: &std::path::Path, mut effects: Vec<EffectInpu
             repository_id: 1_055_628_515,
             revision: policy.revision,
             accepted_at: 1,
-            payload: json!({"fixture": true}),
+            payload: serde_json::to_value(&policy).unwrap(),
         })
         .unwrap();
     store

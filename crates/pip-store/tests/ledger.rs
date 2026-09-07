@@ -520,6 +520,28 @@ fn webhook_deliveries_are_immutable_idempotent_intake_evidence() {
 }
 
 #[test]
+fn delayed_direct_result_retention_does_not_require_a_live_effect_lease() {
+    let (_directory, mut store) = open();
+    store.create_case(&new_case()).unwrap();
+    let claimed = store.claim_effect("worker", 100, 30).unwrap().unwrap();
+    let attempt = store.begin_direct_attempt(&claimed, "task", 101).unwrap();
+    store.release_effect(&claimed.effect_id, "worker").unwrap();
+    let before = store.case(&claimed.case_key).unwrap();
+    assert!(
+        store
+            .complete_direct_attempt(attempt, "wrong-owner", 200, &json!({"outcome":"PROCEED"}))
+            .is_err()
+    );
+    store
+        .complete_direct_attempt(attempt, "worker", 200, &json!({"outcome":"PROCEED"}))
+        .unwrap();
+    assert_eq!(store.case(&claimed.case_key).unwrap(), before);
+    assert_eq!(store.run_count().unwrap(), 0);
+    assert_eq!(store.status(200).unwrap().outbox_pending, 1);
+    assert_eq!(store.status(200).unwrap().direct_attempts_complete, 1);
+}
+
+#[test]
 fn direct_attempts_preserve_terminal_results_and_audit_history() {
     let (directory, mut store) = open();
     store.create_case(&new_case()).unwrap();

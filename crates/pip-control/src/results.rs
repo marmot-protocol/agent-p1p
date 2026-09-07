@@ -6,7 +6,7 @@ use std::time::Duration;
 use pip_contracts::{CaseIdentity, ReviewMode, WorkerBinding, WorkerResult, WorkerRole};
 use pip_controller::{IngestError, IngestResult, ingest_worker_result_with_policy};
 use pip_hermes::{CommandRunner, HermesError, HermesReader, ProcessRunner, TaskCreateSpec};
-use pip_store::{Store, StoreError};
+use pip_store::{Store, StoreError, StoredCase};
 use serde::Serialize;
 
 use crate::RepositoryPolicy;
@@ -132,26 +132,15 @@ pub fn reconcile_completed_once_with<R: CommandRunner>(
             .ok_or(ResultCycleError::InvalidProjection)?;
         if advance {
             let frozen_revision = number(desired_body, "state_revision")?;
-            // A peer result advances the ledger revision, not the review
-            // generation. Retries, replans and new CI still fence old jobs.
-            let peer_reviews_only = case.state == "REVIEWING"
-                && frozen_revision < case.state_revision
-                && matches!(
+            if !current_job_generation(
+                store,
+                &case,
+                frozen_revision,
+                matches!(
                     desired_body.get("role").and_then(|value| value.as_str()),
                     Some("reviewer-general" | "reviewer-secperf")
-                )
-                && store
-                    .immutable_history_for_case(case_key)?
-                    .events
-                    .iter()
-                    .filter(|event| event.state_revision > frozen_revision)
-                    .all(|event| event.event_type == "REVIEW_RECORDED");
-            if (case.state_revision != frozen_revision && !peer_reviews_only)
-                || matches!(
-                    case.state.as_str(),
-                    "ESCALATED" | "BLOCKED" | "ABANDONED" | "COMPLETED" | "TAKEN_OVER"
-                )
-            {
+                ),
+            )? {
                 continue;
             }
         }
@@ -278,6 +267,32 @@ pub fn reconcile_completed_once_with<R: CommandRunner>(
         });
     }
     Ok(ResultCycle::Idle)
+}
+
+/// A peer review advances the ledger revision, not the job generation. Shared
+/// by both adapters so retries and same-head replans fence their results alike.
+pub(crate) fn current_job_generation(
+    store: &Store,
+    case: &StoredCase,
+    frozen_revision: u64,
+    reviewer: bool,
+) -> Result<bool, StoreError> {
+    if matches!(
+        case.state.as_str(),
+        "ESCALATED" | "BLOCKED" | "ABANDONED" | "COMPLETED" | "TAKEN_OVER"
+    ) {
+        return Ok(false);
+    }
+    Ok(case.state_revision == frozen_revision
+        || (reviewer
+            && case.state == "REVIEWING"
+            && frozen_revision < case.state_revision
+            && store
+                .immutable_history_for_case(&case.case_key)?
+                .events
+                .iter()
+                .filter(|event| event.state_revision > frozen_revision)
+                .all(|event| event.event_type == "REVIEW_RECORDED")))
 }
 
 fn validate_projection(

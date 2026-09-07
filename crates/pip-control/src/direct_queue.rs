@@ -239,7 +239,7 @@ pub fn reconcile_direct_queue_once(
     let case = store
         .case(&claimed.case_key)?
         .ok_or(DirectQueueError::InvalidEnvelope)?;
-    let validation_case = validation_case(&claimed, &case, &task)?;
+    let validation_case = validation_case(&claimed, &case, &task, false)?;
     validate_job(&claimed, &validation_case, &task, policy)
         .map_err(|_| DirectQueueError::InvalidEnvelope)?;
     let attempt_id = store.begin_direct_attempt(&claimed, &task.task_id, now)?;
@@ -356,8 +356,14 @@ fn ingest_result(
     let case = store
         .case(&attempt.case_key)?
         .ok_or(DirectQueueError::InvalidEnvelope)?;
-    let validation_case = validation_case(&work.claimed, &case, &work.task)?;
-    let binding = validate_job(&work.claimed, &validation_case, &work.task, policy)
+    // Retention validates the frozen job, not the current case revision or
+    // today's profile settings. Workflow acceptance is separately fenced below.
+    let validation_case = validation_case(&work.claimed, &case, &work.task, true)?;
+    let saved_policy = crate::load_repository_policy(
+        &serde_json::to_vec(&store.accepted_policy(case.repository_id, case.policy_revision)?)
+            .map_err(serialization)?,
+    )?;
+    let binding = validate_job(&work.claimed, &validation_case, &work.task, &saved_policy)
         .map_err(|_| DirectQueueError::InvalidEnvelope)?;
     let unavailable = matches!(envelope, ResultEnvelope::Unavailable { .. });
     match envelope {
@@ -427,6 +433,21 @@ fn ingest_result(
             if !advance {
                 return Ok(DirectQueueCycle::Retained { attempt_id });
             }
+            if work.claimed.effect_type == "RUN_DIRECT_WORKER"
+                && !crate::results::current_job_generation(
+                    store,
+                    &case,
+                    work.claimed.state_revision,
+                    matches!(
+                        binding.role,
+                        pip_contracts::WorkerRole::ReviewerGeneral
+                            | pip_contracts::WorkerRole::ReviewerSecperf
+                    ),
+                )?
+            {
+                queue.archive(attempt_id)?;
+                return Ok(DirectQueueCycle::Cleaned { attempt_id });
+            }
             if matches!(
                 binding.review_mode,
                 Some(ReviewMode::Advisory | ReviewMode::Shadow)
@@ -488,8 +509,9 @@ fn validation_case(
     claimed: &ClaimedEffect,
     current: &StoredCase,
     task: &DirectTaskSpec,
+    frozen: bool,
 ) -> Result<StoredCase, DirectQueueError> {
-    if claimed.effect_type != "RUN_DIRECT_OBSERVER" {
+    if !frozen && claimed.effect_type != "RUN_DIRECT_OBSERVER" {
         return Ok(current.clone());
     }
     let body = task

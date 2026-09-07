@@ -1495,13 +1495,16 @@ impl Store {
                 id: observation.observation_id.clone(),
             });
         }
+        // Recording an observation does not execute work or publish to GitHub.
+        // Permit delayed collection while fencing replacement owners and
+        // revocation; expiry alone must not discard a completed comparison.
         let lease_valid: bool = transaction.query_row(
             "SELECT EXISTS(
                 SELECT 1 FROM outbox
                 WHERE effect_id = ?1 AND delivered_at IS NULL AND superseded_at IS NULL
-                  AND lease_owner = ?2 AND lease_until >= ?3
+                  AND lease_owner = ?2
             )",
-            params![effect_id, owner, sql_u64(now)?],
+            params![effect_id, owner],
             |row| row.get(0),
         )?;
         if !lease_valid {
@@ -1532,7 +1535,7 @@ impl Store {
         )?;
         let updated = transaction.execute(
             "UPDATE outbox SET delivered_at = ?1, lease_owner = NULL, lease_until = NULL
-             WHERE effect_id = ?2 AND lease_owner = ?3 AND lease_until >= ?1
+             WHERE effect_id = ?2 AND lease_owner = ?3
                AND delivered_at IS NULL AND superseded_at IS NULL",
             params![sql_u64(now)?, effect_id, owner],
         )?;
@@ -2006,18 +2009,15 @@ impl Store {
         if result_json.len() > 4 * 1024 * 1024 {
             return Err(StoreError::InvalidInput("direct result is too large"));
         }
+        // Completion preserves an observed attempt result; it does not deliver
+        // the effect or accept a workflow decision. A pause or peer transition
+        // may have expired/superseded the effect while this worker was running.
         let updated = self.connection.execute(
             "UPDATE direct_attempts
              SET completed_at = ?1, status = 'COMPLETE', result_json = ?2,
                  result_sha256 = ?3
              WHERE attempt_id = ?4 AND lease_owner = ?5 AND status = 'RUNNING'
-               AND started_at <= ?1 AND lease_until >= ?1
-               AND EXISTS(
-                   SELECT 1 FROM outbox o
-                   WHERE o.effect_id = direct_attempts.effect_id
-                     AND o.lease_owner = ?5 AND o.lease_until >= ?1
-                     AND o.delivered_at IS NULL AND o.superseded_at IS NULL
-               )",
+               AND started_at <= ?1",
             params![
                 sql_u64(completed_at)?,
                 result_json,
