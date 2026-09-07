@@ -393,6 +393,11 @@ impl WorkerResult {
                 None,
             ),
         };
+        // PR/head are reviewed outputs only for review roles. For planning
+        // and building they describe incoming context: remediation must be
+        // allowed to produce a different commit, and neither result contract
+        // owns the PR number. Publication validates that new commit separately.
+        let reviewed_output = matches!(self, Self::Review(_) | Self::Final(_));
         let matches = common.case == binding.case
             && common.task_id == binding.task_id
             && common.role == binding.role
@@ -401,13 +406,14 @@ impl WorkerResult {
             && common.requested_model == binding.requested_model
             && common.skills_repository_commit == binding.skills_repository_commit
             && plan_version == binding.plan_version
-            && binding
-                .pr_number
-                .is_none_or(|expected| pr_number == Some(expected))
-            && binding
-                .expected_head_sha
-                .as_deref()
-                .is_none_or(|expected| head_sha == Some(expected));
+            && (!reviewed_output
+                || (binding
+                    .pr_number
+                    .is_none_or(|expected| pr_number == Some(expected))
+                    && binding
+                        .expected_head_sha
+                        .as_deref()
+                        .is_none_or(|expected| head_sha == Some(expected))));
         if matches {
             Ok(())
         } else {

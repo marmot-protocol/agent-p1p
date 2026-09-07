@@ -64,6 +64,36 @@ fn unknown_fields_are_rejected_by_deserialization() {
 }
 
 #[test]
+fn planning_and_building_bind_the_job_not_the_previous_pr_output() {
+    for index in [0, 1] {
+        let result: WorkerResult =
+            serde_json::from_value(fixture()["results"][index].clone()).unwrap();
+        let common = result.common();
+        let binding = WorkerBinding {
+            case: common.case.clone(),
+            task_id: common.task_id.clone(),
+            role: common.role,
+            reviewer_id: None,
+            review_mode: None,
+            requested_model: common.requested_model.clone(),
+            skills_repository_commit: common.skills_repository_commit.clone(),
+            plan_version: 1,
+            pr_number: Some(77),
+            expected_head_sha: Some("c".repeat(40)),
+        };
+        result.validate_binding(&binding).unwrap();
+        let wrong_job = WorkerBinding {
+            task_id: "another-job".into(),
+            ..binding
+        };
+        assert_eq!(
+            result.validate_binding(&wrong_job),
+            Err(ContractError::BindingMismatch)
+        );
+    }
+}
+
+#[test]
 fn immutable_worker_binding_covers_case_task_role_plan_model_pr_and_head() {
     let value = fixture()["results"][3].clone();
     let result: WorkerResult = serde_json::from_value(value).unwrap();
