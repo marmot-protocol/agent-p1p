@@ -473,44 +473,45 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
         })
         .transpose()?
         .map_or_else(current_time, Ok)?;
-    if global_paused || policy.intake.paused || !policy.dispatch_enabled {
-        // Collection needs no GitHub credentials or model invocation. One
-        // unavailable adapter must not strand the other adapter's completion.
-        // A never-bootstrapped inert installation still creates no database.
-        let database = Path::new(required(&options, "--database")?);
-        let (direct_worker, worker_result) = if database
-            .try_exists()
-            .map_err(|error| CliError::Filesystem(error.to_string()))?
-        {
-            let mut store =
-                Store::open(database).map_err(|error| CliError::Ledger(error.to_string()))?;
-            let direct_worker = cycle_observation((|| {
-                let queue = crate::DirectQueue::new(required(&options, "--direct-queue")?)
-                    .map_err(|error| CliError::Reconciliation(error.to_string()))?;
-                crate::reconcile_direct_queue_once(
-                    &mut store,
-                    &policy,
-                    &queue,
-                    required(&options, "--owner")?,
-                    now,
-                    1,
-                    false,
-                )
-                .map_err(|error| CliError::Reconciliation(error.to_string()))
-            })());
-            let worker_result = cycle_observation(crate::reconcile_completed_once_with(
+    // Collection always precedes external dependencies, even when active:
+    // a GitHub outage must not strand a finished model result. This phase
+    // neither advances cases nor dispatches. A never-bootstrapped inert
+    // installation still creates no database.
+    let database = Path::new(required(&options, "--database")?);
+    let (direct_worker, worker_result) = if database
+        .try_exists()
+        .map_err(|error| CliError::Filesystem(error.to_string()))?
+    {
+        let mut store =
+            Store::open(database).map_err(|error| CliError::Ledger(error.to_string()))?;
+        let direct_worker = cycle_observation((|| {
+            let queue = crate::DirectQueue::new(required(&options, "--direct-queue")?)
+                .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+            crate::reconcile_direct_queue_once(
                 &mut store,
                 &policy,
-                pip_hermes::ProcessRunner::default(),
-                required(&options, "--hermes")?,
+                &queue,
+                required(&options, "--owner")?,
                 now,
+                1,
                 false,
-            ));
-            (direct_worker, worker_result)
-        } else {
-            let absent = json!({"result":"not_initialized"});
-            (absent.clone(), absent)
-        };
+            )
+            .map_err(|error| CliError::Reconciliation(error.to_string()))
+        })());
+        let worker_result = cycle_observation(crate::reconcile_completed_once_with(
+            &mut store,
+            &policy,
+            pip_hermes::ProcessRunner::default(),
+            required(&options, "--hermes")?,
+            now,
+            false,
+        ));
+        (direct_worker, worker_result)
+    } else {
+        let absent = json!({"result":"not_initialized"});
+        (absent.clone(), absent)
+    };
+    if global_paused || policy.intake.paused || !policy.dispatch_enabled {
         return Ok(json!({
             "ok": direct_worker["result"] != "error" && worker_result["result"] != "error",
             "result": "disabled",
@@ -520,6 +521,7 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
             "worker_result": worker_result,
         }));
     }
+    let collection = json!({"direct_worker":direct_worker,"worker_result":worker_result});
     let token = read_secret(Path::new(required(&options, "--github-token")?), 1024)?;
     let token = std::str::from_utf8(&token)
         .map_err(|_| CliError::InvalidArgument("--github-token".into()))?
@@ -701,8 +703,9 @@ fn controller_cycle(arguments: &[String]) -> Result<Value, CliError> {
     )
     .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     Ok(json!({
-        "ok": true,
+        "ok": collection["direct_worker"]["result"] != "error" && collection["worker_result"]["result"] != "error",
         "result": "active",
+        "collection": collection,
         "observed_at": now,
         "repository": policy.repository.full_name(),
         "policy_revision": policy.revision,

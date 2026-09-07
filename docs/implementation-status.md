@@ -77,6 +77,10 @@ resume are proven above. One shared generation check accepts peer-only review
 progress while fencing new CI, retries and terminal dispositions. Shadow Opus
 was recorded as a comparison after the required lane advanced. Active-cycle
 failure isolation and full saved-policy execution compatibility remain incomplete.
+The next change moves that credential-free collection phase ahead of GitHub
+dependencies even during active operation. A real CLI regression with missing
+GitHub credentials proves completed direct work is retained without advancing
+the case; it still requires signed deployment and live verification.
 
 Cursor now approves verification commands noninteractively, with an unchanged
 checkout postcondition and the credential-isolating service sandbox. This is

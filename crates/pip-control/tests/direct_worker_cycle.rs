@@ -198,6 +198,15 @@ fn required_review_is_retained_under_changed_policy_and_accepted_after_peer_only
 
 #[test]
 fn paused_queue_retains_valid_completed_work_without_advancing_or_rerunning_it() {
+    collection_precedes_external_dependencies(true);
+}
+
+#[test]
+fn active_queue_retains_completed_work_before_missing_github_credentials_fail() {
+    collection_precedes_external_dependencies(false);
+}
+
+fn collection_precedes_external_dependencies(paused: bool) {
     let directory = tempfile::tempdir().unwrap();
     let mut store = queued_builder(directory.path());
     let queue = queue(directory.path());
@@ -207,11 +216,15 @@ fn paused_queue_retains_valid_completed_work_without_advancing_or_rerunning_it()
     execute_direct_queue_once(&runtime, &queue, 101).unwrap();
     let case_before = store.case(case_key()).unwrap();
     for now in [102, 103] {
-        let mut paused = policy.clone();
-        paused.intake.paused = true;
-        paused.dispatch_enabled = false;
+        let mut operational_policy = policy.clone();
+        operational_policy.intake.paused = paused;
+        operational_policy.dispatch_enabled = !paused;
         let policy_path = directory.path().join("policy.json");
-        std::fs::write(&policy_path, serde_json::to_vec(&paused).unwrap()).unwrap();
+        std::fs::write(
+            &policy_path,
+            serde_json::to_vec(&operational_policy).unwrap(),
+        )
+        .unwrap();
         let mut args = vec!["controller-cycle".to_owned()];
         for (name, value) in [
             ("--policy", policy_path.to_str().unwrap().to_owned()),
@@ -238,8 +251,15 @@ fn paused_queue_retains_valid_completed_work_without_advancing_or_rerunning_it()
         ] {
             args.extend([name.into(), value]);
         }
-        let report = pip_control::run_cli(args).unwrap();
-        assert_eq!(report["result"], "disabled");
+        let report = pip_control::run_cli(args);
+        if paused {
+            assert_eq!(report.unwrap()["result"], "disabled");
+        } else {
+            assert!(
+                report.is_err(),
+                "active authorization still needs GitHub credentials"
+            );
+        }
         assert_eq!(store.status(now).unwrap().direct_attempts_complete, 1);
         assert_eq!(store.run_count().unwrap(), 0);
         assert_eq!(store.case(case_key()).unwrap(), case_before);
