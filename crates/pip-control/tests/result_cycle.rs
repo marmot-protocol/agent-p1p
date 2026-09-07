@@ -282,6 +282,25 @@ fn late_completion_after_revocation_takeover_or_replan_cannot_advance_the_case()
         let before = store.status(10).unwrap();
         let runner = FakeRunner::default();
         runner.json(completed_planner("planner", planner_result()));
+        assert_eq!(
+            pip_control::reconcile_completed_once_with(
+                &mut store,
+                &active_policy(),
+                runner.clone(),
+                "hermes",
+                10,
+                false,
+            )
+            .unwrap(),
+            ResultCycle::Retained {
+                task_id: "planner-1".into()
+            },
+            "late evidence is retained without reauthorizing {state}",
+        );
+        assert_eq!(store.status(10).unwrap().cases, before.cases);
+        assert_eq!(store.status(10).unwrap().events, before.events);
+        let before = store.status(10).unwrap();
+        runner.json(completed_planner("planner", planner_result()));
         let mut migrated = active_policy();
         migrated.revision += 1;
         migrated.roles[0].model = "model-after-migration".into();

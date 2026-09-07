@@ -22,7 +22,10 @@ installation:
   at that exact head. Its required GitHub CI passed. Full status-history parsing
   was corrected without discarding historical failures; the controller accepted
   CI and transitioned to `REVIEWING`, dispatching one native and two direct
-  reviewer jobs. Required reviews and final readiness are not proven yet.
+  reviewer jobs. Cursor attempt 10 then stopped at its noninteractive workspace
+  trust prompt, before a review result. The aggregate failure bound escalated
+  the case. Controller/direct timers were stopped; the native general review
+  was left running. Required reviews and final readiness are not proven yet.
 - #891, #1228 and #1639 are abandoned with history retained.
 - Hermes remains the upstream installation; Pip has not introduced a fork.
   Conversational Hermes is separate and must not be interrupted.
@@ -75,6 +78,10 @@ behavior using the existing immutable evidence table, not another workflow
 database. A broken direct queue does not prevent native collection while paused.
 Native collection is not yet deployed. Active-cycle/cross-case failure isolation
 and saved-policy compatibility still need work; not all pause semantics are done.
+Collection also retains late completions from held/superseded work as evidence
+without advancing those cases. Cursor now requests `--trust` for the assigned
+workspace without adding `--force` to reviewers. These follow-up changes have
+focused regression and Clippy coverage, not live reviewer completion proof.
 
 New managed Hermes tasks and direct Cursor prompts now reference a retained
 SHA-256-bound evidence file instead of embedding the full history. Saved older

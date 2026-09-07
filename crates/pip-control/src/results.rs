@@ -130,11 +130,12 @@ pub fn reconcile_completed_once_with<R: CommandRunner>(
         let case = store
             .case(case_key)?
             .ok_or(ResultCycleError::InvalidProjection)?;
-        if case.state_revision != number(desired_body, "state_revision")?
-            || matches!(
-                case.state.as_str(),
-                "ESCALATED" | "BLOCKED" | "ABANDONED" | "COMPLETED" | "TAKEN_OVER"
-            )
+        if advance
+            && (case.state_revision != number(desired_body, "state_revision")?
+                || matches!(
+                    case.state.as_str(),
+                    "ESCALATED" | "BLOCKED" | "ABANDONED" | "COMPLETED" | "TAKEN_OVER"
+                ))
         {
             continue;
         }

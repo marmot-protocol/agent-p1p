@@ -205,7 +205,9 @@ impl<R: ProcessRunner> CursorExecutor<R> {
         }
         write_artifact(artifact_dir, "prompt.md", prompt.as_bytes())?;
 
-        let mut args = vec!["--print".into()];
+        // The controller already selected this isolated workspace. A review
+        // needs noninteractive workspace trust, not blanket command approval.
+        let mut args = vec!["--print".into(), "--trust".into()];
         if task.binding.role == WorkerRole::Builder {
             args.push("--force".into());
         }

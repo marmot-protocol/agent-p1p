@@ -346,6 +346,7 @@ fn reviewer_has_no_force_and_any_worktree_mutation_is_rejected() {
     ));
     let agent = &runner.commands.borrow()[2];
     assert!(!agent.args.iter().any(|arg| arg == "--force"));
+    assert!(agent.args.iter().any(|arg| arg == "--trust"));
     assert_eq!(
         serde_json::from_str::<Value>(
             &fs::read_to_string(artifacts.join("run-status.json")).unwrap()
