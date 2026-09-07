@@ -5,25 +5,29 @@ live proof. The target is [the lean architecture](pip-architecture-plan.md).
 
 ## Latest verified live state
 
-Pirate runs signed `2efc26539f0662dbbd0c79c4a64f068b66fd5004`, verified by
-CI `34091529650` and deployment `34091529622`, including Linux lifecycle tests.
+Pirate runs signed `e40d011309805642b98acdc199a182dddc13968f`, verified by
+CI `34095706554` and deployment `34095706582`, including Linux lifecycle tests.
 Installation preserved the stopped ledger and paused policy byte-for-byte.
 
 - #993 is the sole labeled canary, with accepted plan 1 and builder attempt 9.
   Draft [MDK #1726](https://github.com/marmot-protocol/mdk/pull/1726) remains at
   `05070de3ef5e151bba702f85fd4c9e510f7e0df4`, with required GitHub CI green.
 - The supported review retry preserved the build, five case-local failed
-  attempts and prior escalation. Fresh same-head CI now retains a separate
-  observation and advanced the case to `REVIEWING` revision 14.
+  attempts and prior escalation. Fresh same-head CI retained a separate
+  observation and dispatched the review generation at revision 14.
 - Paused collection retained completed general review `t_6b15c1cd` in the
   ledger without a case transition; repeat collection was an idempotent no-op.
   That old-generation result is evidence, not an accepted current review. It
   found unsanitized daemon error writers; its root-only recovery copy remains.
-- After restoring active policy 7, general task `t_9bb53a26` started in upstream
-  Hermes with the short scratch layout. Cursor is executing required Kimi
-  attempt 11 with `--trust`; shadow attempt 12 is queued behind it. Ledger
-  `RUNNING` means leased, not necessarily an executing provider process.
-  Required review completion, remediation and final readiness remain unproven.
+- General task `t_9bb53a26` was accepted as `REQUEST_CHANGES`. Required Kimi
+  attempt 11 and shadow Opus attempt 12 completed; both disclosed denied
+  verification commands. The new release retained both while paused without
+  advancing the case. Resume accepted Kimi after the general review's revision.
+- GitHub reviews `5129269820` (general, changes requested) and `5129270044`
+  (security/performance, approved) are published on that exact head under the
+  separate App identities. Both include reported verification and limitations.
+  The case advanced to `REMEDIATING` revision 17; builder attempt 13 is executing.
+  A remediated head, fresh required reviews and final readiness remain unproven.
 - #891, #1228 and #1639 are abandoned with history retained.
 - Hermes remains the upstream installation; Pip has not introduced a fork.
   Conversational Hermes was untouched. Pip execution timers and ingress are active.
@@ -66,60 +70,37 @@ coverage. They do not by themselves establish end-to-end success.
 
 ## Result compatibility and remaining work
 
-Direct result collection is deployed separately from workflow advancement.
-The paused controller can retain an exactly bound completed result without
-credentials, publication, a new task, or a case transition. Resume accepts the
-saved result without rerunning the provider. Tests cover restart, expired
-dispatch lease after retention, malformed bindings, failures and queue traversal.
-Native Hermes collection now has local coverage for the same pause/restart
-behavior using the existing immutable evidence table, not another workflow
-database. A broken direct queue does not prevent native collection while paused.
-Historical-policy collection is deployed and proven on the retained live review.
-Active-cycle/cross-case failure isolation and saved-policy execution compatibility
-still need work; not all pause semantics are done.
-Collection also retains late completions from held/superseded work as evidence
-without advancing those cases. The live general reviewer returned an accepted
-`REQUEST_CHANGES` on PR #1726 head `05070de3`. Both Cursor executions completed,
-but their reports disclosed denied verification commands. Their queue results
-remain preserved on disk; installed collection rejected the required result
-after the general reviewer advanced the case revision. The runtime is paused.
+Both adapters separate result retention from workflow advancement. Paused
+collection uses accepted policy, retains late results without live effect leases,
+and does not publish or dispatch. Live native and direct retention and direct
+resume are proven above. One shared generation check accepts peer-only review
+progress while fencing new CI, retries and terminal dispositions. Shadow Opus
+was recorded as a comparison after the required lane advanced. Active-cycle
+failure isolation and full saved-policy execution compatibility remain incomplete.
 
-Follow-up regression coverage separates direct-result retention from live
-effect leases and shares the native/direct generation check: peer-only reviews
-may advance, but new CI, retries and terminal dispositions fence old results.
-Retention uses accepted policy rather than today's changed model configuration.
-Cursor review commands now receive noninteractive approval, with an unchanged
-checkout postcondition and the existing credential-isolating service sandbox;
-this is not an OS-enforced read-only source mount. Evidence files support
-bounded line reads. Published reviews retain each reviewer's suggestions and
-reported verification/limitations instead of only the verdict. These fixes
-await signed deployment and live proof.
+Cursor now approves verification commands noninteractively, with an unchanged
+checkout postcondition and the credential-isolating service sandbox. This is
+not an OS-enforced read-only source mount. The next review round must prove
+real command execution; old reports are not retroactively upgraded. Published
+reviews now expose suggestions and reviewer-reported evidence and limitations.
 
-Review-start recovery now shares the existing bounded root/offline recovery
-path: `authorize-review-retry` preserves the accepted PR/head/build and creates
-fresh CI observation, not a builder rerun or approval. Short scratch schema-2
-paths now pass a real Unix-socket allocation test while old schema-1 paths stay
-unchanged. These changes have local Rust/Clippy and signed Linux lifecycle
-coverage and are installed. The recovery and fresh same-head CI succeeded on #993.
-Native result ingestion now also accepts a reviewer after peer-only
-`REVIEW_RECORDED` revisions. A regression joins both real-shaped review
-contracts through final-review state; intervening CI/retry generations still
-fence older work. This ordering fix is installed but still awaits live proof.
+Review retry shares the bounded root/offline recovery path and preserves the
+accepted PR/head/build. Queue backpressure admits one serial handoff at a time;
+tests cover restart, expired handoffs and recovery without duplicate execution.
+Both are installed. A subsequent local regression makes required jobs take
+priority over pending comparisons regardless of effect ID. An already-running
+comparison can still occupy the serial worker; that isolation remains unfinished.
+Ordinary pause/resume must stop requiring policy-copy commands.
 
-Local queue backpressure now keeps only one outstanding handoff for the serial
-Cursor service, rather than starting leases for jobs waiting behind it. Existing
-multi-job queues still drain; an expired uncertain handoff cannot be replaced.
-Regression tests cover restart, blocked admission, lease expiry and resumption
-after reconciliation. This follow-up is not installed on the running reviewers.
+New native scratch schema 3 reserves space for MDK's private Unix-socket staging
+path; schemas 1 and 2 remain readable without rewriting existing task storage.
+Local socket/retirement tests, a real MDK socket probe and signed Linux gates
+pass. The next native review must prove the new layout in its actual sandbox.
 
-New managed Hermes tasks and direct Cursor prompts now reference a retained
-SHA-256-bound evidence file instead of embedding the full history. Saved older
-Hermes projections keep their original body. Tests cover 200 KB histories with
-sub-4 KB transport/prompt fixtures, exact artifact bytes, replay, drift, unsafe
-paths and secret rejection. Role guides describe selective evidence reading;
-model choices live in the task binding rather than duplicated skill prose.
-This compact-input boundary is deployed and has dispatched the first real
-reviewer set; completion compatibility is not yet proven.
+Jobs reference a retained SHA-256-bound evidence file; new Cursor files support
+bounded line reads. Existing jobs keep their artifact bytes and references.
+Transport tests cover large histories and drift, but job definitions still
+duplicate full history. Compact role-specific inputs remain a completion gate.
 
 ## Remaining completion gates
 
@@ -127,7 +108,7 @@ reviewer set; completion compatibility is not yet proven.
    reviews, remediation where needed, and final human-ready disposition.
 2. Finish capability/case failure isolation and safe result collection during
    pause; extend confirmed-non-start classification where still missing.
-   Prove native peer-review ordering through the live adapters, not only tests.
+   Extend live peer-review ordering proof to the reverse completion order.
 3. Preserve saved job settings/skills through execution and acceptance across
    upgrades. Apply pause/revocation immediately without rewriting old jobs.
 4. Replace growing full-history prompts with compact role-specific inputs and

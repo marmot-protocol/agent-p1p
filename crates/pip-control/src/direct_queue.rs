@@ -225,13 +225,15 @@ pub fn reconcile_direct_queue_once(
     if !queue_files(&queue.inbox)?.is_empty() {
         return Ok(DirectQueueCycle::Idle);
     }
-    let Some(claimed) = store.claim_effect_matching(
-        owner,
-        now,
-        lease_seconds,
-        &["RUN_DIRECT_WORKER", "RUN_DIRECT_OBSERVER"],
-    )?
-    else {
+    // Comparisons use spare queue capacity, never priority over required work.
+    let claimed =
+        match store.claim_effect_matching(owner, now, lease_seconds, &["RUN_DIRECT_WORKER"])? {
+            Some(claimed) => Some(claimed),
+            None => {
+                store.claim_effect_matching(owner, now, lease_seconds, &["RUN_DIRECT_OBSERVER"])?
+            }
+        };
+    let Some(claimed) = claimed else {
         return Ok(DirectQueueCycle::Idle);
     };
     let task: DirectTaskSpec = serde_json::from_value(claimed.payload.clone())

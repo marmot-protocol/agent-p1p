@@ -38,22 +38,29 @@ impl DirectWorkerRuntime for FakeRuntime {
 #[test]
 fn serial_worker_leases_only_one_job_until_its_handoff_is_reconciled() {
     let directory = tempfile::tempdir().unwrap();
-    let required = required_review_task();
+    let mut required = required_review_task();
+    // The observer sorts first by effect ID; queue age/identity must not
+    // override the required-vs-comparison scheduling class.
+    required.source_effect_id = "zzz-dispatch-reviewers".into();
+    let expected_task = required.task_id.clone();
     let mut store = queued_shadow_review_with(
         directory.path(),
         vec![EffectInput {
-            effect_id: "effect-dispatch-reviewers:direct:secperf-kimi".into(),
+            effect_id: "zzz-dispatch-reviewers:direct:secperf-kimi".into(),
             effect_type: "RUN_DIRECT_WORKER".into(),
             payload: serde_json::to_value(required).unwrap(),
         }],
     );
     let queue = queue(directory.path());
     let policy = active_policy();
-    assert!(matches!(
+    assert_eq!(
         reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 100, 30, true,)
             .unwrap(),
-        DirectQueueCycle::Prepared { attempt_id: 1, .. }
-    ));
+        DirectQueueCycle::Prepared {
+            attempt_id: 1,
+            task_id: expected_task
+        }
+    );
     drop(store);
     let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
     for now in [101, 132] {
