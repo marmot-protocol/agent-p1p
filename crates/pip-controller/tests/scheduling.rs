@@ -133,10 +133,11 @@ fn hermes_storage_is_projection_scoped_and_direct_tasks_are_unchanged() {
     let task = planner[0].hermes_task().unwrap();
     let storage = &task.body["storage"];
     assert_eq!(task.body["projection_key"], task.projection_key);
-    assert_eq!(storage["schema_version"], 1);
+    assert_eq!(storage["schema_version"], 2);
     let root = storage["root"].as_str().unwrap();
     assert!(root.starts_with("/var/lib/pip/worktrees/hermes-scratch/"));
-    assert_eq!(root.rsplit('/').next().unwrap().len(), 64);
+    assert_eq!(root.rsplit('/').next().unwrap().len(), 16);
+    assert!(storage["temporary"].as_str().unwrap().len() <= 72);
     assert_eq!(storage["cargo_target"], format!("{root}/disposable/target"));
     assert_eq!(storage["results"], format!("{root}/results"));
     assert_eq!(

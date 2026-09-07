@@ -90,7 +90,7 @@ Sensitive categories are `CRYPTOGRAPHY`, `MLS_CGKA`, `KEY_HANDLING`,
 `TRUST_ANCHOR`, `MEMBERSHIP_AUTHORIZATION`, `ADMIN_AUTHORIZATION`, and
 `PUSH_PAYLOAD_CONTEXT`.
 
-Tasks with `storage` schema 1 also require the full plan in
+Tasks with `storage` schema 1 or 2 also require the full plan in
 `evidence.plan_markdown`: nonempty UTF-8 text, at most 16 KiB. This is the
 digest-bound handoff to direct workers that cannot read private Hermes files.
 Keep a retained file copy under `storage.results`; do not rely on its path as

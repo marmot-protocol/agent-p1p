@@ -147,12 +147,22 @@ fn bindings(
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect();
-    let root = configured.join(hash);
+    let version = body["storage"]["schema_version"]
+        .as_u64()
+        .ok_or("missing scratch layout")?;
+    let root = configured.join(match version {
+        1 => hash.as_str(),
+        2 => &hash[..16],
+        _ => return Err("unsupported scratch layout".into()),
+    });
+    if version == 2 && root.join("disposable/tmp").as_os_str().len() > 72 {
+        return Err("scratch TMPDIR leaves insufficient Unix socket path space".into());
+    }
     let source = format!(
         "{}/repo-{}-issue-{}-workflow-{}",
         policy.workspace, case.repository_id, case.issue_number, case.workflow_version
     );
-    let expected = json!({"schema_version":1,"root":root,"source":source,
+    let expected = json!({"schema_version":version,"root":root,"source":source,
         "cargo_target":root.join("disposable/target"),"cargo_home":root.join("disposable/cargo-home"),
         "temporary":root.join("disposable/tmp"),"results":root.join("results")});
     if body["storage"] != expected {

@@ -1,16 +1,25 @@
 # Hermes build storage and offline retirement
 
 The controller keeps source read-only and assigns each Hermes projection a
-SHA-256-named directory beneath the policy's `hermes_scratch_root`. The shipped
+digest-named directory beneath the policy's `hermes_scratch_root`. The shipped
 Linux unit permits `/var/lib/pip/worktrees/hermes-scratch`; provisioning creates
 that directory as `pip-control:pip-control` mode 0700 on the worktree mount.
 Other layouts need matching reviewed unit permissions, not a silent fallback.
 
-Task `storage` schema 1 names:
+Task `storage` schemas 1 and 2 name:
 
 - `source`: the existing case checkout, never a new Hermes worktree;
 - `cargo_target`, `cargo_home`, `temporary`: disposable build directories;
 - `results`: retained plan/review artifacts.
+
+New jobs use schema 2: a 16-hex SHA-256 prefix keeps `TMPDIR` short enough for
+ordinary Unix-domain socket tests. Allocation still checks the full projection
+identity in the ownership marker, so a prefix collision fails closed rather
+than sharing storage. New `TMPDIR` paths may not exceed 72 bytes; the configured
+scratch root must leave that room. Existing schema-1 jobs keep their original
+64-hex paths, without a move or rewrite. Both layouts share the same lifecycle.
+Workers set the assigned Cargo and temporary environment on each invocation,
+not through exports assumed to persist between terminal calls.
 
 Allocation checks ownership, canonical real directories, the workspace
 filesystem, and the policy reserve before dispatch. Existing directories need

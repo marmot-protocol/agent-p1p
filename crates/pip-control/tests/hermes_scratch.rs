@@ -82,7 +82,7 @@ fn offline_gate_inspects_unfiltered_unit_files_without_accepting_command_failure
 }
 
 fn setup(state: &str) -> (tempfile::TempDir, RepositoryPolicy, Store, Value) {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempfile::tempdir_in("/tmp").unwrap();
     let base = temp.path().canonicalize().unwrap();
     for child in ["worktrees", "scratch"] {
         fs::create_dir(base.join(child)).unwrap();
@@ -125,6 +125,36 @@ fn setup(state: &str) -> (tempfile::TempDir, RepositoryPolicy, Store, Value) {
         "storage": {"schema_version":1,"root":root,"source":format!("{}/repo-1055628515-issue-42-workflow-3",policy.workspace),
             "cargo_target":format!("{root}/disposable/target"),"cargo_home":format!("{root}/disposable/cargo-home"),"temporary":format!("{root}/disposable/tmp"),"results":format!("{root}/results")}});
     (temp, policy, store, body)
+}
+
+#[test]
+fn compact_scratch_allows_real_unix_sockets_and_preserves_legacy_layouts() {
+    use std::os::unix::net::UnixListener;
+    let (_temp, policy, store, legacy) = setup("PLANNING");
+    prepare_hermes_scratch(&policy, &store, &legacy).unwrap();
+    let old_root = legacy["storage"]["root"].as_str().unwrap();
+    let hash = old_root.rsplit('/').next().unwrap();
+    let new_root = format!(
+        "{}/{}",
+        policy.hermes_scratch_root.as_ref().unwrap(),
+        &hash[..16]
+    );
+    let mut compact = legacy.clone();
+    compact["storage"]["schema_version"] = json!(2);
+    for field in ["root", "cargo_target", "cargo_home", "temporary", "results"] {
+        compact["storage"][field] = json!(
+            legacy["storage"][field]
+                .as_str()
+                .unwrap()
+                .replacen(old_root, &new_root, 1)
+        );
+    }
+    prepare_hermes_scratch(&policy, &store, &compact).unwrap();
+    let temp = tempfile::tempdir_in(compact["storage"]["temporary"].as_str().unwrap()).unwrap();
+    let _socket = UnixListener::bind(temp.path().join("daemon.sock")).unwrap();
+    // Old frozen jobs retain their original private paths and evidence.
+    prepare_hermes_scratch(&policy, &store, &legacy).unwrap();
+    assert!(std::path::Path::new(old_root).is_dir());
 }
 
 #[test]
