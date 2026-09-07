@@ -64,3 +64,57 @@ The dedicated gateway and three execution timers were resumed. Changed trigger
 timestamps and finite next firings were verified for all three timers. All observed
 oneshot results are successful. Conversational Hermes stayed active and was
 not reconfigured. Do not restore the pre-recovery ledger backup over new work.
+
+## Review recovery after signed-head CI
+
+The signed head's CI run `34134517302` passed. Both fresh required reviewers
+produced approvals with no blocking findings, but those outputs did not complete
+the review stage: direct attempt 17 failed while parsing Cursor's transcript,
+and the failure bound escalated the case before the native review was accepted.
+The direct result file independently passed contract validation. Ordinary Rust
+interpolation braces in preceding progress prose caused the transcript failure.
+
+- `1d70f5c` fixes that scanner without accepting malformed or competing contracts.
+- `7700a21` makes audited retry validation resolve current frozen dispatch
+  references through the existing digest/case-checked resolver. Its regression
+  first reproduced the live rejection; tests retain wrong-role, observer,
+  deadline, root, stale-request and unchanged-history checks.
+- Installed source: `7700a21c47368e270bb736f9efc7512e44f87fcd`.
+- CI `34138052044` and signed deployment `34138051885` passed, including the
+  disposable Linux lifecycle gate. All 26 installed artifacts verified.
+- Manifest: `53f72e545f4c6db4c147e4add8b4de35a6e8ec809b5b562bfbd7230b81557109`.
+- Binary: `043d3cc6b9fa26e1f6972fbb2d47744fef40cd622e7c62c4574c482405329fac`.
+- Root-only backup: `/var/backups/pip-upgrade-1d70f5c.RSlDas`.
+- Both installations preserved the logical ledger dump hash
+  `5f6053c91839c018bf92dbc60e3ed3d6f977b96558859598bf656c5699398fbb`.
+
+With execution stopped and policy inert, the existing `authorize-review-retry`
+accepted request `operator-review-retry-993-parser-20260907` at revision 30,
+with seven case-specific failed attempts. It appended one bounded retry grant;
+no old result, attempt, plan, PR head or deadline was rewritten. The exact active
+policy was restored before resuming the dedicated runtime.
+
+The controller revalidated current-head CI and moved the case to `REVIEWING`,
+revision 32. Fresh native task `t_e5efc1b2` and direct attempt 18 both completed
+with accepted approvals on the signed head. The controller published human-readable
+GitHub reviews `5133675338` (general) and `5133675731` (security/performance),
+without visible JSON evidence blocks. Structured evidence remains in Pip.
+
+The case reached `FINAL_REVIEW`, revision 35; fresh live preflight was accepted
+at revision 36. Final native task `t_71f141df` returned `READY` on the signed head,
+which the controller accepted as `SHADOW_READY`, revision 37. Optional comparison
+attempt 19 also completed with an accepted advisory approval on that same head.
+
+The controller published its [human-held readiness notification](https://github.com/marmot-protocol/mdk/pull/1726#issuecomment-5573042895).
+GitHub confirms the exact signed head, valid signature, open/draft PR, clean
+mergeability and no merge. No case effects remain pending; all three execution
+oneshots report success. SQLite integrity/foreign-key checks pass. The end-to-end
+canary is now proven through human-held readiness, not autonomous merge or full
+lean-architecture completion.
+
+At handoff all dedicated execution units remain enabled, with repeated timer
+firings and finite next runs. The separate conversational gateway is still active.
+Both temporary sudoers files (`99-pip-temporary` and the expired
+`99-pip-temporary-admin`) were moved to the root-only backup above, not destroyed.
+`visudo -c` passes and a fresh noninteractive `sudo -n true` now requires a
+password. Ordinary password-authenticated administration remains available.

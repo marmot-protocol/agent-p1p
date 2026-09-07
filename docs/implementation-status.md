@@ -8,8 +8,8 @@ experiments remain in Git history and [evidence/](evidence/).
 
 ## Live checkpoint
 
-Pirate runs `5d4fdb2c3a9d14e84d3c5444c31bdfaaa5750397`, ledger schema 10.
-CI `34133415495` and signed deployment `34133415508` passed. The latest install
+Pirate runs `7700a21c47368e270bb736f9efc7512e44f87fcd`, ledger schema 10.
+CI `34138052044` and signed deployment `34138051885` passed. The latest install
 preserved the complete logical ledger dump and active policy bytes. The dedicated
 controller, direct-worker and webhook-consumer timers are resumed, with repeated
 firings and finite next runs verified. See the
@@ -19,23 +19,18 @@ Conversational Hermes is separate and untouched; Hermes remains upstream.
 MDK #993 produced draft [PR #1726](https://github.com/marmot-protocol/mdk/pull/1726),
 currently at signed head `53ac3d8f8143ea9f186bf677f59c3a16f2632fca`.
 
-- Planning, initial build, independent reviews, remediation and re-review have
-  executed on the accepted unsigned build. Publication-only recovery retained
-  that exact tree and produced a GitHub-verified signed replacement. Last ledger
-  inspection: `WAITING_CI`, revision 28, plan 1, policy 7, remediation round 1.
-  Builder attempt 14 and its reported limitations are retained; no builder rerun.
-- Fresh CI `34134517302` is running. Earlier CI `34104104224` and App approvals
-  `5130401272` / `5130401511` bind the old unsigned head, not the new head.
-  Required reviews must run again after CI passes.
-- Native general task `t_d2cdf42a` used `openai-codex/gpt-6-astra`; its retained
-  logs showed 611 library and two sanitization tests passing. Required direct
-  attempt 15 used `cursor/kimi-k3-max`, reporting successful tests and hostile-input
-  probes. Its long-TMPDIR failure and short-path rerun remain disclosed. Shadow
-  Opus attempt 16 approved but is advisory, not an additional required vote.
-- Final holistic review has **not** started. The signed commit is verified for
-  `agent-p1p`; signatures no longer need operator setup. The PR remains open and
-  draft with fresh checks/reviews pending. No merge occurred. Reinspect actual
-  mergeability after the new head's gates complete.
+- Planning, build, remediation, exact-head CI, required re-reviews and final
+  holistic review have completed. Last ledger inspection: `SHADOW_READY`,
+  revision 37, plan 1, policy 7, remediation round 1. All historical attempts,
+  reported limitations and audited recovery events are retained.
+- Signed-head CI `34134517302` passed. Native general task `t_e5efc1b2` and Kimi
+  direct attempt 18 approved that head; App reviews `5133675338` / `5133675731`
+  publish readable summaries without JSON blobs. Advisory Opus attempt 19 also
+  approved; it is not an additional required vote.
+- Live final preflight passed, and final task `t_71f141df` returned `READY`.
+  Pip published [human-held readiness](https://github.com/marmot-protocol/mdk/pull/1726#issuecomment-5573042895).
+  GitHub reports a valid signature for `agent-p1p` and clean mergeability.
+  The PR intentionally remains draft for human disposition; no merge occurred.
 - #891, #1228 and #1639 are abandoned with history retained.
 
 Models come from validated policy: planner/general/final GPT-6 Astra, builder
@@ -63,7 +58,7 @@ thinking/high. Use exact policy/provider identifiers, never substitute models.
   migration loop, strict results, read-only case/attempt status and audited
   builder/review retries replace earlier ad hoc paths.
 
-These are partial gates, not end-to-end or complete lean-architecture acceptance.
+The canary proves end-to-end human-held readiness, not complete lean-architecture acceptance.
 JG's latest direction is to finish the working canary before further cleanup;
 the remaining architectural work is deferred, not claimed complete.
 
@@ -78,14 +73,15 @@ idle reconciliation do not prove every outage/replay path or a live provider run
 | Attempt both accepted review-lane publications independently | `240ff50` | App-outage replay; acceptance still requires both required lanes |
 | One installer unit list instead of repeated operations | `5ca4ae3` | Installed; current services resumed successfully |
 | Case-scoped finding IDs, immutable schema-9 migration | `165af50` | Pirate migration verified with all existing table data preserved |
-| One evidence bundle per frozen batch, exact job references, schema 10 | `8345aad` | Schema installed; new live dispatch remains unproven; historical rows stay unchanged |
-| Short private per-execution TMPDIR and cleanup | `a8bdb4c` | Live Cursor/provider execution |
+| One evidence bundle per frozen batch, exact job references, schema 10 | `8345aad` | New required/comparison/final dispatches accepted live; historical rows stay unchanged |
+| Short private per-execution TMPDIR and cleanup | `a8bdb4c` | Required and comparison Cursor executions completed live |
 | One authorization snapshot for decision and evidence; unrelated revocations survive an outage | `6917c81` | Installed with case-scoped advancement; live outage drill remains |
-| Human-readable plans, reviews and PR descriptions | `1676a39` | Signed publication updated the PR description; historical review comments remain unchanged |
-| Controller signing, retained source commits and exact source/published-head binding | `b326a0a` | Signed live publication verified on GitHub; fresh CI/reviews remain |
+| Human-readable plans, reviews and PR descriptions | `1676a39` | Current PR description and fresh App reviews verified live; historical comments remain unchanged |
+| Controller signing, retained source commits and exact source/published-head binding | `b326a0a` | Signed live publication, fresh CI, required reviews and final readiness verified |
 | Audited publication-only recovery of an accepted unsigned build | `36e3a66` | Exercised live without a new builder attempt; history retained |
 | Case-scoped advancement, result selection and required-work scheduling | `8ca4e74` | Healthy format-2 cycles observed; live peer-outage drill remains |
 | Optional controller credential startup | `5d4fdb2` | Linux absent/partial/full credential checks passed; installed controller published successfully; live App-outage test deferred |
+| Cursor progress braces and frozen-reference audited recovery | `1d70f5c`, `7700a21` | Regression tests and Linux lifecycle passed; bounded retry and required review accepted live |
 
 The installed controller replaces the repository-wide advancement veto with
 explicit case selection for authorization, bounds, takeover, result acceptance,
