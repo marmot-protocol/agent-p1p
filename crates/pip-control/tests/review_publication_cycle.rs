@@ -25,6 +25,48 @@ impl ReviewWriter for FixtureWriter {
 }
 
 #[test]
+fn publication_preserves_attributed_suggestions_and_verification_limits() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = review_store_with(directory.path().join("ledger.db"), false, |reviews| {
+        reviews[0]["suggestions"] = json!([{"summary":"Bound the subscription timeout", "rationale":"Avoid hanging checks"}]);
+        reviews[0]["evidence"] =
+            json!({"local_checks":["13 tests passed"], "limitations":["Full suite not run"]});
+        reviews[1]["evidence"] =
+            json!({"limitations":["Shell commands denied; source inspection only"]});
+    });
+    let general = FixtureWriter::default();
+    let secperf = FixtureWriter::default();
+    publish_reviews_once(
+        &general,
+        &secperf,
+        &active_policy(),
+        &mut store,
+        100,
+        "publisher",
+        30,
+        true,
+    )
+    .unwrap();
+    let general = &general.reviews.borrow()[0];
+    let secperf = &secperf.reviews.borrow()[0];
+    for expected in [
+        "general-sol",
+        "Bound the subscription timeout",
+        "13 tests passed",
+        "Full suite not run",
+    ] {
+        assert!(general.body.contains(expected), "missing {expected}");
+    }
+    assert!(
+        secperf
+            .body
+            .contains("Shell commands denied; source inspection only")
+    );
+    assert!(!secperf.body.contains("13 tests passed"));
+    assert_eq!(secperf.event, ReviewEvent::Approve);
+}
+
+#[test]
 fn distinct_role_identities_publish_exact_head_approvals_before_preflight() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = review_store(directory.path().join("ledger.db"), false);
@@ -180,6 +222,14 @@ fn multiple_required_instances_in_one_lane_publish_one_aggregate_lane_verdict() 
 }
 
 fn review_store(path: std::path::PathBuf, request_changes: bool) -> Store {
+    review_store_with(path, request_changes, |_| {})
+}
+
+fn review_store_with(
+    path: std::path::PathBuf,
+    request_changes: bool,
+    mutate: impl FnOnce(&mut Vec<Value>),
+) -> Store {
     let mut store = Store::open(path).unwrap();
     store
         .create_case(&NewCase {
@@ -199,6 +249,7 @@ fn review_store(path: std::path::PathBuf, request_changes: bool) -> Store {
         })
         .unwrap();
     let mut reviews = fixture_reviews();
+    mutate(&mut reviews);
     if request_changes {
         reviews[0]["outcome"] = json!("REQUEST_CHANGES");
         reviews[0]["blocking_findings"] = json!([{

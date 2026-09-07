@@ -350,8 +350,22 @@ fn publish_one<W: ReviewWriter>(
         })
         .collect::<Vec<_>>()
         .join("\n");
+    // Preserve each reviewer's own checks and limitations, including missing
+    // verification. A verdict alone must not imply tests that never ran.
+    let reports = reviews
+        .iter()
+        .map(|review| {
+            serde_json::json!({
+                "reviewer_id": review.reviewer_id,
+                "suggestions": review.suggestions,
+                "reported_evidence": review.common.evidence,
+            })
+        })
+        .collect::<Vec<_>>();
+    let reports = serde_json::to_string_pretty(&reports)
+        .map_err(|error| ReviewPublicationError::Serialization(error.to_string()))?;
     let body = format!(
-        "## Pip independent review: {role_name}\n\nOutcome: `{}`\n\nReviewed head: `{head}`\n\nRequired reviewer instances:\n{members}\n\nBlocking findings:\n```json\n{findings}\n```\n\nPip reviewer role: {role_name}",
+        "## Pip independent review: {role_name}\n\nOutcome: `{}`\n\nReviewed head: `{head}`\n\nRequired reviewer instances:\n{members}\n\nBlocking findings:\n```json\n{findings}\n```\n\nReviewer-reported suggestions, verification and limitations (not independent test attestation):\n```json\n{reports}\n```\n\nPip reviewer role: {role_name}",
         match event {
             ReviewEvent::Approve => "APPROVE",
             ReviewEvent::RequestChanges => "REQUEST_CHANGES",

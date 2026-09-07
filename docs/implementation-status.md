@@ -78,9 +78,22 @@ Historical-policy collection is deployed and proven on the retained live review.
 Active-cycle/cross-case failure isolation and saved-policy execution compatibility
 still need work; not all pause semantics are done.
 Collection also retains late completions from held/superseded work as evidence
-without advancing those cases. Cursor now requests `--trust` for the assigned
-workspace without adding `--force` to reviewers. These follow-up changes have
-focused regression and Clippy coverage, not live reviewer completion proof.
+without advancing those cases. The live general reviewer returned an accepted
+`REQUEST_CHANGES` on PR #1726 head `05070de3`. Both Cursor executions completed,
+but their reports disclosed denied verification commands. Their queue results
+remain preserved on disk; installed collection rejected the required result
+after the general reviewer advanced the case revision. The runtime is paused.
+
+Follow-up regression coverage separates direct-result retention from live
+effect leases and shares the native/direct generation check: peer-only reviews
+may advance, but new CI, retries and terminal dispositions fence old results.
+Retention uses accepted policy rather than today's changed model configuration.
+Cursor review commands now receive noninteractive approval, with an unchanged
+checkout postcondition and the existing credential-isolating service sandbox;
+this is not an OS-enforced read-only source mount. Evidence files support
+bounded line reads. Published reviews retain each reviewer's suggestions and
+reported verification/limitations instead of only the verdict. These fixes
+await signed deployment and live proof.
 
 Review-start recovery now shares the existing bounded root/offline recovery
 path: `authorize-review-retry` preserves the accepted PR/head/build and creates
