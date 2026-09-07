@@ -98,16 +98,18 @@ error_from!(StoreError, Store);
 error_from!(ControllerError, Controller);
 
 #[allow(clippy::too_many_arguments)]
-pub fn publish_reviews_once<G: ReviewWriter, S: ReviewWriter>(
+pub fn publish_reviews_once<'a, G: ReviewWriter, S: ReviewWriter>(
     general_writer: &G,
     secperf_writer: &S,
-    policy: &RepositoryPolicy,
+    scope: impl Into<crate::RepositoryScope<'a>>,
     store: &mut Store,
     now: u64,
     owner: &str,
     lease_seconds: u64,
     authorization_valid: bool,
 ) -> Result<ReviewPublicationCycle, ReviewPublicationError> {
+    let scope = scope.into();
+    let policy = scope.policy;
     if !authorization_valid {
         return Ok(ReviewPublicationCycle::AuthorizationBlocked);
     }
@@ -119,14 +121,7 @@ pub fn publish_reviews_once<G: ReviewWriter, S: ReviewWriter>(
         .github
         .reviewer_secperf_actor_id
         .ok_or(ReviewPublicationError::MissingReviewActor)?;
-    let Some(claimed) = store.claim_repository_effect_matching(
-        policy.repository.id,
-        owner,
-        now,
-        lease_seconds,
-        &[PUBLISH_EFFECT],
-    )?
-    else {
+    let Some(claimed) = scope.claim(store, owner, now, lease_seconds, &[PUBLISH_EFFECT])? else {
         return Ok(ReviewPublicationCycle::Idle);
     };
     let case = store

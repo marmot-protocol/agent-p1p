@@ -74,46 +74,48 @@ impl From<IngestError> for ResultCycleError {
     }
 }
 
-pub fn ingest_completed_once(
+pub fn ingest_completed_once<'a>(
     store: &mut Store,
-    policy: &RepositoryPolicy,
+    scope: impl Into<crate::RepositoryScope<'a>>,
     hermes_program: &str,
     observed_at: u64,
 ) -> Result<ResultCycle, ResultCycleError> {
     ingest_completed_once_with(
         store,
-        policy,
+        scope,
         ProcessRunner::default(),
         hermes_program,
         observed_at,
     )
 }
 
-pub fn ingest_completed_once_with<R: CommandRunner>(
+pub fn ingest_completed_once_with<'a, R: CommandRunner>(
     store: &mut Store,
-    policy: &RepositoryPolicy,
+    scope: impl Into<crate::RepositoryScope<'a>>,
     runner: R,
     hermes_program: &str,
     observed_at: u64,
 ) -> Result<ResultCycle, ResultCycleError> {
-    reconcile_completed_once_with(store, policy, runner, hermes_program, observed_at, true)
+    reconcile_completed_once_with(store, scope, runner, hermes_program, observed_at, true)
 }
 
-pub fn reconcile_completed_once_with<R: CommandRunner>(
+pub fn reconcile_completed_once_with<'a, R: CommandRunner>(
     store: &mut Store,
-    policy: &RepositoryPolicy,
+    scope: impl Into<crate::RepositoryScope<'a>>,
     runner: R,
     hermes_program: &str,
     observed_at: u64,
     advance: bool,
 ) -> Result<ResultCycle, ResultCycleError> {
+    let scope = scope.into();
+    let policy = scope.policy;
     let reader = HermesReader::new(
         runner,
         hermes_program,
         Duration::from_secs(20),
         4 * 1024 * 1024,
     )?;
-    for projection in store.unconsumed_task_projections()? {
+    for projection in store.unconsumed_task_projections_in(policy.repository.id, scope.case_key)? {
         if projection.board != policy.board {
             continue;
         }

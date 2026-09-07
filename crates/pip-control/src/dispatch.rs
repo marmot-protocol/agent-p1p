@@ -16,9 +16,7 @@ use pip_store::{
 };
 use serde::Serialize;
 
-use crate::{
-    GitWorkspacePreparer, PolicyError, RepositoryPolicy, WorkspaceError, WorkspacePreparer,
-};
+use crate::{GitWorkspacePreparer, PolicyError, WorkspaceError, WorkspacePreparer};
 
 const DISPATCH_EFFECTS: [&str; 4] = [
     "DISPATCH_PLANNER",
@@ -116,46 +114,48 @@ error_from!(HermesError, Hermes);
 error_from!(ProjectionError, Projection);
 error_from!(WorkspaceError, Workspace);
 
-pub fn dispatch_once(
+pub fn dispatch_once<'a>(
     store: &mut Store,
-    policy: &RepositoryPolicy,
+    scope: impl Into<crate::RepositoryScope<'a>>,
     context: DispatchCycleContext<'_>,
 ) -> Result<DispatchCycleResult, DispatchCycleError> {
     dispatch_once_with_workspace(
         store,
-        policy,
+        scope,
         ProcessRunner::default(),
         &GitWorkspacePreparer,
         context,
     )
 }
 
-pub fn dispatch_once_with<R: CommandRunner + Clone>(
+pub fn dispatch_once_with<'a, R: CommandRunner + Clone>(
     store: &mut Store,
-    policy: &RepositoryPolicy,
+    scope: impl Into<crate::RepositoryScope<'a>>,
     runner: R,
     context: DispatchCycleContext<'_>,
 ) -> Result<DispatchCycleResult, DispatchCycleError> {
-    dispatch_once_inner(store, policy, runner, None, context)
+    dispatch_once_inner(store, scope, runner, None, context)
 }
 
-pub fn dispatch_once_with_workspace<R: CommandRunner + Clone, W: WorkspacePreparer>(
+pub fn dispatch_once_with_workspace<'a, R: CommandRunner + Clone, W: WorkspacePreparer>(
     store: &mut Store,
-    policy: &RepositoryPolicy,
+    scope: impl Into<crate::RepositoryScope<'a>>,
     runner: R,
     workspace: &W,
     context: DispatchCycleContext<'_>,
 ) -> Result<DispatchCycleResult, DispatchCycleError> {
-    dispatch_once_inner(store, policy, runner, Some(workspace), context)
+    dispatch_once_inner(store, scope, runner, Some(workspace), context)
 }
 
-fn dispatch_once_inner<R: CommandRunner + Clone>(
+fn dispatch_once_inner<'a, R: CommandRunner + Clone>(
     store: &mut Store,
-    policy: &RepositoryPolicy,
+    scope: impl Into<crate::RepositoryScope<'a>>,
     runner: R,
     workspace: Option<&dyn WorkspacePreparer>,
     context: DispatchCycleContext<'_>,
 ) -> Result<DispatchCycleResult, DispatchCycleError> {
+    let scope = scope.into();
+    let policy = scope.policy;
     let started = Instant::now();
     // Include time spent preparing workspaces and waiting on external commands
     // when checking a lease; a cycle's initial timestamp is not a frozen clock.
@@ -168,8 +168,8 @@ fn dispatch_once_inner<R: CommandRunner + Clone>(
     }
     let skills_repository_commit = GitSha::from_str(context.skills_repository_commit)
         .map_err(|_| DispatchCycleError::InvalidSkillsCommit)?;
-    let Some(claimed) = store.claim_repository_effect_matching(
-        policy.repository.id,
+    let Some(claimed) = scope.claim(
+        store,
         context.owner,
         context.now,
         context.lease_seconds,

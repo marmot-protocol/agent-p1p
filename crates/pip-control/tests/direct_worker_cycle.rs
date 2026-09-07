@@ -36,6 +36,145 @@ impl DirectWorkerRuntime for FakeRuntime {
 }
 
 #[test]
+fn scoped_scheduler_prioritizes_required_work_across_authorized_cases() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = queued_shadow_review(directory.path());
+    let policy = active_policy();
+    let peer = "repo:1055628515#1241@3";
+    let mut task: Value = serde_json::from_str(
+        &serde_json::to_string(&required_review_task())
+            .unwrap()
+            .replace("1240", "1241"),
+    )
+    .unwrap();
+    task["source_effect_id"] = json!("peer-review");
+    task["body"]["pr_number"] = json!(78);
+    let expected_task = task["task_id"].as_str().unwrap().to_owned();
+    store
+        .create_case(&NewCase {
+            case_key: peer.into(),
+            repository_id: policy.repository.id,
+            issue_number: 1241,
+            workflow_version: 3,
+            policy_revision: policy.revision,
+            initial_state: "WAITING_CI".into(),
+            observed_at: 1,
+            event: EventInput {
+                event_id: "peer-created".into(),
+                event_type: "DRAFT_PR_PUBLISHED".into(),
+                payload: json!({}),
+            },
+            effects: vec![],
+        })
+        .unwrap();
+    store
+        .apply_transition(
+            &TransitionInput {
+                case_key: peer.into(),
+                expected_revision: 1,
+                next_state: "REVIEWING".into(),
+                remediation_round: 0,
+                plan_version: 1,
+                pr_number: Some(78),
+                head_sha: Some("b".repeat(40)),
+                observed_at: 2,
+                event: EventInput {
+                    event_id: "peer-reviewing".into(),
+                    event_type: "CI_ACCEPTED".into(),
+                    payload: json!({}),
+                },
+                run: None,
+                evidence: vec![],
+                findings: vec![],
+                effects: vec![EffectInput {
+                    effect_id: "peer-review:direct:secperf-kimi".into(),
+                    effect_type: "RUN_DIRECT_WORKER".into(),
+                    payload: task,
+                }],
+            },
+            None,
+        )
+        .unwrap();
+    let queue = queue(directory.path());
+    let broken = "repo:1055628515#1239@3";
+    store
+        .create_case(&NewCase {
+            case_key: broken.into(),
+            repository_id: policy.repository.id,
+            issue_number: 1239,
+            workflow_version: 3,
+            policy_revision: policy.revision,
+            initial_state: "READY_TO_BUILD".into(),
+            observed_at: 1,
+            event: EventInput {
+                event_id: "broken-job".into(),
+                event_type: "PROCEED".into(),
+                payload: json!({}),
+            },
+            effects: vec![EffectInput {
+                effect_id: "broken-direct".into(),
+                effect_type: "RUN_DIRECT_WORKER".into(),
+                payload: json!({}),
+            }],
+        })
+        .unwrap();
+    let scheduled = pip_control::schedule_direct_queue_once(
+        &mut store,
+        &policy,
+        &[broken.into(), case_key().into(), peer.into()],
+        &queue,
+        "controller",
+        100,
+        30,
+    )
+    .unwrap();
+    assert_eq!(scheduled.errors.len(), 1, "{:?}", scheduled.errors);
+    assert!(scheduled.errors.contains_key(broken));
+    assert_eq!(
+        scheduled.prepared,
+        Some(DirectQueueCycle::Prepared {
+            attempt_id: 1,
+            task_id: expected_task
+        })
+    );
+    assert_eq!(store.direct_attempt(1).unwrap().unwrap().case_key, peer);
+    assert_eq!(store.status(100).unwrap().outbox_leased, 1);
+    assert_eq!(
+        store.failed_direct_attempt_count_for_case(broken).unwrap(),
+        0
+    );
+    let damaged = directory.path().join("direct-queue/results/attempt-1.json");
+    for bytes in [b"".as_slice(), b"not valid JSON"] {
+        std::fs::write(&damaged, bytes).unwrap();
+        assert_eq!(
+            pip_control::collect_direct_queue_once(
+                &mut store,
+                pip_control::RepositoryScope::case(&policy, case_key()),
+                &queue,
+                101,
+                true,
+            )
+            .unwrap(),
+            DirectQueueCycle::Idle
+        );
+        assert!(
+            pip_control::collect_direct_queue_once(
+                &mut store,
+                pip_control::RepositoryScope::case(&policy, peer),
+                &queue,
+                101,
+                true,
+            )
+            .is_err()
+        );
+        assert!(
+            damaged.exists(),
+            "a peer's malformed evidence must be retained"
+        );
+    }
+}
+
+#[test]
 fn serial_worker_leases_only_one_job_until_its_handoff_is_reconciled() {
     let directory = tempfile::tempdir().unwrap();
     let mut required = required_review_task();

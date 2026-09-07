@@ -16,8 +16,6 @@ use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use crate::RepositoryPolicy;
-
 const PUBLISH_EFFECT: &str = "PUBLISH_PLAN";
 
 pub trait PlanWriter {
@@ -94,15 +92,17 @@ error_from!(StoreError, Store);
 error_from!(ControllerError, Controller);
 
 #[allow(clippy::too_many_arguments)]
-pub fn publish_plan_once<W: PlanWriter>(
+pub fn publish_plan_once<'a, W: PlanWriter>(
     writer: &W,
-    policy: &RepositoryPolicy,
+    scope: impl Into<crate::RepositoryScope<'a>>,
     store: &mut Store,
     now: u64,
     owner: &str,
     lease_seconds: u64,
     authorization_valid: bool,
 ) -> Result<PlanPublicationCycle, PlanPublicationError> {
+    let scope = scope.into();
+    let policy = scope.policy;
     if !authorization_valid {
         return Ok(PlanPublicationCycle::AuthorizationBlocked);
     }
@@ -110,14 +110,7 @@ pub fn publish_plan_once<W: PlanWriter>(
         .github
         .automation_actor_id
         .ok_or(PlanPublicationError::MissingAutomationActor)?;
-    let Some(claimed) = store.claim_repository_effect_matching(
-        policy.repository.id,
-        owner,
-        now,
-        lease_seconds,
-        &[PUBLISH_EFFECT],
-    )?
-    else {
+    let Some(claimed) = scope.claim(store, owner, now, lease_seconds, &[PUBLISH_EFFECT])? else {
         return Ok(PlanPublicationCycle::Idle);
     };
     let case = store

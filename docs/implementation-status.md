@@ -68,16 +68,31 @@ prove installation, Pirate migration or a live provider run.
 
 | Change | Source | Remaining live proof or scope |
 |---|---|---|
-| Independent controller phase reporting | `07a0cd9` | Live outage drill; per-case advancement isolation remains unfinished |
+| Independent controller phase reporting | `07a0cd9` | Live outage drill; extended by the case-scoped source changes below |
 | Attempt both accepted review-lane publications independently | `240ff50` | App-outage replay; acceptance still requires both required lanes |
 | One installer unit list instead of repeated operations | `5ca4ae3` | Installation of the newer cohort |
 | Case-scoped finding IDs, immutable schema-9 migration | `165af50` | Pirate migration with history preserved |
 | One evidence bundle per frozen batch, exact job references, schema 10 | `8345aad` | Live dispatch; historical rows stay unchanged and handoff files still carry bounded inputs |
 | Short private per-execution TMPDIR and cleanup | `a8bdb4c` | Live Cursor/provider execution |
-| One authorization snapshot for decision and evidence; unrelated revocations survive an outage | `6917c81` | Healthy advancement still uses a repository-wide authorization gate |
+| One authorization snapshot for decision and evidence; unrelated revocations survive an outage | `6917c81` | Extended by case-scoped advancement below; installation remains pending |
 | Human-readable plans, reviews and PR descriptions | `1676a39` | Deployment; existing GitHub text has not been rewritten |
 | Controller signing, retained source commits and exact source/published-head binding | `b326a0a` | Key registration, deployment, signed publication and fresh CI/reviews |
 | Audited publication-only recovery of an accepted unsigned build | `36e3a66` | Deployment and live recovery |
+
+The next source checkpoint replaces the repository-wide advancement veto with
+explicit case selection for authorization, bounds, takeover, result acceptance,
+CI, publication and dispatch. SQL selects ownership before leasing or decoding
+projection payloads; direct collection selects the durable attempt's case before
+reading its result. Invalid results remain retained and reported for their owner.
+Malformed jobs release their pre-execution lease without starting an attempt.
+One scheduler considers required jobs across authorized cases before comparisons.
+Active `controller-cycle` reports use format 2: per-case observations in `cases`
+and shared queue selection in `direct_dispatch`; paused reports are unchanged.
+This adds no schema or service. Local regression tests cover cross-case selection,
+authorization outages, healthy CI advancement, required-work priority and retained
+malformed evidence. It is not deployed; global storage/queue capability failures,
+startup credential dependencies and already-running comparisons remain separate
+limitations, not evidence of complete failure isolation.
 
 Signing integration `b326a0aff27c0ae1d46b94b95bb6d7aa6e2e3446` passed CI
 `34123194095` and deployment build `34123194049`, including

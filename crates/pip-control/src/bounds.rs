@@ -76,15 +76,17 @@ impl From<ControllerError> for OperationalBoundsError {
     }
 }
 
-pub fn enforce_operational_bounds(
+pub fn enforce_operational_bounds<'a>(
     store: &mut Store,
-    policy: &RepositoryPolicy,
+    scope: impl Into<crate::RepositoryScope<'a>>,
     now: u64,
 ) -> Result<OperationalBoundsCycle, OperationalBoundsError> {
+    let scope = scope.into();
+    let policy = scope.policy;
     let mut cases = store.status(now)?.cases;
     cases.sort_by(|left, right| left.case_key.cmp(&right.case_key));
     for case in cases {
-        if case.repository_id != policy.repository.id || !automated_state(&case.state) {
+        if !scope.matches(&case) || !automated_state(&case.state) {
             continue;
         }
         let created_at = store

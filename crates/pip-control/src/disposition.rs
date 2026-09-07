@@ -7,8 +7,6 @@ use pip_store::{ApplyResult, EvidenceInput, Store, StoreError, StoredCase};
 use serde::Serialize;
 use serde_json::json;
 
-use crate::RepositoryPolicy;
-
 const LOCAL_EFFECTS: [&str; 4] = [
     "RECORD_COMPLETION",
     "RECORD_ABANDONMENT",
@@ -82,15 +80,17 @@ impl From<StoreError> for DispositionError {
     }
 }
 
-pub fn consume_disposition_once<W: DispositionWriter>(
+pub fn consume_disposition_once<'a, W: DispositionWriter>(
     writer: &W,
-    policy: &RepositoryPolicy,
+    scope: impl Into<crate::RepositoryScope<'a>>,
     store: &mut Store,
     now: u64,
     owner: &str,
     lease_seconds: u64,
     authorization_valid: bool,
 ) -> Result<DispositionCycle, DispositionError> {
+    let scope = scope.into();
+    let policy = scope.policy;
     let allowed = if authorization_valid {
         LOCAL_EFFECTS
             .into_iter()
@@ -99,14 +99,7 @@ pub fn consume_disposition_once<W: DispositionWriter>(
     } else {
         LOCAL_EFFECTS.to_vec()
     };
-    let Some(claimed) = store.claim_repository_effect_matching(
-        policy.repository.id,
-        owner,
-        now,
-        lease_seconds,
-        allowed.as_slice(),
-    )?
-    else {
+    let Some(claimed) = scope.claim(store, owner, now, lease_seconds, allowed.as_slice())? else {
         return Ok(if authorization_valid {
             DispositionCycle::Idle
         } else {

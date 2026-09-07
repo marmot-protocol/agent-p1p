@@ -38,6 +38,90 @@ fn new_case() -> NewCase {
     }
 }
 
+#[test]
+fn case_scoped_claim_skips_other_pending_work_before_leasing() {
+    let (dir, mut store) = open();
+    let first = new_case();
+    let mut second = first.clone();
+    second.case_key = "repo:984321#1241@1".into();
+    second.issue_number = 1241;
+    second.event.event_id = "event-intake-2".into();
+    second.effects[0].effect_id = "effect-planner-2".into();
+    second.effects[0].payload = json!({"case_key":second.case_key});
+    store.create_case(&first).unwrap();
+    store.create_case(&second).unwrap();
+    let now = first.observed_at + 10;
+    assert!(
+        store
+            .claim_repository_case_effect_matching(
+                123,
+                Some(&second.case_key),
+                "owner",
+                now,
+                30,
+                &["DISPATCH_PLANNER"]
+            )
+            .unwrap()
+            .is_none()
+    );
+    let claimed = store
+        .claim_repository_case_effect_matching(
+            first.repository_id,
+            Some(&second.case_key),
+            "owner",
+            now,
+            30,
+            &["DISPATCH_PLANNER"],
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(claimed.case_key, second.case_key);
+    assert_eq!(store.status(now).unwrap().outbox_leased, 1);
+    drop(store);
+    let mut reopened = Store::open(dir.path().join("ledger.db")).unwrap();
+    let next = reopened
+        .claim_repository_case_effect_matching(
+            first.repository_id,
+            Some(&first.case_key),
+            "owner",
+            now,
+            30,
+            &["DISPATCH_PLANNER"],
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(next.case_key, first.case_key);
+    for effect in [&claimed, &next] {
+        reopened
+            .complete_task_projection(
+                &TaskProjectionInput {
+                    projection_id: format!("projection-{}", effect.effect_id),
+                    effect_id: effect.effect_id.clone(),
+                    board: "board".into(),
+                    task_id: format!("task-{}", effect.effect_id),
+                    desired: json!({}),
+                    observed: json!({}),
+                },
+                "owner",
+                now + 1,
+                None,
+            )
+            .unwrap();
+    }
+    assert_eq!(reopened.unconsumed_task_projections().unwrap().len(), 2);
+    let selected = reopened
+        .unconsumed_task_projections_in(first.repository_id, Some(&second.case_key))
+        .unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].effect_id, claimed.effect_id);
+    assert!(
+        reopened
+            .unconsumed_task_projections_in(123, Some(&second.case_key))
+            .unwrap()
+            .is_empty()
+    );
+}
+
 fn transition() -> TransitionInput {
     TransitionInput {
         case_key: "repo:984321#1240@1".into(),

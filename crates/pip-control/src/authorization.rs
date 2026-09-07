@@ -81,18 +81,22 @@ impl From<ControllerError> for AuthorizationError {
     }
 }
 
-pub fn verify_active_authorization<S: IntakeSource>(
+pub fn verify_active_authorization<'a, S: IntakeSource>(
     source: &S,
-    policy: &RepositoryPolicy,
+    scope: impl Into<crate::RepositoryScope<'a>>,
     store: &Store,
 ) -> Result<ActiveAuthorization, AuthorizationError> {
-    observe_authorization(source, policy, active_cases(policy, store)?, |_, _, _| {
-        Ok(false)
-    })
+    let scope = scope.into();
+    observe_authorization(
+        source,
+        scope.policy,
+        active_cases(scope, store)?,
+        |_, _, _| Ok(false),
+    )
 }
 
 fn active_cases(
-    policy: &RepositoryPolicy,
+    scope: crate::RepositoryScope<'_>,
     store: &Store,
 ) -> Result<Vec<StoredCase>, AuthorizationError> {
     let mut cases = store
@@ -100,7 +104,7 @@ fn active_cases(
         .cases
         .into_iter()
         .filter(|case| {
-            case.repository_id == policy.repository.id
+            scope.matches(case)
                 && !matches!(
                     case.state.as_str(),
                     "COMPLETED" | "ABANDONED" | "TAKEN_OVER"
@@ -204,13 +208,15 @@ fn observe_authorization<S: IntakeSource>(
     }
 }
 
-pub fn reconcile_active_authorization<S: IntakeSource>(
+pub fn reconcile_active_authorization<'a, S: IntakeSource>(
     source: &S,
-    policy: &RepositoryPolicy,
+    scope: impl Into<crate::RepositoryScope<'a>>,
     store: &mut Store,
     observed_at: u64,
 ) -> Result<ActiveAuthorization, AuthorizationError> {
-    let cases = active_cases(policy, store)?;
+    let scope = scope.into();
+    let policy = scope.policy;
+    let cases = active_cases(scope, store)?;
     observe_authorization(source, policy, cases, |case, evidence, blockers| {
         if case.policy_revision != policy.revision || !revocation_is_authoritative(blockers) {
             return Ok(false);

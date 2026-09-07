@@ -70,12 +70,14 @@ error_from!(GitHubError, GitHub);
 error_from!(StoreError, Store);
 error_from!(ControllerError, Controller);
 
-pub fn reconcile_takeover_once<S: PullRequestSource>(
+pub fn reconcile_takeover_once<'a, S: PullRequestSource>(
     source: &S,
-    policy: &RepositoryPolicy,
+    scope: impl Into<crate::RepositoryScope<'a>>,
     store: &mut Store,
     observed_at: u64,
 ) -> Result<TakeoverCycle, TakeoverError> {
+    let scope = scope.into();
+    let policy = scope.policy;
     let expected_actor = policy
         .github
         .automation_actor_id
@@ -85,7 +87,7 @@ pub fn reconcile_takeover_once<S: PullRequestSource>(
         .cases
         .into_iter()
         .filter(|case| {
-            case.repository_id == policy.repository.id
+            scope.matches(case)
                 && case.pr_number.is_some()
                 && !matches!(
                     case.state.as_str(),

@@ -105,17 +105,19 @@ impl From<ControllerError> for CiCycleError {
     }
 }
 
-pub fn reconcile_ci_once<S: PullRequestSource>(
+pub fn reconcile_ci_once<'a, S: PullRequestSource>(
     source: &S,
-    policy: &RepositoryPolicy,
+    scope: impl Into<crate::RepositoryScope<'a>>,
     store: &mut Store,
     observed_at: u64,
 ) -> Result<CiCycle, CiCycleError> {
+    let scope = scope.into();
+    let policy = scope.policy;
     let status = store.status(observed_at)?;
     let Some(case) = status
         .cases
         .into_iter()
-        .find(|case| case.repository_id == policy.repository.id && case.state == "WAITING_CI")
+        .find(|case| scope.matches(case) && case.state == "WAITING_CI")
     else {
         return Ok(CiCycle::Idle);
     };

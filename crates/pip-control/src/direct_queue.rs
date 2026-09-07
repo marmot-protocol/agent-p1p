@@ -15,7 +15,7 @@ use pip_store::{
 use serde::{Deserialize, Serialize};
 
 use crate::direct_worker::{DirectWorkerRuntime, validate_job};
-use crate::{DirectWorkerRuntimeError, PolicyError, RepositoryPolicy};
+use crate::{DirectWorkerRuntimeError, PolicyError};
 
 const MAX_QUEUE_FILES: usize = 1024;
 const MAX_ENVELOPE_BYTES: usize = 4 * 1024 * 1024;
@@ -195,19 +195,45 @@ impl ResultEnvelope {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn reconcile_direct_queue_once(
+pub fn reconcile_direct_queue_once<'a>(
     store: &mut Store,
-    policy: &RepositoryPolicy,
+    scope: impl Into<crate::RepositoryScope<'a>>,
     queue: &DirectQueue,
     owner: &str,
     now: u64,
     lease_seconds: u64,
     authorization_valid: bool,
 ) -> Result<DirectQueueCycle, DirectQueueError> {
+    let scope = scope.into();
+    let collected = collect_direct_queue_once(store, scope, queue, now, authorization_valid)?;
+    if collected != DirectQueueCycle::Idle {
+        return Ok(collected);
+    }
+    for effect in ["RUN_DIRECT_WORKER", "RUN_DIRECT_OBSERVER"] {
+        let prepared =
+            prepare_direct_queue_once(store, scope, queue, owner, now, lease_seconds, effect)?;
+        if prepared != DirectQueueCycle::Idle {
+            return Ok(prepared);
+        }
+    }
+    Ok(DirectQueueCycle::Idle)
+}
+
+/// Retain/accept results for this scope without preparing any new execution.
+pub fn collect_direct_queue_once<'a>(
+    store: &mut Store,
+    scope: impl Into<crate::RepositoryScope<'a>>,
+    queue: &DirectQueue,
+    now: u64,
+    authorization_valid: bool,
+) -> Result<DirectQueueCycle, DirectQueueError> {
+    let scope = scope.into();
     let mut retained = None;
-    for path in queue_files(&queue.results)? {
-        let result = ingest_result(store, policy, queue, &path, now, authorization_valid)?;
-        if matches!(result, DirectQueueCycle::Retained { .. }) {
+    for path in queue_paths(&queue.results)? {
+        let result = ingest_result(store, scope, queue, &path, now, authorization_valid)?;
+        if matches!(result, DirectQueueCycle::Idle) {
+            continue;
+        } else if matches!(result, DirectQueueCycle::Retained { .. }) {
             retained = Some(result);
         } else {
             return Ok(result);
@@ -219,6 +245,71 @@ pub fn reconcile_direct_queue_once(
     if !authorization_valid {
         return Ok(DirectQueueCycle::AuthorizationBlocked);
     }
+    Ok(DirectQueueCycle::Idle)
+}
+
+#[derive(Debug, Serialize)]
+pub struct DirectQueueSchedule {
+    pub prepared: Option<DirectQueueCycle>,
+    pub errors: std::collections::BTreeMap<String, String>,
+}
+
+/// All required work is considered before comparisons, across the cases whose
+/// current checks passed. A failed case cannot monopolize queue selection.
+pub fn schedule_direct_queue_once(
+    store: &mut Store,
+    policy: &crate::RepositoryPolicy,
+    authorized_cases: &[String],
+    queue: &DirectQueue,
+    owner: &str,
+    now: u64,
+    lease_seconds: u64,
+) -> Result<DirectQueueSchedule, DirectQueueError> {
+    let mut report = DirectQueueSchedule {
+        prepared: None,
+        errors: Default::default(),
+    };
+    if !queue_files(&queue.inbox)?.is_empty() {
+        return Ok(report);
+    }
+    for effect in ["RUN_DIRECT_WORKER", "RUN_DIRECT_OBSERVER"] {
+        for case_key in authorized_cases {
+            if report.errors.contains_key(case_key) {
+                continue;
+            }
+            match prepare_direct_queue_once(
+                store,
+                crate::RepositoryScope::case(policy, case_key),
+                queue,
+                owner,
+                now,
+                lease_seconds,
+                effect,
+            ) {
+                Ok(DirectQueueCycle::Idle) => (),
+                Ok(prepared) => {
+                    report.prepared = Some(prepared);
+                    return Ok(report);
+                }
+                Err(error) => {
+                    report.errors.insert(case_key.clone(), error.to_string());
+                }
+            }
+        }
+    }
+    Ok(report)
+}
+
+fn prepare_direct_queue_once(
+    store: &mut Store,
+    scope: crate::RepositoryScope<'_>,
+    queue: &DirectQueue,
+    owner: &str,
+    now: u64,
+    lease_seconds: u64,
+    effect: &str,
+) -> Result<DirectQueueCycle, DirectQueueError> {
+    let policy = scope.policy;
     // This queue has one serial worker. Do not start another job's lease while
     // it can only wait, or replace an uncertain handoff after its lease expires.
     // Existing multi-job queues drain normally through result reconciliation.
@@ -226,33 +317,29 @@ pub fn reconcile_direct_queue_once(
         return Ok(DirectQueueCycle::Idle);
     }
     // Comparisons use spare queue capacity, never priority over required work.
-    let claimed = match store.claim_repository_effect_matching(
-        policy.repository.id,
-        owner,
-        now,
-        lease_seconds,
-        &["RUN_DIRECT_WORKER"],
-    )? {
-        Some(claimed) => Some(claimed),
-        None => store.claim_repository_effect_matching(
-            policy.repository.id,
-            owner,
-            now,
-            lease_seconds,
-            &["RUN_DIRECT_OBSERVER"],
-        )?,
-    };
+    let claimed = scope.claim(store, owner, now, lease_seconds, &[effect])?;
     let Some(claimed) = claimed else {
         return Ok(DirectQueueCycle::Idle);
     };
-    let task: DirectTaskSpec = serde_json::from_value(claimed.payload.clone())
-        .map_err(|_| DirectQueueError::InvalidEnvelope)?;
-    let case = store
-        .case(&claimed.case_key)?
-        .ok_or(DirectQueueError::InvalidEnvelope)?;
-    let validation_case = validation_case(&claimed, &case, &task, false)?;
-    validate_job(&claimed, &validation_case, &task, policy)
-        .map_err(|_| DirectQueueError::InvalidEnvelope)?;
+    let validated = (|| {
+        let task: DirectTaskSpec = serde_json::from_value(claimed.payload.clone())
+            .map_err(|_| DirectQueueError::InvalidEnvelope)?;
+        let case = store
+            .case(&claimed.case_key)?
+            .ok_or(DirectQueueError::InvalidEnvelope)?;
+        let validation_case = validation_case(&claimed, &case, &task, false)?;
+        validate_job(&claimed, &validation_case, &task, policy)
+            .map_err(|_| DirectQueueError::InvalidEnvelope)?;
+        Ok::<_, DirectQueueError>(task)
+    })();
+    let task = match validated {
+        Ok(task) => task,
+        Err(error) => {
+            // No attempt or handoff exists yet, so releasing is unambiguous.
+            store.release_effect(&claimed.effect_id, owner)?;
+            return Err(error);
+        }
+    };
     let attempt_id = store.begin_direct_attempt(&claimed, &task.task_id, now)?;
     let envelope = WorkEnvelope {
         schema_version: 1,
@@ -330,22 +417,42 @@ pub fn execute_direct_queue_once<R: DirectWorkerRuntime>(
     Ok(DirectQueueCycle::Idle)
 }
 
-fn ingest_result(
+fn ingest_result<'a>(
     store: &mut Store,
-    policy: &RepositoryPolicy,
+    scope: impl Into<crate::RepositoryScope<'a>>,
     queue: &DirectQueue,
     result_path: &Path,
     now: u64,
     advance: bool,
 ) -> Result<DirectQueueCycle, DirectQueueError> {
-    let envelope: ResultEnvelope = read_envelope(result_path)?;
-    let attempt_id = envelope.attempt_id();
-    if envelope.schema_version() != 1 || result_path != queue.result(attempt_id) {
+    let scope = scope.into();
+    let policy = scope.policy;
+    // Select by the durable attempt before decoding worker-controlled evidence.
+    // A malformed result must remain visible to its owner, not poison peers.
+    let attempt_id = result_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix("attempt-"))
+        .and_then(|name| name.strip_suffix(".json"))
+        .and_then(|id| id.parse::<u64>().ok())
+        .filter(|id| *id != 0)
+        .ok_or(DirectQueueError::InvalidEnvelope)?;
+    if result_path != queue.result(attempt_id) {
         return Err(DirectQueueError::InvalidEnvelope);
     }
     let attempt = store
         .direct_attempt(attempt_id)?
         .ok_or(DirectQueueError::InvalidEnvelope)?;
+    let case = store
+        .case(&attempt.case_key)?
+        .ok_or(DirectQueueError::InvalidEnvelope)?;
+    if !scope.matches(&case) {
+        return Ok(DirectQueueCycle::Idle);
+    }
+    let envelope: ResultEnvelope = read_envelope(result_path)?;
+    if envelope.schema_version() != 1 || envelope.attempt_id() != attempt_id {
+        return Err(DirectQueueError::InvalidEnvelope);
+    }
     let work: WorkEnvelope = read_envelope(&queue.input(attempt_id))?;
     if work.schema_version != 1
         || work.attempt_id != attempt_id
@@ -364,9 +471,6 @@ fn ingest_result(
         queue.archive(attempt_id)?;
         return Ok(DirectQueueCycle::Cleaned { attempt_id });
     }
-    let case = store
-        .case(&attempt.case_key)?
-        .ok_or(DirectQueueError::InvalidEnvelope)?;
     // Retention validates the frozen job, not the current case revision or
     // today's profile settings. Workflow acceptance is separately fenced below.
     let validation_case = validation_case(&work.claimed, &case, &work.task, true)?;
@@ -584,7 +688,7 @@ fn role_name(role: pip_contracts::WorkerRole) -> &'static str {
     }
 }
 
-fn queue_files(directory: &Path) -> Result<Vec<PathBuf>, DirectQueueError> {
+fn queue_paths(directory: &Path) -> Result<Vec<PathBuf>, DirectQueueError> {
     let mut paths = fs::read_dir(directory)
         .map_err(filesystem)?
         .map(|entry| entry.map(|entry| entry.path()).map_err(filesystem))
@@ -593,6 +697,11 @@ fn queue_files(directory: &Path) -> Result<Vec<PathBuf>, DirectQueueError> {
         return Err(DirectQueueError::InvalidQueue);
     }
     paths.sort();
+    Ok(paths)
+}
+
+fn queue_files(directory: &Path) -> Result<Vec<PathBuf>, DirectQueueError> {
+    let paths = queue_paths(directory)?;
     if paths.iter().any(|path| {
         let Ok(metadata) = fs::symlink_metadata(path) else {
             return true;

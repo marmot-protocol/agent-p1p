@@ -3,10 +3,36 @@ use pip_github::{GitHubError, MutationRequest, ReadRequest, ReadResponse};
 use pip_store::{EffectInput, EventInput, NewCase};
 
 #[derive(Clone)]
-struct OfflineGitHub;
+struct OfflineGitHub {
+    healthy: Option<crate::RepositoryPolicy>,
+}
 
 impl pip_github::ReadTransport for OfflineGitHub {
-    fn get(&self, _: ReadRequest) -> Result<ReadResponse, GitHubError> {
+    fn get(&self, request: ReadRequest) -> Result<ReadResponse, GitHubError> {
+        if let Some(policy) = &self.healthy {
+            let root = format!(
+                "https://api.github.com/repos/{}",
+                policy.repository.full_name()
+            );
+            let body = if request.url == root {
+                json!({"id":policy.repository.id,"full_name":policy.repository.full_name(),"default_branch":policy.repository.default_branch})
+            } else if request.url == format!("{root}/issues/78") {
+                json!({"id":78,"number":78,"state":"open","labels":[{"name":policy.intake.label}],
+                    "user":{"id":1001},"title":"Healthy issue","body":"Fixture","created_at":"2026-09-07T00:00:00Z","updated_at":"2026-09-07T00:00:00Z"})
+            } else if request.url == format!("{root}/issues/78/events?per_page=100&page=1") {
+                json!([{"id":1,"event":"labeled","actor":{"id":policy.intake.trusted_actor_ids.first().unwrap()},
+                    "label":{"name":policy.intake.label},"created_at":"2026-09-07T00:00:00Z"}])
+            } else if request.url == format!("{root}/issues/78/comments?per_page=100&page=1") {
+                json!([])
+            } else {
+                return Err(GitHubError::Transport("fixture issue outage".into()));
+            };
+            return Ok(ReadResponse {
+                status: 200,
+                headers: BTreeMap::new(),
+                body: serde_json::to_vec(&body).unwrap(),
+            });
+        }
         Err(GitHubError::Transport("fixture GitHub outage".into()))
     }
 }
@@ -26,6 +52,7 @@ fn capability_failures_are_reported_without_aborting_unrelated_controller_phases
         "direct_worker",
         "plan_publication",
         "authorization",
+        "peer_authorization",
     ] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
@@ -50,7 +77,10 @@ fn capability_failures_are_reported_without_aborting_unrelated_controller_phases
         }
         let database = root.join("ledger.db");
         let mut store = Store::open(&database).unwrap();
-        if matches!(fault, "plan_publication" | "authorization") {
+        if matches!(
+            fault,
+            "plan_publication" | "authorization" | "peer_authorization"
+        ) {
             store
                 .create_case(&NewCase {
                     case_key: format!("repo:{}#77@3", policy.repository.id),
@@ -58,7 +88,7 @@ fn capability_failures_are_reported_without_aborting_unrelated_controller_phases
                     issue_number: 77,
                     workflow_version: 3,
                     policy_revision: policy.revision,
-                    initial_state: if fault == "authorization" {
+                    initial_state: if matches!(fault, "authorization" | "peer_authorization") {
                         "PLANNING"
                     } else {
                         "ABANDONED"
@@ -75,6 +105,25 @@ fn capability_failures_are_reported_without_aborting_unrelated_controller_phases
                         effect_type: "PUBLISH_PLAN".into(),
                         payload: json!({}),
                     }],
+                })
+                .unwrap();
+        }
+        if matches!(fault, "peer_authorization" | "workspace_lifecycle") {
+            store
+                .create_case(&NewCase {
+                    case_key: format!("repo:{}#78@3", policy.repository.id),
+                    repository_id: policy.repository.id,
+                    issue_number: 78,
+                    workflow_version: 3,
+                    policy_revision: policy.revision,
+                    initial_state: "PLANNING".into(),
+                    observed_at: 100,
+                    event: EventInput {
+                        event_id: "healthy-intake".into(),
+                        event_type: "ISSUE_AUTHORIZED".into(),
+                        payload: json!({}),
+                    },
+                    effects: vec![],
                 })
                 .unwrap();
         }
@@ -117,35 +166,69 @@ fn capability_failures_are_reported_without_aborting_unrelated_controller_phases
             "--now".into(),
             "100".into(),
         ]);
-        let report = controller_cycle_with_transport(&arguments, OfflineGitHub)
-            .unwrap_or_else(|error| panic!("{fault} aborted the cycle: {error}"));
+        let report = controller_cycle_with_transport(
+            &arguments,
+            OfflineGitHub {
+                healthy: matches!(fault, "peer_authorization" | "workspace_lifecycle")
+                    .then(|| policy.clone()),
+            },
+        )
+        .unwrap_or_else(|error| panic!("{fault} aborted the cycle: {error}"));
         assert_eq!(report["ok"], fault == "none", "{fault}: {report}");
+        assert_eq!(report["report_format"], 2);
+        if fault == "peer_authorization" {
+            let cases = report["cases"]
+                .as_array()
+                .expect("controller must report independently scoped cases");
+            let healthy = cases
+                .iter()
+                .find(|case| case["case_key"] == format!("repo:{}#78@3", policy.repository.id))
+                .unwrap();
+            assert_eq!(healthy["authorization"]["result"], "authorized");
+            assert_eq!(healthy["dispatch"]["result"], "idle");
+            let blocked = cases
+                .iter()
+                .find(|case| case["case_key"] == format!("repo:{}#77@3", policy.repository.id))
+                .unwrap();
+            assert_eq!(blocked["authorization"]["result"], "blocked");
+            assert_eq!(blocked["dispatch"]["result"], "authorization_blocked");
+            assert_eq!(store.status(100).unwrap().cases, before.cases);
+            assert_eq!(store.status(100).unwrap().outbox_leased, 0);
+            continue;
+        }
+        let phases = &report["cases"][0];
         if fault == "authorization" {
-            assert_eq!(report[fault]["result"], "blocked");
+            assert_eq!(phases[fault]["result"], "blocked");
             assert_eq!(
-                report[fault]["cases"][0]["blockers"],
+                phases[fault]["cases"][0]["blockers"],
                 json!(["EVIDENCE_UNAVAILABLE"])
             );
             assert!(
-                report[fault]["cases"][0]["error"]
+                phases[fault]["cases"][0]["error"]
                     .as_str()
                     .unwrap()
                     .contains("fixture GitHub outage")
             );
+        } else if fault == "plan_publication" {
+            assert_eq!(phases[fault]["result"], "error", "{report}");
+        } else if fault == "direct_worker" {
+            assert_eq!(report["collection"][fault]["result"], "error", "{report}");
         } else if fault != "none" {
             assert_eq!(report[fault]["result"], "error", "{report}");
         }
-        assert_eq!(report["operational_bounds"]["result"], "idle");
-        assert_eq!(
-            report["disposition"]["result"],
-            if fault == "authorization" {
-                "authorization_blocked"
-            } else {
-                "idle"
-            }
-        );
+        if !phases.is_null() {
+            assert_eq!(phases["operational_bounds"]["result"], "idle");
+            assert_eq!(
+                phases["disposition"]["result"],
+                if fault == "authorization" {
+                    "authorization_blocked"
+                } else {
+                    "idle"
+                }
+            );
+        }
         if matches!(fault, "authorization" | "workspace_lifecycle") {
-            assert_eq!(report["dispatch"]["result"], "authorization_blocked");
+            assert_eq!(phases["dispatch"]["result"], "authorization_blocked");
         }
         let after = store.status(100).unwrap();
         assert_eq!(after.cases, before.cases);

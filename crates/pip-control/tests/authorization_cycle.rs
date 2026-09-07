@@ -44,6 +44,32 @@ impl IntakeSource for FakeSource {
 }
 
 #[test]
+fn case_scope_does_not_fetch_or_block_on_a_peer_issue() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    let policy = active_policy();
+    seed_case_with_dispatch(&mut store, 1240, policy.revision);
+    seed_case_with_dispatch(&mut store, 1241, policy.revision);
+    let source = FakeSource::default();
+    source
+        .snapshots
+        .borrow_mut()
+        .insert(1241, authorized_snapshot(1241));
+    let healthy = pip_control::RepositoryScope::case(&policy, "repo:1055628515#1241@2");
+    let result = reconcile_active_authorization(&source, healthy, &mut store, 100).unwrap();
+    assert!(result.is_authorized());
+    assert_eq!(*source.reads.borrow(), [1241]);
+    let unavailable = pip_control::RepositoryScope::case(&policy, "repo:1055628515#1240@2");
+    let result = reconcile_active_authorization(&source, unavailable, &mut store, 100).unwrap();
+    assert!(!result.is_authorized());
+    assert!(result.has_errors());
+    assert_eq!(
+        store.case("repo:1055628515#1240@2").unwrap().unwrap().state,
+        "PLANNING"
+    );
+}
+
+#[test]
 fn revocation_records_the_snapshot_that_was_checked_without_a_second_fetch() {
     struct ChangingSource(RefCell<Vec<IntakeSnapshot>>);
     impl IntakeSource for ChangingSource {

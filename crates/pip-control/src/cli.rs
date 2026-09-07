@@ -649,150 +649,182 @@ where
     } else {
         json!({"result": "disabled"})
     };
-    let takeover = crate::reconcile_takeover_once(&reader, &policy, &mut store, now);
-    let authorization = crate::reconcile_active_authorization(&reader, &policy, &mut store, now);
-    let bounds = crate::enforce_operational_bounds(&mut store, &policy, now);
-    // Errors are observations, never authorization. Keep collection and unrelated
-    // capabilities available, but fail closed when a prerequisite cannot be checked.
-    let advancement_authorized = authorization
-        .as_ref()
-        .is_ok_and(|state| state.is_authorized())
-        && takeover.is_ok()
-        && bounds.is_ok();
-    let takeover = cycle_observation(takeover);
-    let authorization_has_errors = authorization.as_ref().is_ok_and(|state| state.has_errors());
-    let authorization = cycle_observation(authorization);
-    let bounds = cycle_observation(bounds);
-    let work_authorized = advancement_authorized && workspace_ready;
-    let (result, ci) = if advancement_authorized {
-        (
-            cycle_observation(crate::ingest_completed_once(
-                &mut store,
-                &policy,
-                required(&options, "--hermes")?,
+    // Select the case before its checks and effects. A failed capability on one
+    // case is a report for that case, never a repository-wide authorization veto.
+    let mut cases = store
+        .status(now)
+        .map_err(|error| CliError::Ledger(error.to_string()))?
+        .cases
+        .into_iter()
+        .filter(|case| case.repository_id == policy.repository.id)
+        .collect::<Vec<_>>();
+    cases.sort_by(|left, right| left.case_key.cmp(&right.case_key));
+    let mut case_reports = Vec::with_capacity(cases.len());
+    let mut work_cases = Vec::new();
+    for case in cases {
+        let scope = crate::RepositoryScope::case(&policy, &case.case_key);
+        let takeover = crate::reconcile_takeover_once(&reader, scope, &mut store, now);
+        let authorization = crate::reconcile_active_authorization(&reader, scope, &mut store, now);
+        let bounds = crate::enforce_operational_bounds(&mut store, scope, now);
+        // Errors are observations, never authorization. Keep collection and unrelated
+        // capabilities available, but fail closed when a prerequisite cannot be checked.
+        let advancement_authorized = authorization
+            .as_ref()
+            .is_ok_and(|state| state.is_authorized())
+            && takeover.is_ok()
+            && bounds.is_ok();
+        let takeover = cycle_observation(takeover);
+        let authorization_has_errors = authorization.as_ref().is_ok_and(|state| state.has_errors());
+        let authorization = cycle_observation(authorization);
+        let bounds = cycle_observation(bounds);
+        let work_authorized = advancement_authorized && workspace_ready;
+        if work_authorized {
+            work_cases.push(case.case_key.clone());
+        }
+        let (result, ci) = if advancement_authorized {
+            (
+                cycle_observation(crate::ingest_completed_once(
+                    &mut store,
+                    scope,
+                    required(&options, "--hermes")?,
+                    now,
+                )),
+                cycle_observation(crate::reconcile_ci_once(&reader, scope, &mut store, now)),
+            )
+        } else {
+            let blocked = json!({"result": "authorization_blocked"});
+            (blocked.clone(), blocked)
+        };
+        let direct_worker = cycle_observation((|| {
+            let direct_queue = crate::DirectQueue::new(required(&options, "--direct-queue")?)
+                .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+            crate::collect_direct_queue_once(&mut store, scope, &direct_queue, now, work_authorized)
+                .map_err(|error| CliError::Reconciliation(error.to_string()))
+        })());
+        let draft_pull_request = cycle_observation(crate::publish_draft_pull_request_once(
+            &writer,
+            scope,
+            &mut store,
+            Path::new(required(&options, "--git-askpass")?),
+            Path::new(required(&options, "--github-token")?),
+            options
+                .get("--commit-signing-identity")
+                .zip(options.get("--commit-signing-key"))
+                .map(|(identity, key)| crate::CommitSigningCredentials {
+                    identity_file: Path::new(identity),
+                    key_file: Path::new(key),
+                }),
+            now,
+            required(&options, "--owner")?,
+            lease_seconds,
+            work_authorized,
+        ));
+        let plan_publication = cycle_observation(crate::publish_plan_once(
+            &writer,
+            scope,
+            &mut store,
+            now,
+            required(&options, "--owner")?,
+            lease_seconds,
+            advancement_authorized,
+        ));
+        let review_publication = cycle_observation(crate::publish_reviews_once(
+            &general_review_writer,
+            &secperf_review_writer,
+            scope,
+            &mut store,
+            now,
+            required(&options, "--owner")?,
+            lease_seconds,
+            advancement_authorized,
+        ));
+        let final_preflight = cycle_observation(crate::reconcile_final_preflight_once(
+            &reader,
+            scope,
+            &mut store,
+            now,
+            required(&options, "--owner")?,
+            lease_seconds,
+            advancement_authorized,
+        ));
+        let disposition = cycle_observation(crate::consume_disposition_once(
+            &writer,
+            scope,
+            &mut store,
+            now,
+            required(&options, "--owner")?,
+            lease_seconds,
+            advancement_authorized,
+        ));
+        let dispatch = cycle_observation(crate::dispatch_once(
+            &mut store,
+            scope,
+            crate::DispatchCycleContext {
+                skills_repository_commit: skills_commit,
+                hermes_program: required(&options, "--hermes")?,
+                owner: required(&options, "--owner")?,
                 now,
-            )),
-            cycle_observation(crate::reconcile_ci_once(&reader, &policy, &mut store, now)),
-        )
-    } else {
-        let blocked = json!({"result": "authorization_blocked"});
-        (blocked.clone(), blocked)
-    };
-    let direct_worker = cycle_observation((|| {
-        let direct_queue = crate::DirectQueue::new(required(&options, "--direct-queue")?)
+                lease_seconds,
+                authorization_valid: work_authorized,
+            },
+        ));
+        let mut case_report = json!({
+            "case_key": case.case_key,
+            "worker_result": result,
+            "direct_worker": direct_worker,
+            "ci": ci,
+            "takeover": takeover,
+            "authorization": authorization,
+            "operational_bounds": bounds,
+            "draft_pull_request": draft_pull_request,
+            "plan_publication": plan_publication,
+            "review_publication": review_publication,
+            "final_preflight": final_preflight,
+            "disposition": disposition,
+            "dispatch": dispatch,
+        });
+        case_report["ok"] = json!(
+            !authorization_has_errors
+                && case_report
+                    .as_object()
+                    .expect("case report")
+                    .values()
+                    .all(|value| value["result"] != "error")
+        );
+        case_reports.push(case_report);
+    }
+    let direct_dispatch = (|| {
+        let queue = crate::DirectQueue::new(required(&options, "--direct-queue")?)
             .map_err(|error| CliError::Reconciliation(error.to_string()))?;
-        crate::reconcile_direct_queue_once(
+        crate::schedule_direct_queue_once(
             &mut store,
             &policy,
-            &direct_queue,
+            &work_cases,
+            &queue,
             required(&options, "--owner")?,
             now,
             crate::recommended_direct_lease_seconds(&policy)
                 .map_err(|error| CliError::Reconciliation(error.to_string()))?,
-            work_authorized,
         )
         .map_err(|error| CliError::Reconciliation(error.to_string()))
-    })());
-    let draft_pull_request = cycle_observation(crate::publish_draft_pull_request_once(
-        &writer,
-        &policy,
-        &mut store,
-        Path::new(required(&options, "--git-askpass")?),
-        Path::new(required(&options, "--github-token")?),
-        options
-            .get("--commit-signing-identity")
-            .zip(options.get("--commit-signing-key"))
-            .map(|(identity, key)| crate::CommitSigningCredentials {
-                identity_file: Path::new(identity),
-                key_file: Path::new(key),
-            }),
-        now,
-        required(&options, "--owner")?,
-        lease_seconds,
-        work_authorized,
-    ));
-    let plan_publication = cycle_observation(crate::publish_plan_once(
-        &writer,
-        &policy,
-        &mut store,
-        now,
-        required(&options, "--owner")?,
-        lease_seconds,
-        advancement_authorized,
-    ));
-    let review_publication = cycle_observation(crate::publish_reviews_once(
-        &general_review_writer,
-        &secperf_review_writer,
-        &policy,
-        &mut store,
-        now,
-        required(&options, "--owner")?,
-        lease_seconds,
-        advancement_authorized,
-    ));
-    let final_preflight = cycle_observation(crate::reconcile_final_preflight_once(
-        &reader,
-        &policy,
-        &mut store,
-        now,
-        required(&options, "--owner")?,
-        lease_seconds,
-        advancement_authorized,
-    ));
-    let disposition = cycle_observation(crate::consume_disposition_once(
-        &writer,
-        &policy,
-        &mut store,
-        now,
-        required(&options, "--owner")?,
-        lease_seconds,
-        advancement_authorized,
-    ));
-    let dispatch = cycle_observation(crate::dispatch_once(
-        &mut store,
-        &policy,
-        crate::DispatchCycleContext {
-            skills_repository_commit: skills_commit,
-            hermes_program: required(&options, "--hermes")?,
-            owner: required(&options, "--owner")?,
-            now,
-            lease_seconds,
-            authorization_valid: work_authorized,
-        },
-    ));
-    let mut report = json!({
-        "result": "active",
-        "collection": collection,
-        "observed_at": now,
-        "repository": policy.repository.full_name(),
-        "policy_revision": policy.revision,
-        "worker_result": result,
-        "direct_worker": direct_worker,
-        "ci": ci,
-        "intake": intake,
-        "takeover": takeover,
-        "authorization": authorization,
-        "operational_bounds": bounds,
-        "workspace_lifecycle": workspace_lifecycle,
-        "draft_pull_request": draft_pull_request,
-        "plan_publication": plan_publication,
-        "review_publication": review_publication,
-        "final_preflight": final_preflight,
-        "merge": {"result": "human_only"},
-        "disposition": disposition,
-        "dispatch": dispatch,
-    });
-    report["ok"] = json!(
-        !authorization_has_errors
-            && collection["direct_worker"]["result"] != "error"
-            && collection["worker_result"]["result"] != "error"
-            && report
-                .as_object()
-                .expect("cycle report")
-                .values()
-                .all(|value| value["result"] != "error")
-    );
-    Ok(report)
+    })();
+    let scheduling_ok = direct_dispatch
+        .as_ref()
+        .is_ok_and(|report| report.errors.is_empty());
+    let direct_dispatch = cycle_observation(direct_dispatch);
+    let ok = collection["direct_worker"]["result"] != "error"
+        && collection["worker_result"]["result"] != "error"
+        && workspace_lifecycle["result"] != "error"
+        && intake["result"] != "error"
+        && case_reports.iter().all(|case| case["ok"] == true)
+        && scheduling_ok;
+    Ok(json!({
+        "report_format": 2, "result": "active", "ok": ok,
+        "observed_at": now, "repository": policy.repository.full_name(),
+        "policy_revision": policy.revision, "collection": collection,
+        "workspace_lifecycle": workspace_lifecycle, "intake": intake,
+        "cases": case_reports, "direct_dispatch":direct_dispatch, "merge": {"result":"human_only"}
+    }))
 }
 
 fn cycle_observation<T: serde::Serialize, E: fmt::Display>(result: Result<T, E>) -> Value {

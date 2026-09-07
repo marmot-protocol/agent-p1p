@@ -1813,25 +1813,54 @@ impl Store {
     }
 
     pub fn unconsumed_task_projections(&self) -> Result<Vec<TaskProjectionInput>> {
+        self.unconsumed_task_projections_inner(None, None)
+    }
+
+    /// Filter on ledger ownership before decoding an unrelated task's payload.
+    pub fn unconsumed_task_projections_in(
+        &self,
+        repository_id: u64,
+        case_key: Option<&str>,
+    ) -> Result<Vec<TaskProjectionInput>> {
+        if repository_id == 0 || case_key.is_some_and(|key| key.trim().is_empty()) {
+            return Err(StoreError::InvalidInput(
+                "valid repository and case scope required",
+            ));
+        }
+        self.unconsumed_task_projections_inner(Some(repository_id), case_key)
+    }
+
+    fn unconsumed_task_projections_inner(
+        &self,
+        repository_id: Option<u64>,
+        case_key: Option<&str>,
+    ) -> Result<Vec<TaskProjectionInput>> {
         let mut statement = self.connection.prepare(
             "SELECT p.projection_id, p.effect_id, p.board, p.task_id,
                     p.desired_json, p.observed_json
              FROM task_projections p
+             JOIN outbox o ON o.effect_id = p.effect_id
+             JOIN cases c ON c.case_key = o.case_key
              LEFT JOIN runs r ON r.task_id = p.task_id
              WHERE p.task_id IS NOT NULL AND r.task_id IS NULL
+               AND (?1 IS NULL OR c.repository_id = ?1)
+               AND (?2 IS NULL OR c.case_key = ?2)
              ORDER BY p.reconciled_at, p.projection_id",
         )?;
         statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
-                ))
-            })?
+            .query_map(
+                params![repository_id.map(sql_u64).transpose()?, case_key],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                    ))
+                },
+            )?
             .map(|row| {
                 let (projection_id, effect_id, board, task_id, desired, observed) = row?;
                 Ok(TaskProjectionInput {
@@ -1857,7 +1886,7 @@ impl Store {
         now: u64,
         lease_seconds: u64,
     ) -> Result<Option<ClaimedEffect>> {
-        self.claim_effect_inner(owner, now, lease_seconds, None, None)
+        self.claim_effect_inner(owner, now, lease_seconds, None, None, None)
     }
 
     pub fn claim_effect_matching(
@@ -1867,7 +1896,7 @@ impl Store {
         lease_seconds: u64,
         effect_types: &[&str],
     ) -> Result<Option<ClaimedEffect>> {
-        self.claim_effect_inner(owner, now, lease_seconds, Some(effect_types), None)
+        self.claim_effect_inner(owner, now, lease_seconds, Some(effect_types), None, None)
     }
 
     /// Scope selection before leasing: a repository controller must never
@@ -1880,12 +1909,34 @@ impl Store {
         lease_seconds: u64,
         effect_types: &[&str],
     ) -> Result<Option<ClaimedEffect>> {
+        self.claim_repository_case_effect_matching(
+            repository_id,
+            None,
+            owner,
+            now,
+            lease_seconds,
+            effect_types,
+        )
+    }
+
+    /// A case cycle cannot lease a peer's effect, even if that peer is first.
+    #[allow(clippy::too_many_arguments)]
+    pub fn claim_repository_case_effect_matching(
+        &mut self,
+        repository_id: u64,
+        case_key: Option<&str>,
+        owner: &str,
+        now: u64,
+        lease_seconds: u64,
+        effect_types: &[&str],
+    ) -> Result<Option<ClaimedEffect>> {
         self.claim_effect_inner(
             owner,
             now,
             lease_seconds,
             Some(effect_types),
             Some(repository_id),
+            case_key,
         )
     }
 
@@ -1896,9 +1947,14 @@ impl Store {
         lease_seconds: u64,
         effect_types: Option<&[&str]>,
         repository_id: Option<u64>,
+        case_key: Option<&str>,
     ) -> Result<Option<ClaimedEffect>> {
         self.ensure_writable()?;
-        if owner.trim().is_empty() || lease_seconds == 0 || repository_id == Some(0) {
+        if owner.trim().is_empty()
+            || lease_seconds == 0
+            || repository_id == Some(0)
+            || case_key.is_some_and(|key| key.trim().is_empty())
+        {
             return Err(StoreError::InvalidInput(
                 "owner, positive lease and valid repository scope are required",
             ));
@@ -1931,11 +1987,13 @@ impl Store {
                    AND (lease_until IS NULL OR lease_until < ?1)
                    AND (?2 IS NULL OR case_key IN
                        (SELECT case_key FROM cases WHERE repository_id = ?2))
+                   AND (?3 IS NULL OR case_key = ?3)
                  ORDER BY created_at, effect_id",
             )?;
             let mut rows = statement.query(params![
                 sql_u64(now)?,
-                repository_id.map(sql_u64).transpose()?
+                repository_id.map(sql_u64).transpose()?,
+                case_key
             ])?;
             let mut found = None;
             while let Some(row) = rows.next()? {

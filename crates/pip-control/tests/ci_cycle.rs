@@ -25,6 +25,53 @@ impl PullRequestSource for FixtureSource {
 }
 
 #[test]
+fn scoped_ci_advances_the_healthy_case_without_selecting_a_broken_peer() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = waiting_ci_store(directory.path().join("ledger.db"));
+    let policy = active_policy();
+    store
+        .create_case(&NewCase {
+            case_key: "repo:984321#1239@1".into(),
+            repository_id: 984321,
+            issue_number: 1239,
+            workflow_version: 1,
+            policy_revision: policy.revision,
+            initial_state: "WAITING_CI".into(),
+            observed_at: 1,
+            event: EventInput {
+                event_id: "broken-peer".into(),
+                event_type: "REVIEW_READY".into(),
+                payload: json!({}),
+            },
+            effects: vec![],
+        })
+        .unwrap();
+    let before = store
+        .immutable_history_for_case("repo:984321#1239@1")
+        .unwrap();
+    let result = reconcile_ci_once(
+        &FixtureSource {
+            evidence: evidence(vec![check(CheckConclusion::Success)]),
+        },
+        pip_control::RepositoryScope::case(&policy, "repo:984321#1240@1"),
+        &mut store,
+        100,
+    )
+    .unwrap();
+    assert!(matches!(result, CiCycle::Transitioned { .. }));
+    assert_eq!(
+        store.case("repo:984321#1240@1").unwrap().unwrap().state,
+        "REVIEWING"
+    );
+    assert_eq!(
+        store
+            .immutable_history_for_case("repo:984321#1239@1")
+            .unwrap(),
+        before
+    );
+}
+
+#[test]
 fn exact_green_ci_is_recorded_and_releases_two_reviewers() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = waiting_ci_store(directory.path().join("ledger.db"));

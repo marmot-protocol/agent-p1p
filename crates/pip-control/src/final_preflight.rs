@@ -112,25 +112,21 @@ error_from!(GitHubError, GitHub);
 error_from!(StoreError, Store);
 error_from!(ControllerError, Controller);
 
-pub fn reconcile_final_preflight_once<S: FinalPreflightSource>(
+pub fn reconcile_final_preflight_once<'a, S: FinalPreflightSource>(
     source: &S,
-    policy: &RepositoryPolicy,
+    scope: impl Into<crate::RepositoryScope<'a>>,
     store: &mut Store,
     observed_at: u64,
     owner: &str,
     lease_seconds: u64,
     authorization_valid: bool,
 ) -> Result<FinalPreflightCycle, FinalPreflightError> {
+    let scope = scope.into();
+    let policy = scope.policy;
     if !authorization_valid {
         return Ok(FinalPreflightCycle::AuthorizationBlocked);
     }
-    let Some(claimed) = store.claim_repository_effect_matching(
-        policy.repository.id,
-        owner,
-        observed_at,
-        lease_seconds,
-        &[OBSERVE_EFFECT],
-    )?
+    let Some(claimed) = scope.claim(store, owner, observed_at, lease_seconds, &[OBSERVE_EFFECT])?
     else {
         return Ok(FinalPreflightCycle::Idle);
     };

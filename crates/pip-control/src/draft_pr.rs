@@ -23,8 +23,6 @@ use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use crate::RepositoryPolicy;
-
 const PUBLISH_EFFECT: &str = "PUBLISH_DRAFT_PULL_REQUEST";
 
 pub trait DraftPullRequestWriter {
@@ -208,9 +206,9 @@ error_from!(ControllerError, Controller);
 error_from!(PublicationError, Publication);
 
 #[allow(clippy::too_many_arguments)]
-pub fn publish_draft_pull_request_once<W: DraftPullRequestWriter>(
+pub fn publish_draft_pull_request_once<'a, W: DraftPullRequestWriter>(
     writer: &W,
-    policy: &RepositoryPolicy,
+    scope: impl Into<crate::RepositoryScope<'a>>,
     store: &mut Store,
     git_askpass: &Path,
     github_token_file: &Path,
@@ -220,6 +218,8 @@ pub fn publish_draft_pull_request_once<W: DraftPullRequestWriter>(
     lease_seconds: u64,
     authorization_valid: bool,
 ) -> Result<DraftPullRequestCycle, DraftPullRequestError> {
+    let scope = scope.into();
+    let policy = scope.policy;
     let publisher = ControllerPublisher {
         signing,
         actor: policy.github.automation_actor_id.unwrap_or(0),
@@ -229,7 +229,7 @@ pub fn publish_draft_pull_request_once<W: DraftPullRequestWriter>(
     publish_draft_pull_request_once_with(
         writer,
         &publisher,
-        policy,
+        scope,
         store,
         now,
         owner,
@@ -239,16 +239,18 @@ pub fn publish_draft_pull_request_once<W: DraftPullRequestWriter>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn publish_draft_pull_request_once_with<W: DraftPullRequestWriter, P: BranchPublisher>(
+pub fn publish_draft_pull_request_once_with<'a, W: DraftPullRequestWriter, P: BranchPublisher>(
     writer: &W,
     publisher: &P,
-    policy: &RepositoryPolicy,
+    scope: impl Into<crate::RepositoryScope<'a>>,
     store: &mut Store,
     now: u64,
     owner: &str,
     lease_seconds: u64,
     authorization_valid: bool,
 ) -> Result<DraftPullRequestCycle, DraftPullRequestError> {
+    let scope = scope.into();
+    let policy = scope.policy;
     if !authorization_valid {
         return Ok(DraftPullRequestCycle::AuthorizationBlocked);
     }
@@ -256,14 +258,7 @@ pub fn publish_draft_pull_request_once_with<W: DraftPullRequestWriter, P: Branch
         .github
         .automation_actor_id
         .ok_or(DraftPullRequestError::MissingAutomationActor)?;
-    let Some(claimed) = store.claim_repository_effect_matching(
-        policy.repository.id,
-        owner,
-        now,
-        lease_seconds,
-        &[PUBLISH_EFFECT],
-    )?
-    else {
+    let Some(claimed) = scope.claim(store, owner, now, lease_seconds, &[PUBLISH_EFFECT])? else {
         return Ok(DraftPullRequestCycle::Idle);
     };
     let case = store

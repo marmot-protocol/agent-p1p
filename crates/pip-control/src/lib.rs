@@ -25,6 +25,7 @@ mod release;
 mod results;
 mod reviews;
 mod runtime;
+mod scope;
 mod secret_file;
 mod shadow;
 mod takeover;
@@ -45,8 +46,9 @@ pub use builder_retry::{BuilderRetryRequest, authorize_builder_retry, authorize_
 pub use ci::{CiCycle, CiCycleError, PullRequestSource, reconcile_ci_once};
 pub use cli::{CliError, run_cli, run_git_askpass};
 pub use direct_queue::{
-    DirectQueue, DirectQueueCycle, DirectQueueError, execute_direct_queue_once,
-    reconcile_direct_queue_once,
+    DirectQueue, DirectQueueCycle, DirectQueueError, DirectQueueSchedule,
+    collect_direct_queue_once, execute_direct_queue_once, reconcile_direct_queue_once,
+    schedule_direct_queue_once,
 };
 pub use direct_worker::{
     CursorDirectRuntime, DirectWorkerRuntime, DirectWorkerRuntimeError,
@@ -96,6 +98,7 @@ pub use reviews::{
     ReviewPublicationCycle, ReviewPublicationError, ReviewWriter, publish_reviews_once,
 };
 pub use runtime::{RuntimeBootstrapError, bootstrap_hermes_runtime_with};
+pub use scope::RepositoryScope;
 pub use shadow::{IntakeSource, ShadowCandidate, ShadowError, ShadowReport, reconcile_read_only};
 pub use takeover::{TakeoverCycle, TakeoverError, reconcile_takeover_once};
 pub use webhook_consumer::{
