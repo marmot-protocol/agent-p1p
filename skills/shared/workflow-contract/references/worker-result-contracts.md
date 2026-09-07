@@ -154,6 +154,16 @@ the case-owned draft PR, binds its numeric identity and exact head in the
 ledger, and independently reads the complete GitHub CI attempt history before
 releasing reviewers.
 
+Builder publication prose belongs in `evidence.pr_title`, `problem_summary`, and
+`solution_summary` as concise strings. The controller supplies the plan link and
+closing issue reference from authoritative identity/publication records.
+On remediation, record considered review suggestions in
+`evidence.suggestion_dispositions`: objects identifying the reviewer and original
+suggestion, an `addressed`/`deferred` disposition, and an explanatory `summary`.
+Final reviewers assess those decisions or record them when no builder follow-up
+has yet occurred. Suggestions do not become mandatory finding IDs. A worthwhile
+in-scope follow-up uses the existing final `RETURN_TO_BUILD` path and fresh CI/reviews.
+
 ## Reviewers
 
 Additional fields:

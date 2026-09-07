@@ -73,6 +73,9 @@ fn publication_preserves_attributed_suggestions_and_verification_limits() {
         assert!(!body.contains("log_sha256"));
         assert!(!body.contains("bound_state_revision"));
         assert!(body.contains("No blocking findings"));
+        assert!(!body.contains("Pip reviewer role:"));
+        assert!(!body.contains("No readable check summary"));
+        assert!(!body.contains("No limitation summary"));
     }
     assert!(general.body.contains("Reviewer-reported checks"));
     assert!(general.body.contains("Limitations"));
@@ -114,12 +117,12 @@ fn distinct_role_identities_publish_exact_head_approvals_before_preflight() {
     assert!(
         general[0]
             .body
-            .contains("Pip reviewer role: reviewer-general")
+            .contains("<!-- pip-reviewer-role: reviewer-general -->")
     );
     assert!(
         secperf[0]
             .body
-            .contains("Pip reviewer role: reviewer-secperf")
+            .contains("<!-- pip-reviewer-role: reviewer-secperf -->")
     );
     assert_eq!(general[0].expected_head_sha, "b".repeat(40));
     assert_eq!(

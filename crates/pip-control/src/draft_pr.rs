@@ -342,17 +342,20 @@ pub fn publish_draft_pull_request_once_with<'a, W: DraftPullRequestWriter, P: Br
             "signer_fingerprint": signed.signer_fingerprint,
         })
     });
-    let body = render_body(&case, &build, &head_sha);
+    let (title, body) = match render_body(store, policy, &case, &build, &head_sha) {
+        Ok(presentation) => presentation,
+        Err(error) => {
+            store.release_effect(&claimed.effect_id, owner)?;
+            return Err(error);
+        }
+    };
     let result = writer.ensure_draft_pull_request(&PullRequestSpec {
         owner: policy.repository.owner.clone(),
         repository: policy.repository.name.clone(),
         repository_id: policy.repository.id,
         effect_id: format!("{}:draft-pr", case.case_key),
         expected_actor_id: expected_actor,
-        title: format!(
-            "Pip: issue #{} (workflow {})",
-            case.issue_number, case.workflow_version
-        ),
+        title,
         body,
         head_branch: branch.clone(),
         head_sha: head_sha.clone(),
@@ -569,6 +572,16 @@ pub(crate) fn planned_base(
     history: &ImmutableCaseHistory,
     case: &StoredCase,
 ) -> Result<GitSha, DraftPullRequestError> {
+    accepted_plan(history, case)?
+        .planned_base_sha
+        .parse()
+        .map_err(|_| DraftPullRequestError::InvalidBuildJoin)
+}
+
+fn accepted_plan(
+    history: &ImmutableCaseHistory,
+    case: &StoredCase,
+) -> Result<pip_contracts::PlannerResult, DraftPullRequestError> {
     let mut planned = Vec::new();
     for run in history.runs.iter().filter(|run| run.role == "planner") {
         let result: WorkerResult = serde_json::from_value(run.payload.clone())
@@ -579,14 +592,13 @@ pub(crate) fn planned_base(
             && plan.common.task_id == run.task_id
             && payload_matches(&run.payload, &run.payload_sha256)
         {
-            planned.push(plan.planned_base_sha);
+            planned.push(plan);
         }
     }
-    let [head] = planned.as_slice() else {
+    let [plan] = planned.as_slice() else {
         return Err(DraftPullRequestError::InvalidBuildJoin);
     };
-    head.parse()
-        .map_err(|_| DraftPullRequestError::InvalidBuildJoin)
+    Ok(plan.clone())
 }
 
 pub(crate) fn payload_matches(payload: &serde_json::Value, expected: &str) -> bool {
@@ -599,8 +611,61 @@ pub(crate) fn payload_matches(payload: &serde_json::Value, expected: &str) -> bo
     })
 }
 
-fn render_body(case: &StoredCase, build: &BuilderResult, head_sha: &str) -> String {
+fn render_body(
+    store: &Store,
+    policy: &crate::RepositoryPolicy,
+    case: &StoredCase,
+    build: &BuilderResult,
+    head_sha: &str,
+) -> Result<(String, String), DraftPullRequestError> {
     use crate::publication_text::{bullets, prose};
+    let history = store.immutable_history_for_case(&case.case_key)?;
+    let plan = accepted_plan(&history, case)?;
+    let text = |key: &str| {
+        build
+            .common
+            .evidence
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .filter(|text| !text.trim().is_empty())
+    };
+    let title = text("pr_title")
+        .unwrap_or(&plan.authorized_scope)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    // GitHub titles are plain text and bounded in bytes, including Unicode.
+    let end = title
+        .char_indices()
+        .map(|(index, _)| index)
+        .find(|index| *index > 200)
+        .unwrap_or(title.len());
+    let title = title[..end].to_owned();
+    let issue_url = format!(
+        "https://github.com/{}/{}/issues/{}",
+        policy.repository.owner, policy.repository.name, case.issue_number
+    );
+    let comment = history
+        .evidence
+        .iter()
+        .filter(|entry| {
+            entry.kind == "GITHUB_PLAN_PUBLICATION"
+                && payload_matches(&entry.payload, &entry.payload_sha256)
+                && entry.payload["plan_version"].as_u64() == Some(u64::from(case.plan_version))
+                && entry.payload["task_id"].as_str() == Some(plan.common.task_id.as_str())
+                && entry.payload["actor_id"].as_u64() == policy.github.automation_actor_id
+        })
+        .filter_map(|entry| entry.payload["comment_id"].as_u64())
+        .rfind(|id| *id > 0);
+    let plan_link = match comment {
+        Some(id) => format!("[Implementation plan]({issue_url}#issuecomment-{id})"),
+        None => format!("[Plan discussion]({issue_url})"), // Historical results may lack publication evidence.
+    };
+    let problem = prose(text("problem_summary").unwrap_or(&plan.root_cause));
+    let solution = match text("solution_summary") {
+        Some(summary) => format!("### Solution\n\n{}", prose(summary)),
+        None => format!("### Implemented scope\n\n{}", prose(&plan.authorized_scope)),
+    };
     let checks = bullets(&build.local_checks, "No local checks reported.");
     let resolutions = if build.finding_resolutions.is_empty() {
         "No findings required remediation.".into()
@@ -619,10 +684,24 @@ fn render_body(case: &StoredCase, build: &BuilderResult, head_sha: &str) -> Stri
             .collect::<Vec<_>>()
             .join("\n\n")
     };
-    format!(
-        "## Pip implementation for #{}\n\nPlan version: {} · Remediation round: {}\n\nCommit: `{}`\n\n### Local checks\n\n{checks}\n\n### Findings addressed\n\n{resolutions}\n\nChecks are builder-reported; required CI and independent reviews are evaluated separately. Full structured build evidence is retained by Pip.",
-        case.issue_number, build.plan_version, case.remediation_round, head_sha,
-    )
+    let feedback = build
+        .common
+        .evidence
+        .get("suggestion_dispositions")
+        .map(crate::publication_text::summaries)
+        .unwrap_or_default();
+    let feedback = if feedback.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n### Review suggestions\n\n{}", bullets(feedback, ""))
+    };
+    Ok((
+        title,
+        format!(
+            "### Problem\n\n{problem}\n\n{solution}\n\n{plan_link}\n\nFixes #{}\n\n<details>\n<summary>Local checks and remediation details</summary>\n\nCommit: `{head_sha}`\n\n### Local checks\n\n{checks}\n\n### Findings addressed\n\n{resolutions}{feedback}\n\nChecks are builder-reported; CI and reviews are evaluated separately.\n\n</details>",
+            case.issue_number,
+        ),
+    ))
 }
 
 fn published_command(

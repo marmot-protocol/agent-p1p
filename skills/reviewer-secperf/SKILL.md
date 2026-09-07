@@ -1,7 +1,7 @@
 ---
 name: reviewer-secperf
 description: Use when reviewing a Pip PR for security and performance.
-version: 0.11.0
+version: 0.12.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -24,12 +24,7 @@ The Rust direct-provider runtime starts one fresh Cursor Agent invocation using 
 4. Review trust boundaries, data exposure, unsafe parsing, misuse/abuse paths, resource bounds, algorithmic regressions, concurrency, and denial-of-service risk. Treat any unexpected MLS/CGKA, key, trust-anchor, authorization-semantic, or push-context change as blocking and escalate to JG.
 5. Independently verify every material claim against the exact checkout and GitHub evidence. Do not alter branches, commits, PR text, labels, or code.
 6. Do not mutate GitHub. Copy the exact `reviewer_id` into the result. Required instances participate in the lane verdict; advisory and shadow instances are recorded as immutable observations and never advance or block the workflow. The controller publishes only the aggregate required lane contract through
-   the role-scoped reviewer identity. Include this exact line in the returned
-   review evidence so the publication contract remains explicit:
-   ```text
-   Pip reviewer role: reviewer-secperf
-   ```
-   Do not use that marker for any other role. Return the Rust
+   the role-scoped reviewer identity. Do not add control-language footers or publication markers to prose; the controller derives its hidden marker from the validated role. Put concise check summaries under `evidence.local_checks` and limitations under `evidence.limitations`, as arrays of strings; omit unsupported claims. Return the Rust
    `reviewer-secperf` contract from `references/worker-result-contracts.md` in the loaded `workflow-contract` skill directory (not the target repository). Put confidence, provider limitations, and durable artifact paths under `evidence`. Save and validate the object using the field guide's local validator, then return it as the entire final response without prose or a code fence. The direct runtime captures the response; do not look for Hermes completion tools or update Kanban.
 
 ## Blocking rule

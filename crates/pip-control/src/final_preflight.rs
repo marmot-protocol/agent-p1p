@@ -537,10 +537,10 @@ fn validate_published_reviews(
 
 fn stamped_role(body: &str) -> Option<&str> {
     let mut roles = body.lines().filter_map(|line| {
-        REVIEW_ROLES
-            .iter()
-            .map(|(_, role)| *role)
-            .find(|role| line == format!("Pip reviewer role: {role}"))
+        REVIEW_ROLES.iter().map(|(_, role)| *role).find(|role| {
+            line == format!("<!-- pip-reviewer-role: {role} -->")
+                || line == format!("Pip reviewer role: {role}")
+        })
     });
     let role = roles.next()?;
     roles.next().is_none().then_some(role)
@@ -611,5 +611,22 @@ fn workflow(
 fn push_unique(values: &mut Vec<String>, value: String) {
     if !values.contains(&value) {
         values.push(value);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stamped_role;
+
+    #[test]
+    fn review_role_accepts_one_hidden_or_legacy_marker_but_not_ambiguous_markers() {
+        let hidden = "<!-- pip-reviewer-role: reviewer-general -->";
+        let legacy = "Pip reviewer role: reviewer-general";
+        assert_eq!(stamped_role(hidden), Some("reviewer-general"));
+        assert_eq!(stamped_role(legacy), Some("reviewer-general"));
+        assert_eq!(stamped_role(&format!("{hidden}\n{legacy}")), None);
+        assert_eq!(stamped_role(&format!("{hidden}\n{hidden}")), None);
+        assert_eq!(stamped_role("<!-- pip-reviewer-role: builder -->"), None);
+        assert_eq!(stamped_role(&format!("Quoted marker: {hidden}")), None);
     }
 }

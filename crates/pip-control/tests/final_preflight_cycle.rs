@@ -112,7 +112,9 @@ impl FinalPreflightSource for FixtureSource {
 fn exact_published_reviews_clean_ci_and_resolved_threads_release_final_review() {
     let directory = tempfile::tempdir().unwrap();
     let policy = active_policy();
-    let source = accepted_source();
+    let mut source = accepted_source();
+    source.evidence.reviews[0].body =
+        "Approved.\n\n<!-- pip-reviewer-role: reviewer-general -->".into();
     let mut store = final_review_store(directory.path().join("ledger.db"), &policy, &source);
 
     let result = reconcile_final_preflight_once(

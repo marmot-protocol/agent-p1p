@@ -424,6 +424,17 @@ fn controller_creates_deterministic_draft_pr_before_ci_observation() {
     assert!(!specs[0].body.contains("```json"));
     assert!(specs[0].body.contains("### Local checks"));
     assert!(specs[0].body.contains("No findings required remediation."));
+    assert_eq!(specs[0].title, "Bound retained profile metadata");
+    for expected in [
+        "Fixes #1240",
+        "### Problem",
+        "Unknown fields bypass retention limits.",
+        "### Solution",
+        "Bound keys and values during profile ingestion.",
+        "https://github.com/marmot-protocol/mdk/issues/1240#issuecomment-991",
+    ] {
+        assert!(specs[0].body.contains(expected), "missing {expected}");
+    }
     let publications = publisher.requests.borrow();
     assert_eq!(publications.len(), 1);
     assert_eq!(
@@ -700,9 +711,19 @@ fn build_store_with_event(path: std::path::PathBuf, event_type: &str) -> Store {
                     run_id: "run-planner-1".into(),
                     task_id: plan["task_id"].as_str().unwrap().into(),
                     role: "planner".into(),
-                    payload: plan,
+                    payload: plan.clone(),
                 }),
-                evidence: Vec::new(),
+                evidence: vec![pip_store::EvidenceInput {
+                    evidence_id: "published-plan".into(),
+                    kind: "GITHUB_PLAN_PUBLICATION".into(),
+                    source: "github-issue-1240".into(),
+                    payload: json!({
+                        "actor_id": 202880,
+                        "comment_id": 991,
+                        "plan_version": 1,
+                        "task_id": plan["task_id"],
+                    }),
+                }],
                 findings: Vec::new(),
                 effects: Vec::new(),
             },
@@ -800,7 +821,12 @@ fn builder_fixture() -> Value {
         "../../../migration/target-v1/worker-results.json"
     ))
     .unwrap();
-    fixture["results"][1].clone()
+    let mut result = fixture["results"][1].clone();
+    result["evidence"]["pr_title"] = json!("Bound retained profile metadata");
+    result["evidence"]["problem_summary"] = json!("Unknown fields bypass retention limits.");
+    result["evidence"]["solution_summary"] =
+        json!("Bound keys and values during profile ingestion.");
+    result
 }
 
 fn active_policy() -> pip_control::RepositoryPolicy {

@@ -1,7 +1,7 @@
 ---
 name: final-reviewer
 description: Use for holistic final adjudication of a Pip case.
-version: 0.7.0
+version: 0.8.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -23,6 +23,7 @@ Holistically adjudicate the complete case using the exact task-bound model and r
 3. Inspect every bundled plan version and identify the active authorized plan and its controller publication evidence.
 4. Inspect the final diff and every bundled build/remediation round.
 5. Inspect both complete bundled review histories, findings, confirmations, controller-published review evidence, and CodeRabbit findings when present.
+   Assess nonblocking suggestions too. Check the builder's `evidence.suggestion_dispositions` when available; if reviews approved on the first round, the builder has not yet had an opportunity to respond. Decide explicitly which suggestions merit a small, in-scope follow-up and which should be deferred with a reason. Use the existing `RETURN_TO_BUILD` outcome when a worthwhile concrete change remains, explaining it in `decision_rationale`; do not create a new loop solely because suggestions exist. Document decisions under `evidence.suggestion_dispositions` (reviewer identity, suggestion, addressed/deferred disposition and explanatory summary). A justified deferral does not block readiness. Do not wait for late advisory reviewers or broaden the plan without human authorization. Any actual new commit still requires fresh exact-head CI and required reviews.
 6. Verify the bundled `GITHUB_FINAL_PREFLIGHT` observation binds ownership, mandatory approvals, resolved threads, clean mergeability, and green required CI to the task's current exact head. Assess the complete check evidence supplied by the controller, including failures and limitations. Do not invent repository-specific skipped-check exemptions. Missing or contradictory evidence is blocking; the controller independently revalidates live GitHub state before publishing readiness.
 7. Decide whether the work solves the right root problem with sufficient evidence.
 8. Return `READY`, `RETURN_TO_BUILD`, `RETURN_TO_REVIEW`, `RETURN_TO_PLANNING`, `WAIT_FOR_ISSUE_CREATOR`, `BLOCKED`, `ABANDON`, or `BLOCKED_UNEXPECTED_MODEL`.

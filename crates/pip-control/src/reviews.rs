@@ -340,7 +340,7 @@ fn publish_one<W: ReviewWriter>(
         "Security and performance review"
     };
     let body = format!(
-        "## {lane}: {}\n\nReviewed commit: `{head}`\n\n{reports}\n\nChecks are reviewer-reported, not independently rerun by Pip. Full structured evidence is retained by Pip.\n\nPip reviewer role: {role_name}",
+        "## {lane}: {}\n\nReviewed commit: `{head}`\n\n{reports}\n\n<!-- pip-reviewer-role: {role_name} -->",
         match event {
             ReviewEvent::Approve => "Approved",
             ReviewEvent::RequestChanges => "Changes requested",
@@ -403,16 +403,8 @@ fn render_review_summary(review: &ReviewResult) -> String {
     for (label, key, empty) in [
         ("Scope", "review_scope", ""),
         ("Summary", "summary", ""),
-        (
-            "Reviewer-reported checks",
-            "local_checks",
-            "No readable check summary supplied; do not infer that tests ran.",
-        ),
-        (
-            "Limitations",
-            "limitations",
-            "No limitation summary supplied.",
-        ),
+        ("Reviewer-reported checks", "local_checks", ""),
+        ("Limitations", "limitations", ""),
         ("Earlier feedback", "prior_suggestions", ""),
     ] {
         let lines = review

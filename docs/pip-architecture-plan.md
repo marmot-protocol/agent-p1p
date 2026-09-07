@@ -49,6 +49,10 @@ lifecycle boundary before use.
 7. Run every configured required reviewer independently on the same head.
 8. If changes are needed, combine blocking findings, remediate, and repeat CI
    and the required review set on the new head.
+   Builders also assess nonblocking suggestions and record addressed/deferred
+   decisions with reasons. The final reviewer assesses suggestions when no
+   remediation occurred, returning worthwhile in-scope changes to the existing
+   build loop. Suggestions alone do not force a new round or expand authority.
 9. Run a fresh final review of the issue, plan, implementation and review history.
 10. Publish a human-held readiness recommendation. A person reviews and merges.
 
@@ -119,6 +123,10 @@ inventories in visible comments. Keep structured evidence in Pip; when an export
 is useful to a person, provide a separately downloadable file rather than a code
 block. Small ownership markers may remain hidden. Publication formatting must
 not change accepted results, review votes or exact-head bindings.
+PR titles describe the change. Descriptions briefly explain the problem and
+implemented solution, link the accepted published plan, and include a closing
+`Fixes #N` reference. Reviewer-role identification belongs in hidden metadata,
+not a visible control-language footer.
 The dedicated commit-signing key is controller-only as well. Signing preserves
 the accepted tree exactly and uses a validated parent and automation identity;
 it never edits the accepted worker result to substitute a new SHA. Retain the

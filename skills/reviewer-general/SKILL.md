@@ -1,7 +1,7 @@
 ---
 name: reviewer-general
 description: Use for exact-head correctness review of a Pip PR.
-version: 0.9.0
+version: 0.10.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -36,14 +36,11 @@ Record the reviewed head SHA. Any later commit invalidates the verdict. Confirm 
 Do not mutate GitHub. Copy the exact `reviewer_id` from the task into the result.
 The controller aggregates all required instances in this semantic lane and
 publishes one accepted lane contract through the role-scoped GitHub identity.
-Include this exact line in the returned
-review evidence so the publication contract remains explicit:
-
-```text
-Pip reviewer role: reviewer-general
-```
-
-Do not use that marker for any other role. Then produce the Rust
+Do not add control-language footers or publication markers to prose. The
+controller derives a hidden identity marker from the validated role. Put concise
+check summaries under `evidence.local_checks` and limitations under
+`evidence.limitations`, as arrays of strings; omit unsupported claims.
+Produce the Rust
 `reviewer-general` contract
 from `references/worker-result-contracts.md` in the loaded `workflow-contract` skill directory (not the target repository). After
 validating it, call `kanban_complete` with a concise summary and the complete
