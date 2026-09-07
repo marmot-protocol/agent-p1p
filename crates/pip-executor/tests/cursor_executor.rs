@@ -24,7 +24,7 @@ fn direct_prompt_uses_digest_bound_evidence_without_repeating_history() {
     let runner = FakeRunner::default();
     runner.push(envelope(&results()[1]));
     let mut input = task(WorkerRole::Builder, "composer-2.5", 1);
-    let bundle = json!({"records": "x".repeat(200_000)});
+    let bundle = json!({"records": vec!["x".repeat(1000); 200]});
     input.immutable_input["immutable_evidence_bundle"] = bundle.clone();
     executor(runner)
         .execute(&health("composer-2.5"), &input, &worktree, &artifacts)
@@ -32,6 +32,10 @@ fn direct_prompt_uses_digest_bound_evidence_without_repeating_history() {
     assert!(fs::read(artifacts.join("prompt.md")).unwrap().len() < 4096);
     let bytes = fs::read(artifacts.join("immutable-evidence.json")).unwrap();
     assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), bundle);
+    assert!(
+        String::from_utf8_lossy(&bytes).lines().count() > 200,
+        "evidence must support bounded line reads, not one oversized JSON line"
+    );
     let task_input: Value =
         serde_json::from_slice(&fs::read(artifacts.join("task-input.json")).unwrap()).unwrap();
     assert!(
@@ -319,7 +323,7 @@ fn builder_runs_once_in_fresh_exact_model_mode_and_retains_complete_artifacts() 
 }
 
 #[test]
-fn reviewer_has_no_force_and_any_worktree_mutation_is_rejected() {
+fn reviewer_can_run_checks_noninteractively_but_worktree_mutation_is_rejected() {
     let tmp = tempfile::tempdir().unwrap();
     let worktree = tmp.path().join("worktree");
     let artifacts = tmp.path().join("artifacts");
@@ -345,7 +349,7 @@ fn reviewer_has_no_force_and_any_worktree_mutation_is_rejected() {
         Err(CursorExecutionError::ReviewerMutation)
     ));
     let agent = &runner.commands.borrow()[2];
-    assert!(!agent.args.iter().any(|arg| arg == "--force"));
+    assert!(agent.args.iter().any(|arg| arg == "--force"));
     assert!(agent.args.iter().any(|arg| arg == "--trust"));
     assert_eq!(
         serde_json::from_str::<Value>(

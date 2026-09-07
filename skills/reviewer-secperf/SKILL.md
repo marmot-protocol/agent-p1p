@@ -1,7 +1,7 @@
 ---
 name: reviewer-secperf
 description: Use when reviewing a Pip PR for security and performance.
-version: 0.10.0
+version: 0.11.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -14,7 +14,7 @@ metadata:
 
 ## Overview
 
-The Rust direct-provider runtime starts one fresh read-only Cursor Agent invocation using the exact task-bound model. Each instance is independent of the builder, the general lane, and other security/performance instances. Copy the task's reviewer ID and mode; the skill never chooses a model, mode, or fallback.
+The Rust direct-provider runtime starts one fresh Cursor Agent invocation using the exact task-bound model. Each instance is independent of the builder, the general lane, and other security/performance instances. Copy the task's reviewer ID and mode; the skill never chooses a model, mode, or fallback. Commands and artifact writes are approved noninteractively so verification can run. This is not an OS-enforced read-only checkout: the runtime rejects a result if the assigned checkout changes. Do not edit source, Git state, or repository configuration; write probes and build outputs only under the assigned artifact/cache directories.
 
 ## Workflow
 

@@ -159,7 +159,7 @@ impl<R: ProcessRunner> CursorExecutor<R> {
         let evidence = immutable_input
             .as_object_mut()
             .and_then(|input| input.remove("immutable_evidence_bundle"))
-            .map(|bundle| serde_json::to_vec(&bundle))
+            .map(|bundle| serde_json::to_vec_pretty(&bundle))
             .transpose()
             .map_err(|error| CursorExecutionError::InvalidResult(error.to_string()))?;
         if let Some(bytes) = &evidence {
@@ -205,12 +205,11 @@ impl<R: ProcessRunner> CursorExecutor<R> {
         }
         write_artifact(artifact_dir, "prompt.md", prompt.as_bytes())?;
 
-        // The controller already selected this isolated workspace. A review
-        // needs noninteractive workspace trust, not blanket command approval.
-        let mut args = vec!["--print".into(), "--trust".into()];
-        if task.binding.role == WorkerRole::Builder {
-            args.push("--force".into());
-        }
+        // Both roles need shell checks and evidence writes without an operator
+        // prompt. This is command approval, not an OS read-only boundary. The
+        // service isolates credentials; reviews must also pass the unchanged
+        // exact-head checkout postcondition before their result is accepted.
+        let mut args = vec!["--print".into(), "--trust".into(), "--force".into()];
         // Prompt bytes travel through stdin, not an OS-size-limited argument.
         args.extend([
             "--output-format".into(),
