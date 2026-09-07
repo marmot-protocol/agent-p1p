@@ -19,7 +19,17 @@ mod task_results;
 pub use builder_retry::BuilderRetryAuthorization;
 pub use dispatch_intents::{CreateReservation, DispatchIntent, DispatchTransport};
 
-const SCHEMA_VERSION: u32 = 8;
+const MIGRATIONS: &[&str] = &[
+    MIGRATION_1,
+    MIGRATION_2,
+    MIGRATION_3,
+    MIGRATION_4,
+    MIGRATION_5,
+    MIGRATION_6,
+    MIGRATION_7,
+    dispatch_intents::MIGRATION,
+];
+const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
 
 const MIGRATION_1: &str = r#"
 CREATE TABLE schema_migrations (
@@ -2639,96 +2649,19 @@ fn migrate(connection: &mut Connection) -> Result<()> {
     if version > SCHEMA_VERSION {
         return Err(StoreError::UnsupportedSchema(version));
     }
-    if version == 0 {
+    // Each step stays individually atomic, so an interrupted upgrade resumes
+    // after the last committed version using the same ordered migration list.
+    for migration in MIGRATIONS.iter().skip(version as usize) {
+        let next = version + 1;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Exclusive)?;
-        transaction.execute_batch(MIGRATION_1)?;
+        transaction.execute_batch(migration)?;
         transaction.execute(
-            "INSERT INTO schema_migrations(version, applied_at) VALUES (1, 0)",
-            [],
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, 0)",
+            [next],
         )?;
-        transaction.pragma_update(None, "user_version", 1)?;
+        transaction.pragma_update(None, "user_version", next)?;
         transaction.commit()?;
-        version = 1;
-    }
-    if version == 1 {
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Exclusive)?;
-        transaction.execute_batch(MIGRATION_2)?;
-        transaction.execute(
-            "INSERT INTO schema_migrations(version, applied_at) VALUES (2, 0)",
-            [],
-        )?;
-        transaction.pragma_update(None, "user_version", 2)?;
-        transaction.commit()?;
-        version = 2;
-    }
-    if version == 2 {
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Exclusive)?;
-        transaction.execute_batch(MIGRATION_3)?;
-        transaction.execute(
-            "INSERT INTO schema_migrations(version, applied_at) VALUES (3, 0)",
-            [],
-        )?;
-        transaction.pragma_update(None, "user_version", 3)?;
-        transaction.commit()?;
-        version = 3;
-    }
-    if version == 3 {
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Exclusive)?;
-        transaction.execute_batch(MIGRATION_4)?;
-        transaction.execute(
-            "INSERT INTO schema_migrations(version, applied_at) VALUES (4, 0)",
-            [],
-        )?;
-        transaction.pragma_update(None, "user_version", 4)?;
-        transaction.commit()?;
-        version = 4;
-    }
-    if version == 4 {
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Exclusive)?;
-        transaction.execute_batch(MIGRATION_5)?;
-        transaction.execute(
-            "INSERT INTO schema_migrations(version, applied_at) VALUES (5, 0)",
-            [],
-        )?;
-        transaction.pragma_update(None, "user_version", 5)?;
-        transaction.commit()?;
-        version = 5;
-    }
-    if version == 5 {
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Exclusive)?;
-        transaction.execute_batch(MIGRATION_6)?;
-        transaction.execute(
-            "INSERT INTO schema_migrations(version, applied_at) VALUES (6, 0)",
-            [],
-        )?;
-        transaction.pragma_update(None, "user_version", 6)?;
-        transaction.commit()?;
-        version = 6;
-    }
-    if version == 6 {
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Exclusive)?;
-        transaction.execute_batch(MIGRATION_7)?;
-        transaction.execute(
-            "INSERT INTO schema_migrations(version, applied_at) VALUES (7, 0)",
-            [],
-        )?;
-        transaction.pragma_update(None, "user_version", 7)?;
-        transaction.commit()?;
-        version = 7;
-    }
-    if version == 7 {
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Exclusive)?;
-        transaction.execute_batch(dispatch_intents::MIGRATION)?;
-        transaction.execute(
-            "INSERT INTO schema_migrations(version, applied_at) VALUES (8, 0)",
-            [],
-        )?;
-        transaction.pragma_update(None, "user_version", 8)?;
-        transaction.commit()?;
-        version = 8;
-    }
-    if version != SCHEMA_VERSION {
-        return Err(StoreError::UnsupportedSchema(version));
+        version = next;
     }
     Ok(())
 }
