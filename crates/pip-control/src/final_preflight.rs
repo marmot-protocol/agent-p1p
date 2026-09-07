@@ -292,8 +292,15 @@ fn validate_pull_request(
     if !pull.open || pull.merged || expected_draft.is_some_and(|draft| pull.draft != draft) {
         push_unique(blockers, "PULL_REQUEST_DISPOSITION_DRIFT".into());
     }
-    if pull.mergeable != Some(true) || pull.mergeable_state != "clean" {
-        push_unique(blockers, "PR_NOT_CLEANLY_MERGEABLE".into());
+    match pull.mergeable {
+        Some(false) => push_unique(blockers, "PR_MERGE_CONFLICTS".into()),
+        None => push_unique(blockers, "PR_MERGEABILITY_UNKNOWN".into()),
+        Some(true) => {}
+    }
+    if pull.mergeable_state != "clean" {
+        // A conflict-free head can still be blocked by branch requirements.
+        // Preserve GitHub's observation without guessing which rule failed.
+        push_unique(blockers, format!("PR_MERGE_STATE:{}", pull.mergeable_state));
     }
     let evaluation = evaluate_ci(evidence, head_sha, &policy.required_ci_contexts);
     if evaluation.verdict != CiVerdict::Accepted {

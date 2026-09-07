@@ -221,6 +221,65 @@ fn unresolved_threads_fail_closed_without_stranding_the_observation_lease() {
 }
 
 #[test]
+fn mergeability_blockers_distinguish_conflicts_unknown_and_branch_requirements() {
+    for (mergeable, state, expected) in [
+        (
+            Some(false),
+            "dirty",
+            vec!["PR_MERGE_CONFLICTS", "PR_MERGE_STATE:dirty"],
+        ),
+        (
+            None,
+            "unknown",
+            vec!["PR_MERGEABILITY_UNKNOWN", "PR_MERGE_STATE:unknown"],
+        ),
+        (Some(true), "blocked", vec!["PR_MERGE_STATE:blocked"]),
+        (Some(true), "behind", vec!["PR_MERGE_STATE:behind"]),
+        (
+            Some(true),
+            "future-state",
+            vec!["PR_MERGE_STATE:future-state"],
+        ),
+        (None, "clean", vec!["PR_MERGEABILITY_UNKNOWN"]),
+        (Some(false), "clean", vec!["PR_MERGE_CONFLICTS"]),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let policy = active_policy();
+        let mut source = accepted_source();
+        source.evidence.pull_request.mergeable = mergeable;
+        source.evidence.pull_request.mergeable_state = state.into();
+        let mut store = final_review_store(directory.path().join("ledger.db"), &policy, &source);
+        let result = reconcile_final_preflight_once(
+            &source,
+            &policy,
+            &mut store,
+            200,
+            "final-preflight",
+            30,
+            true,
+        )
+        .unwrap();
+        let FinalPreflightCycle::Pending { blockers, .. } = result else {
+            panic!("unsafe gate accepted {mergeable:?}/{state}");
+        };
+        assert_eq!(blockers, expected, "{mergeable:?}/{state}");
+        assert_eq!(store.evidence_count().unwrap(), 5);
+        assert!(
+            store
+                .claim_effect_matching("dispatcher", 200, 30, &["DISPATCH_FINAL_REVIEWER"])
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .claim_effect_matching("retry", 200, 30, &["OBSERVE_FINAL_PREFLIGHT"])
+                .unwrap()
+                .is_some()
+        );
+    }
+}
+
+#[test]
 fn dirty_mergeability_and_missing_or_stale_role_reviews_cannot_open_the_gate() {
     let directory = tempfile::tempdir().unwrap();
     let policy = active_policy();
@@ -243,7 +302,7 @@ fn dirty_mergeability_and_missing_or_stale_role_reviews_cannot_open_the_gate() {
     assert!(matches!(
         result,
         FinalPreflightCycle::Pending { blockers, .. }
-            if blockers.contains(&"PR_NOT_CLEANLY_MERGEABLE".into())
+            if blockers.contains(&"PR_MERGE_STATE:dirty".into())
                 && blockers.contains(&"MISSING_EXACT_HEAD_APPROVAL:reviewer-secperf".into())
     ));
     assert!(
