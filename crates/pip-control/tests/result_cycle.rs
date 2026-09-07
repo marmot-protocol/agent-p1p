@@ -108,6 +108,31 @@ fn paused_native_completion_is_retained_and_resumed_without_hermes() {
 }
 
 #[test]
+fn paused_collection_uses_the_saved_policy_not_replacement_models() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    project_planner(&mut store);
+    let mut paused = active_policy();
+    paused.revision += 1;
+    paused.dispatch_enabled = false;
+    paused.roles[0].model = "replacement-model".into();
+    let before = store.status(10).unwrap();
+    let runner = FakeRunner::default();
+    runner.json(completed_planner("planner", planner_result()));
+    assert_eq!(
+        pip_control::reconcile_completed_once_with(
+            &mut store, &paused, runner, "hermes", 10, false,
+        )
+        .unwrap(),
+        ResultCycle::Retained {
+            task_id: "planner-1".into()
+        },
+    );
+    assert_eq!(store.status(10).unwrap().cases, before.cases);
+    assert_eq!(store.status(10).unwrap().runs, before.runs);
+}
+
+#[test]
 fn paused_native_collection_rejects_a_foreign_result_before_retention() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
@@ -575,6 +600,15 @@ fn project_native_task(
     inline_plan: bool,
     review: bool,
 ) {
+    let accepted = active_policy();
+    store
+        .record_policy(&pip_store::PolicyInput {
+            repository_id: accepted.repository.id,
+            revision: accepted.revision,
+            accepted_at: 1,
+            payload: serde_json::to_value(&accepted).unwrap(),
+        })
+        .unwrap();
     store
         .create_case(&NewCase {
             case_key: "repo:984321#1240@1".into(),

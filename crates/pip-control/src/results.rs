@@ -155,10 +155,24 @@ pub fn reconcile_completed_once_with<R: CommandRunner>(
                 continue;
             }
         }
-        // Historical projections retain their original model/profile bindings.
-        // Only current, runnable work is checked against today's role policy;
-        // retired or superseded evidence must not block unrelated new cases.
-        validate_projection(&projection.task_id, &desired, policy)?;
+        // Collection is evidence preservation, not authorization under today's
+        // settings. Old completions keep their accepted model/profile policy.
+        let saved_policy = if !advance {
+            let value = store.accepted_policy(case.repository_id, case.policy_revision)?;
+            Some(
+                crate::load_repository_policy(
+                    &serde_json::to_vec(&value).map_err(|_| ResultCycleError::InvalidProjection)?,
+                )
+                .map_err(|_| ResultCycleError::InvalidProjection)?,
+            )
+        } else {
+            None
+        };
+        validate_projection(
+            &projection.task_id,
+            &desired,
+            saved_policy.as_ref().unwrap_or(policy),
+        )?;
         let retained = store.retained_task_result(&projection.task_id)?;
         if retained.is_some() && !advance {
             continue;
