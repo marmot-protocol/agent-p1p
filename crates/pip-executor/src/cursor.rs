@@ -34,6 +34,7 @@ pub enum CursorExecutionError {
     InvalidWorktree,
     ArtifactExists,
     ArtifactIo(String),
+    TemporaryIo(String),
     UnsafeSecretInput,
     UnsafeSecretOutput,
     HealthBindingMismatch,
@@ -59,6 +60,9 @@ impl fmt::Display for CursorExecutionError {
             Self::InvalidWorktree => formatter.write_str("invalid assigned worktree"),
             Self::ArtifactExists => formatter.write_str("worker artifact directory already exists"),
             Self::ArtifactIo(error) => write!(formatter, "worker artifact I/O failed: {error}"),
+            Self::TemporaryIo(error) => {
+                write!(formatter, "worker temporary storage failed: {error}")
+            }
             Self::UnsafeSecretInput => {
                 formatter.write_str("worker input contains credential-like material")
             }
@@ -154,7 +158,20 @@ impl<R: ProcessRunner> CursorExecutor<R> {
         if !worktree.is_dir() {
             return Err(CursorExecutionError::InvalidWorktree);
         }
-        let environment = crate::workspace_git_environment(&worktree, self.environment.clone());
+        // Service-private /tmp is deliberately independent of the long case and
+        // artifact paths. Unix socket tests need space for their own filenames.
+        // TempDir removes only this fresh allocation on every return path.
+        let mut temporary_builder = tempfile::Builder::new();
+        temporary_builder.prefix("pip-");
+        #[cfg(unix)]
+        temporary_builder.permissions(fs::Permissions::from_mode(0o700));
+        let temporary = temporary_builder
+            .tempdir_in("/tmp")
+            .map_err(|error| CursorExecutionError::TemporaryIo(error.to_string()))?;
+        let mut environment = crate::workspace_git_environment(&worktree, self.environment.clone());
+        for key in ["TMPDIR", "TMP", "TEMP"] {
+            environment.insert(key.into(), temporary.path().display().to_string());
+        }
         let mut immutable_input = task.immutable_input.clone();
         let evidence = immutable_input
             .as_object_mut()
@@ -184,7 +201,7 @@ impl<R: ProcessRunner> CursorExecutor<R> {
         }))
         .map_err(|error| CursorExecutionError::InvalidResult(error.to_string()))?
             + "\n";
-        let prompt = render_prompt(task, &task_input, artifact_dir);
+        let prompt = render_prompt(task, &task_input, artifact_dir, temporary.path());
         if task_input.len() > self.max_output_bytes
             || prompt.len() > self.max_output_bytes
             || contains_secret(&task_input)
@@ -229,6 +246,7 @@ impl<R: ProcessRunner> CursorExecutor<R> {
                 "command": args,
                 "stdin": "prompt.md",
                 "environment_keys": environment.keys().collect::<Vec<_>>(),
+                "temporary_directory": temporary.path(),
             }),
         )?;
         write_json(
@@ -377,15 +395,25 @@ fn validate_task(task: &CursorTask) -> Result<(), CursorExecutionError> {
     Ok(())
 }
 
-fn render_prompt(task: &CursorTask, task_input: &str, artifact_dir: &Path) -> String {
-    format!(
+fn render_prompt(
+    task: &CursorTask,
+    task_input: &str,
+    artifact_dir: &Path,
+    temporary: &Path,
+) -> String {
+    let mut prompt = format!(
         "{}\n\n{}\n\n# Immutable Task Input\n\n```json\n{}```\n\n# Result Requirement\n\nReturn only the review-ready structured result contract bound to this exact task. Set requested_model to `{}` and report the model identity visible in the runtime as actual_model. A mismatch must use BLOCKED_UNEXPECTED_MODEL. Do not resume or reuse any prior session.\n\nRun artifact directory: `{}`. Save your contract there as `worker-result.json`, outside the source checkout, and validate it with `/opt/pip/current/bin/pip-control validate-worker-result --input <absolute-path-to-worker-result.json>` before returning the same JSON object. The direct runtime captures your response; no Hermes completion tool is needed.\n",
         task.workflow_skill,
         task.role_skill,
         task_input,
         task.binding.requested_model,
         artifact_dir.display(),
-    )
+    );
+    prompt.push_str(&format!(
+        "\nTemporary storage: `{}` is assigned through TMPDIR, TMP and TEMP. Preserve these variables for tests and Unix sockets; do not replace them with a long case/artifact path. This directory is private, disposable and removed after this run. Keep build caches in the assigned managed workspace and retained evidence in the run artifact directory, never in temporary storage.\n",
+        temporary.display(),
+    ));
+    prompt
 }
 
 fn validate_output(

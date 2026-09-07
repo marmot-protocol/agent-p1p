@@ -12,7 +12,8 @@ use std::os::unix::fs::PermissionsExt;
 use pip_contracts::{CaseIdentity, ReviewMode, WorkerBinding, WorkerResult, WorkerRole};
 use pip_controller::{DirectTaskSpec, ExecutionKind};
 use pip_executor::{
-    CursorExecutor, CursorHealthProbe, CursorTask, ProcessRunner, ProviderProbeError,
+    CursorExecutionError, CursorExecutor, CursorHealthProbe, CursorTask, ProcessRunner,
+    ProviderProbeError,
 };
 use pip_store::{ClaimedEffect, StoredCase};
 use serde_json::Map;
@@ -176,7 +177,12 @@ impl<R: ProcessRunner + Clone> CursorDirectRuntime<R> {
                 &worktree,
                 &artifact_dir,
             )
-            .map_err(|error| DirectWorkerRuntimeError::Failed(error.to_string()))
+            .map_err(|error| match error {
+                CursorExecutionError::TemporaryIo(_) => {
+                    DirectWorkerRuntimeError::Unavailable(error.to_string())
+                }
+                _ => DirectWorkerRuntimeError::Failed(error.to_string()),
+            })
     }
 }
 

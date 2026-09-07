@@ -54,6 +54,13 @@ Installation preserved the stopped ledger and paused policy byte-for-byte.
   may avoid a separate signing key. This is an investigation, not live proof:
   file-mode support, exact tree/parent/actor verification, recovery and the
   source-build-to-published-head binding must be established before adoption.
+  A read-only GraphQL probe using Pirate's existing credential confirmed
+  `agent-p1p` (numeric actor 292420120) and WRITE access to MDK. Inspection of
+  the accepted canary range found only ordinary file additions/modifications
+  (mode 100644), with original parent
+  `897111a9d9a9772b824cb4ed0ff60b9cb1242f5f`. No signing mutation or PR rewrite
+  has occurred. This capability check does not prove server-side signing or
+  authorize treating a different signed commit as the accepted builder SHA.
 - #891, #1228 and #1639 are abandoned with history retained.
 - Hermes remains the upstream installation; Pip has not introduced a fork.
   Conversational Hermes was untouched. Pip execution timers and its dedicated
@@ -216,6 +223,27 @@ even if one App is unavailable. The ledger advances only after both succeed;
 partial external success retains the stable markers for retry. The regression
 covers either or both lanes failing, lease release and no partial acceptance.
 The full Rust suite and Clippy pass; this change is not yet deployed.
+
+### Direct worker temporary storage (local, 2026-09-07)
+
+Cursor executions now allocate a fresh short mode-0700 directory under the
+service's existing private `/tmp`, setting `TMPDIR`, `TMP` and `TEMP` explicitly.
+The prompt and invocation record identify the allocation. It is disposable;
+build caches remain in the managed workspace and accepted artifacts remain in
+the run artifact directory. Ordinary return paths remove the allocation,
+including provider launch failure, timeout and malformed output. Abrupt service
+termination still relies on the service-private temporary namespace lifecycle.
+Allocation errors are runtime unavailability, not a failed attempt to solve an
+issue. No unit sandbox protection is weakened.
+
+The regression first reproduced the inherited long-path failure, then caught
+default temporary-directory permissions being broader than 0700. The corrected
+implementation requests private permissions at creation. Tests bind an actual
+Unix socket in nested test storage, verify per-execution isolation, and verify
+cleanup after success and failures. Executor and production adapter tests pass.
+The full workspace Rust suite, Clippy with warnings denied, formatting and diff
+checks also pass (`/tmp/pip-direct-temp-validation-20260907.log`).
+This change is not installed and has not been exercised by a live provider.
 
 1. Finish one real issue through builder, exact-head CI, all required independent
    reviews, remediation where needed, and final human-ready disposition.

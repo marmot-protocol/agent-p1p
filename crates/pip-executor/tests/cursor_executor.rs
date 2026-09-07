@@ -77,6 +77,96 @@ impl ProcessRunner for FakeRunner {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn direct_runs_get_private_short_socket_capable_temp_dirs_and_clean_them_on_exit() {
+    use std::os::unix::net::UnixListener;
+    use std::path::PathBuf;
+
+    struct SocketRunner {
+        seen: RefCell<Vec<PathBuf>>,
+        failure: u8,
+    }
+
+    impl ProcessRunner for SocketRunner {
+        fn run(&self, spec: &ProcessSpec) -> Result<ProcessOutput, ProcessError> {
+            let path = PathBuf::from(spec.environment.get("TMPDIR").expect("assigned TMPDIR"));
+            assert!(path.as_os_str().len() <= 40);
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            assert_eq!(spec.environment.get("TMP"), spec.environment.get("TMPDIR"));
+            assert_eq!(spec.environment.get("TEMP"), spec.environment.get("TMPDIR"));
+            let nested = tempfile::Builder::new()
+                .prefix("daemon-test-")
+                .tempdir_in(&path)
+                .unwrap();
+            let _socket = UnixListener::bind(nested.path().join("daemon.sock")).unwrap();
+            let prompt = fs::read_to_string(spec.stdin_file.as_ref().unwrap()).unwrap();
+            assert!(prompt.contains(path.to_str().unwrap()));
+            assert!(
+                !self.seen.borrow().contains(&path),
+                "each execution needs a fresh private directory"
+            );
+            self.seen.borrow_mut().push(path);
+            if self.failure == 1 {
+                return Err(ProcessError::Io("fixture launch failure".into()));
+            }
+            Ok(ProcessOutput {
+                status: 0,
+                stdout: if self.failure == 3 {
+                    b"malformed result".to_vec()
+                } else {
+                    envelope(&results()[1])
+                },
+                stderr: vec![],
+                timed_out: self.failure == 2,
+            })
+        }
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let worktree = tmp.path().join("worktree");
+    fs::create_dir(&worktree).unwrap();
+    for failure in 0..4 {
+        let runner = SocketRunner {
+            seen: RefCell::new(vec![]),
+            failure,
+        };
+        let executor = CursorExecutor::new(
+            runner,
+            "cursor-agent",
+            "git",
+            BTreeMap::from([(
+                "TMPDIR".into(),
+                tmp.path().join("x".repeat(120)).display().to_string(),
+            )]),
+            Duration::from_secs(30),
+            1_048_576,
+        )
+        .unwrap();
+        for attempt in 0..2 {
+            let artifacts = tmp.path().join(format!("artifacts-{failure}-{attempt}"));
+            let result = executor.execute(
+                &health("composer-2.5"),
+                &task(WorkerRole::Builder, "composer-2.5", 1),
+                &worktree,
+                &artifacts,
+            );
+            assert_eq!(result.is_err(), failure != 0);
+            let invocation: Value =
+                serde_json::from_slice(&fs::read(artifacts.join("invocation.json")).unwrap())
+                    .unwrap();
+            let path = invocation["temporary_directory"].as_str().unwrap();
+            assert!(
+                !std::path::Path::new(path).exists(),
+                "temporary data must not survive completion or launch failure"
+            );
+        }
+    }
+}
+
 fn results() -> Vec<Value> {
     serde_json::from_str::<Value>(include_str!(
         "../../../migration/target-v1/worker-results.json"
