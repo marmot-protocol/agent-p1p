@@ -1,7 +1,7 @@
 ---
 name: workflow-contract
 description: Use for every Pip case task. Enforce shared invariants.
-version: 0.8.0
+version: 0.9.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -26,7 +26,7 @@ This is the shared contract for every Pip role. Role-specific skills add respons
 6. Require the bound evidence bundle, either inline as `immutable_evidence_bundle` or in the artifact named by `immutable_evidence_ref`. For a reference, verify the file's exact byte SHA-256 before parsing it; then verify the bundle's schema version 1, `case_key`, `bound_state_revision`, and internal `sha256` as described in the field guide. Inspect the records relevant to your role rather than dumping the entire history into context. Missing, malformed, oversized, or mismatched evidence blocks completion; never replace it with session memory or a parent summary.
 7. Bind CI and review evidence to an exact 40-character PR head SHA.
 8. Do not treat CodeRabbit as mandatory; concrete findings are still actionable. If a CodeRabbit status exists but says the review was rate limited, do not represent it as complete evidence.
-9. A PR that had any red CI attempt is permanently ineligible. A green rerun does not clear that history.
+9. Under the current strict CI policy, a failed attempt on the exact reviewed head blocks acceptance even after a green rerun. A new head requires fresh CI and reviews; do not treat a failure on an older head as a permanent ban on the PR. The controller owns this deterministic gate and supplies the GitHub evidence; workers do not need GitHub credentials or independently administer authorization.
 10. Do not silently broaden scope or edit a dependency repository.
 11. Human takeover or removed authorization stops the case.
 12. Complete the versioned structured result contract before reporting success.

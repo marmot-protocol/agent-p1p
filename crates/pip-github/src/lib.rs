@@ -433,6 +433,12 @@ pub fn evaluate_ci(
             .iter()
             .filter(|status| &status.context == required)
             .collect::<Vec<_>>();
+        // Status updates are separate immutable records, unlike mutable check
+        // runs. Retain every failure above, but use the latest update for the
+        // current pending/success disposition of this context.
+        let latest_status = statuses
+            .iter()
+            .max_by_key(|status| (&status.created_at, status.id));
         if checks.is_empty() && statuses.is_empty() {
             push_unique(&mut pending, format!("MISSING_REQUIRED_CONTEXT:{required}"));
             continue;
@@ -440,18 +446,15 @@ pub fn evaluate_ci(
         let in_progress = checks
             .iter()
             .any(|check| check.status != CheckStatus::Completed)
-            || statuses
-                .iter()
-                .any(|status| status.state == CommitStatusState::Pending);
+            || latest_status.is_some_and(|status| status.state == CommitStatusState::Pending);
         if in_progress {
             push_unique(&mut pending, "CI_PENDING".into());
         }
         let green = checks.iter().any(|check| {
             check.status == CheckStatus::Completed
                 && check.conclusion == Some(CheckConclusion::Success)
-        }) || statuses
-            .iter()
-            .any(|status| status.state == CommitStatusState::Success);
+        }) || latest_status
+            .is_some_and(|status| status.state == CommitStatusState::Success);
         if !green && !in_progress {
             push_unique(
                 &mut failed,
@@ -630,7 +633,6 @@ struct CommitStatusDto {
 struct CombinedStatusDto {
     sha: String,
     state: CommitStatusState,
-    statuses: Vec<CommitStatusDto>,
 }
 
 #[derive(Deserialize)]
@@ -982,9 +984,16 @@ impl<T: ReadTransport> GitHubReader<T> {
         if combined.sha != pull.head.sha {
             return Err(GitHubError::InvalidIdentity);
         }
+        // Combined status entries are summaries: no creator, and only the
+        // latest update per context. Fetch the paginated full records for
+        // identity and historical-failure evidence.
+        let status_dtos = self.get_pages::<CommitStatusDto>(&format!(
+            "{root}/commits/{}/statuses?per_page=100&page=1",
+            pull.head.sha
+        ))?;
         let mut status_ids = BTreeSet::new();
-        let mut commit_statuses = Vec::with_capacity(combined.statuses.len());
-        for status in combined.statuses {
+        let mut commit_statuses = Vec::with_capacity(status_dtos.len());
+        for status in status_dtos {
             if status.id == 0
                 || status.creator.id == 0
                 || !status_ids.insert(status.id)

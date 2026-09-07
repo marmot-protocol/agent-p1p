@@ -1,7 +1,7 @@
 ---
 name: reviewer-secperf
 description: Use when reviewing a Pip PR for security and performance.
-version: 0.9.0
+version: 0.10.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -18,7 +18,7 @@ The Rust direct-provider runtime starts one fresh read-only Cursor Agent invocat
 
 ## Workflow
 
-1. Resolve the parent draft PR through GitHub. Record its exact head SHA and verify CI is green on that head before review.
+1. Resolve the draft PR from the controller-owned task and its `GITHUB_CI` evidence. Record the exact head SHA and verify the evidence belongs to that head. The controller owns live GitHub authorization and CI gating; do not seek GitHub credentials or reconstruct a PR from parent prose.
 2. Verify the task's requested model and `reviewer_id` exactly match the fresh runtime session and immutable binding. The runtime probes model availability and constructs the single invocation before this skill runs; do not start, resume, or substitute another agent session. Record that Cursor does not independently attest provider-side routing.
 3. Use the assigned exact-head checkout read-only. Do not modify or push it.
 4. Review trust boundaries, data exposure, unsafe parsing, misuse/abuse paths, resource bounds, algorithmic regressions, concurrency, and denial-of-service risk. Treat any unexpected MLS/CGKA, key, trust-anchor, authorization-semantic, or push-context change as blocking and escalate to JG.

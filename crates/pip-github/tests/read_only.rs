@@ -232,8 +232,14 @@ fn pull_request_evidence_retains_all_attempts_and_exact_head_reviews() {
         r#"{"total_count":2,"check_runs":[{"id":2,"name":"ci","head_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","status":"completed","conclusion":"success","started_at":"2026-08-20T00:02:00Z","completed_at":"2026-08-20T00:03:00Z","app":{"id":10}}]}"#,
     ));
     transport.push(response(
-        r#"{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","state":"success","statuses":[{"id":3,"context":"legacy-ci","state":"success","creator":{"id":1002},"created_at":"2026-08-20T00:03:00Z","updated_at":"2026-08-20T00:04:00Z"}]}"#,
+        r#"{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","state":"success","statuses":[{"id":3,"context":"legacy-ci","state":"success","created_at":"2026-08-20T00:03:00Z","updated_at":"2026-08-20T00:04:00Z"}]}"#,
     ));
+    let mut statuses = response(
+        r#"[{"id":3,"context":"legacy-ci","state":"success","creator":{"id":1002},"created_at":"2026-08-20T00:03:00Z","updated_at":"2026-08-20T00:04:00Z"}]"#,
+    );
+    statuses.headers.insert("link".into(), r#"<https://api.github.test/repos/marmot-protocol/mdk/commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/statuses?per_page=100&page=2>; rel="next""#.into());
+    transport.push(statuses);
+    transport.push(response(r#"[{"id":2,"context":"legacy-ci","state":"failure","creator":{"id":1002},"created_at":"2026-08-20T00:01:00Z","updated_at":"2026-08-20T00:02:00Z"}]"#));
     transport.push(response(
         r#"[{"id":4,"user":{"id":1003},"state":"APPROVED","commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","submitted_at":"2026-08-20T00:05:00Z","body":"looks good"},{"id":5,"user":{"id":1004},"state":"CHANGES_REQUESTED","commit_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","submitted_at":"2026-08-20T00:01:00Z","body":"stale"}]"#,
     ));
@@ -252,13 +258,19 @@ fn pull_request_evidence_retains_all_attempts_and_exact_head_reviews() {
         evidence.check_runs[1].conclusion,
         Some(CheckConclusion::Success)
     );
-    assert_eq!(evidence.commit_statuses.len(), 1);
+    assert_eq!(evidence.commit_statuses.len(), 2);
+    assert_eq!(evidence.commit_statuses[0].creator_id, 1002);
+    assert_eq!(
+        evidence.commit_statuses[1].state,
+        pip_github::CommitStatusState::Failure
+    );
     assert_eq!(evidence.reviews[0].state, ReviewState::Approved);
     assert!(evidence.reviews[0].exact_head);
     assert!(!evidence.reviews[1].exact_head);
 
     let requests = transport.requests.borrow();
-    assert_eq!(requests.len(), 5);
+    assert_eq!(requests.len(), 7);
+    assert!(requests[4].url.ends_with("/statuses?per_page=100&page=1"));
     assert!(requests.iter().all(|request| request.method == "GET"));
     assert!(requests[1].url.contains("filter=all"));
 }

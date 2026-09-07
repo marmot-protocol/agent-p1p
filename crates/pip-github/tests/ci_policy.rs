@@ -4,6 +4,28 @@ use pip_github::{
 };
 
 #[test]
+fn completed_status_supersedes_earlier_pending_observations_but_not_failures() {
+    for older in [CommitStatusState::Pending, CommitStatusState::Failure] {
+        let evidence = evidence(
+            vec![],
+            CommitStatusState::Success,
+            vec![
+                status(1, "ci", older),
+                status(2, "ci", CommitStatusState::Success),
+            ],
+        );
+        assert_eq!(
+            evaluate_ci(&evidence, &"b".repeat(40), &["ci".into()]).verdict,
+            if older == CommitStatusState::Failure {
+                CiVerdict::Failed
+            } else {
+                CiVerdict::Accepted
+            }
+        );
+    }
+}
+
+#[test]
 fn exact_required_contexts_accept_only_complete_green_evidence() {
     let evidence = evidence(
         vec![check(

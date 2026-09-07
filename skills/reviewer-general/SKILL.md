@@ -1,7 +1,7 @@
 ---
 name: reviewer-general
 description: Use for exact-head correctness review of a Pip PR.
-version: 0.8.0
+version: 0.9.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -52,4 +52,4 @@ metadata. Then return the same object as the entire final response without
 prose or a code fence. Use `APPROVE`, `REQUEST_CHANGES`, `BLOCKED`, or
 `BLOCKED_UNEXPECTED_MODEL`.
 
-Complete the Kanban review task even when the verdict is `REQUEST_CHANGES`; the deterministic remediation child must receive the findings. Use Kanban blocked status only when the review itself cannot be performed. On the re-review round, evaluate the current head independently and explicitly confirm or retain every prior blocker.
+Complete the Kanban review task even when the verdict is `REQUEST_CHANGES`; the Rust controller accepts the findings and schedules any remediation. Use Kanban blocked status only when the review itself cannot be performed. On the re-review round, evaluate the current head independently and explicitly confirm or retain every prior blocker.
