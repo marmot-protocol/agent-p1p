@@ -18,6 +18,7 @@ mod install;
 mod intake;
 mod plans;
 mod policy;
+mod publication_text;
 mod release;
 mod results;
 mod reviews;

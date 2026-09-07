@@ -321,9 +321,10 @@ garbage collection and source preservation across retirement. A regression test
 under controller umask `0077` exposed unreadable new Git objects; the signing and
 publication paths now share only their specific object/ref/log paths with the
 worker group, without changing the process umask or touching credential modes.
-Focused signing, publication and retirement tests pass. Full validation of this
-follow-up is in progress; the existing service-identity lifecycle test does not
-yet exercise the new signing path.
+Focused signing, publication and retirement tests pass. The full Rust workspace
+test suite passed for `96cda5c`; workspace Clippy also passes after the subsequent
+publication-text change. Signed Linux CI is a separate pending gate. The existing
+service-identity lifecycle test does not yet exercise the new signing path.
 
 This is **not yet a live signing path**. Still required: validated identity and
 credential wiring, recording the publication binding in the controller ledger,
@@ -332,6 +333,25 @@ CI/reviews. In particular, final-preflight currently joins builder finding
 resolutions directly against the PR head; that join must use the verified
 source-to-published binding without changing the original result. No accepted
 result, branch, PR or live unit was changed by this work.
+
+### Human-readable GitHub publication (local, not deployed)
+
+Review comments now present the lane verdict, attributed reviewer/model, findings,
+suggestions, reported checks and limitations as prose and lists. Unknown evidence
+objects, internal-path/hash metadata and serialized result dumps are omitted;
+missing summaries are stated explicitly rather than implying successful checks.
+Plan comments and draft-PR descriptions similarly render human-facing fields,
+without duplicating execution-binding JSON or local artifact paths. Original
+structured results remain in the ledger. No new upload service or GitHub data
+attachment is required for normal workflow operation.
+
+Twenty-four focused tests cover formatting, sparse evidence, publication flows
+and unchanged final-preflight checks; workspace Clippy, formatting and diff checks
+pass. Existing posted comments have not been rewritten. A format upgrade must not
+bypass the writer's existing content-bound idempotency checks: finish or inspect
+partially published effects before deploying, rather than silently accepting a
+different body under an old effect. Signed-release CI and deployment remain
+separate gates.
 
 1. Finish one real issue through builder, exact-head CI, all required independent
    reviews, remediation where needed, and final human-ready disposition.

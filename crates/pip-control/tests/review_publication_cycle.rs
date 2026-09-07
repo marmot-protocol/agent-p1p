@@ -29,8 +29,7 @@ fn publication_preserves_attributed_suggestions_and_verification_limits() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = review_store_with(directory.path().join("ledger.db"), false, |reviews| {
         reviews[0]["suggestions"] = json!([{"summary":"Bound the subscription timeout", "rationale":"Avoid hanging checks"}]);
-        reviews[0]["evidence"] =
-            json!({"local_checks":["13 tests passed"], "limitations":["Full suite not run"]});
+        reviews[0]["evidence"] = json!({"review_scope":"Traced CLI presentation boundaries", "local_checks":["13 tests passed"], "limitations":["Full suite not run"], "artifact_directory":"/var/lib/pip/private-review", "log_sha256":{"checks":"a".repeat(64)}, "bound_state_revision":23});
         reviews[1]["evidence"] =
             json!({"limitations":["Shell commands denied; source inspection only"]});
     });
@@ -54,6 +53,7 @@ fn publication_preserves_attributed_suggestions_and_verification_limits() {
         "Bound the subscription timeout",
         "13 tests passed",
         "Full suite not run",
+        "Traced CLI presentation boundaries",
     ] {
         assert!(general.body.contains(expected), "missing {expected}");
     }
@@ -63,6 +63,19 @@ fn publication_preserves_attributed_suggestions_and_verification_limits() {
             .contains("Shell commands denied; source inspection only")
     );
     assert!(!secperf.body.contains("13 tests passed"));
+    for body in [&general.body, &secperf.body] {
+        assert!(
+            !body.contains("```json"),
+            "review must not dump structured results"
+        );
+        assert!(!body.contains("reported_evidence"));
+        assert!(!body.contains("/var/lib/pip/"));
+        assert!(!body.contains("log_sha256"));
+        assert!(!body.contains("bound_state_revision"));
+        assert!(body.contains("No blocking findings"));
+    }
+    assert!(general.body.contains("Reviewer-reported checks"));
+    assert!(general.body.contains("Limitations"));
     assert_eq!(secperf.event, ReviewEvent::Approve);
 }
 
@@ -143,6 +156,21 @@ fn request_changes_are_published_before_the_remediation_builder_is_released() {
         ReviewEvent::RequestChanges
     );
     assert_eq!(secperf.reviews.borrow()[0].event, ReviewEvent::Approve);
+    let published = general.reviews.borrow();
+    let body = &published[0].body;
+    let runs = store.runs_for_case("repo:984321#1240@1").unwrap();
+    let finding = &runs
+        .iter()
+        .find(|run| run.role == "reviewer-general")
+        .unwrap()
+        .payload["blocking_findings"][0];
+    assert!(!body.contains("```json"));
+    for field in ["summary", "defect", "consequence", "corrective_direction"] {
+        assert!(
+            body.contains(finding[field].as_str().unwrap()),
+            "missing finding {field}"
+        );
+    }
     assert!(
         store
             .claim_effect_matching("dispatcher", 100, 30, &["DISPATCH_BUILDER"])

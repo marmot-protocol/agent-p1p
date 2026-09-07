@@ -97,6 +97,9 @@ fn controller_creates_deterministic_draft_pr_before_ci_observation() {
     );
     assert_eq!(specs[0].head_sha, "b".repeat(40));
     assert_eq!(specs[0].effect_id, "repo:984321#1240@1:draft-pr");
+    assert!(!specs[0].body.contains("```json"));
+    assert!(specs[0].body.contains("### Local checks"));
+    assert!(specs[0].body.contains("No findings required remediation."));
     let publications = publisher.requests.borrow();
     assert_eq!(publications.len(), 1);
     assert_eq!(

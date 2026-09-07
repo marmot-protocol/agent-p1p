@@ -51,7 +51,10 @@ fn proceed_plan_is_published_before_builder_dispatch() {
     assert_eq!(comments[0].issue_number, 1240);
     assert_eq!(comments[0].expected_actor_id, 202_880);
     assert!(comments[0].body.contains("## Pip plan v1: PROCEED"));
-    assert!(comments[0].body.contains("Pip execution binding:"));
+    assert!(!comments[0].body.contains("Pip execution binding:"));
+    assert!(!comments[0].body.contains("```json"));
+    assert!(!comments[0].body.contains("artifacts/plan-1.json"));
+    assert!(comments[0].body.contains("None reported."));
     assert!(
         comments[0]
             .body

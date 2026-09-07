@@ -113,6 +113,12 @@ approvals. Applicable findings require resolution confirmation by their origin.
 
 Controllers publish plans, draft PRs, lane reviews and readiness comments using
 stable markers. Workers do not receive GitHub publication credentials.
+GitHub text is for humans: concise outcomes, scope, actionable findings, reported
+checks and limitations. Do not embed serialized results, internal paths or hash
+inventories in visible comments. Keep structured evidence in Pip; when an export
+is useful to a person, provide a separately downloadable file rather than a code
+block. Small ownership markers may remain hidden. Publication formatting must
+not change accepted results, review votes or exact-head bindings.
 The dedicated commit-signing key is controller-only as well. Signing preserves
 the accepted tree exactly and uses a validated parent and automation identity;
 it never edits the accepted worker result to substitute a new SHA. Retain the

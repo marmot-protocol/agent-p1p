@@ -138,13 +138,7 @@ pub fn publish_plan_once<W: PlanWriter>(
             return Err(error);
         }
     };
-    let body = match render_plan(&plan) {
-        Ok(body) => body,
-        Err(error) => {
-            store.release_effect(&claimed.effect_id, owner)?;
-            return Err(error);
-        }
-    };
+    let body = render_plan(&plan);
     let mutation = writer.ensure_plan_comment(&CommentSpec {
         owner: policy.repository.owner.clone(),
         repository: policy.repository.name.clone(),
@@ -212,7 +206,8 @@ fn next_plan(store: &Store, case: &StoredCase) -> Result<PlannerResult, PlanPubl
     }
 }
 
-fn render_plan(plan: &PlannerResult) -> Result<String, PlanPublicationError> {
+fn render_plan(plan: &PlannerResult) -> String {
+    use crate::publication_text::{bullets, prose, summaries};
     let inline = plan
         .common
         .evidence
@@ -221,40 +216,41 @@ fn render_plan(plan: &PlannerResult) -> Result<String, PlanPublicationError> {
         .map_or_else(String::new, |text| {
             format!("\n\n### Implementation plan\n\n{text}")
         });
-    let dependencies = serde_json::to_string_pretty(&plan.dependencies)
-        .map_err(|error| PlanPublicationError::Serialization(error.to_string()))?;
-    let decisions = serde_json::to_string_pretty(&plan.open_decisions)
-        .map_err(|error| PlanPublicationError::Serialization(error.to_string()))?;
-    let sensitive = serde_json::to_string_pretty(&plan.sensitive_scope)
-        .map_err(|error| PlanPublicationError::Serialization(error.to_string()))?;
-    let binding = if plan.outcome == PlannerOutcome::Proceed {
-        let value = json!({
-            "authorized_scope": plan.authorized_scope,
-            "dependencies": plan.dependencies,
-            "open_decisions": plan.open_decisions,
-            "outcome": "PROCEED",
-            "plan_version": plan.plan_version,
-            "sensitive_scope": plan.sensitive_scope,
-            "task_id": plan.common.task_id,
-        });
-        format!(
-            "\n\nPip execution binding: {}",
-            serde_json::to_string(&value)
-                .map_err(|error| PlanPublicationError::Serialization(error.to_string()))?
-        )
-    } else {
-        String::new()
-    };
-    Ok(format!(
-        "## Pip plan v{}: {}\n\nPlanned base: `{}`\n\n### Root cause\n\n{}\n\n### Authorized scope\n\n{}\n\n### Sensitive scope\n\n```json\n{sensitive}\n```\n\n### Dependencies\n\n```json\n{dependencies}\n```\n\n### Open decisions\n\n```json\n{decisions}\n```\n\nPlan artifact: `{}`{inline}\n\nPip planner task: `{}`{binding}",
+    let dependencies = bullets(
+        plan.dependencies.iter().map(|dependency| {
+            let summary = summaries(dependency);
+            if summary.is_empty() {
+                "Dependency details retained in Pip; no readable summary supplied.".into()
+            } else {
+                summary.join("; ")
+            }
+        }),
+        "None reported.",
+    );
+    let decisions = bullets(&plan.open_decisions, "None reported.");
+    let sensitive = bullets(
+        plan.sensitive_scope.iter().map(|scope| {
+            use pip_contracts::SensitiveScope;
+            match scope {
+                SensitiveScope::Cryptography => "Cryptography",
+                SensitiveScope::MlsCgka => "MLS and continuous group key agreement",
+                SensitiveScope::KeyHandling => "Key handling",
+                SensitiveScope::TrustAnchor => "Trust anchors",
+                SensitiveScope::MembershipAuthorization => "Membership authorization",
+                SensitiveScope::AdminAuthorization => "Administrator authorization",
+                SensitiveScope::PushPayloadContext => "Push payload context",
+            }
+        }),
+        "None reported.",
+    );
+    format!(
+        "## Pip plan v{}: {}\n\nPlanned base: `{}`\n\n### Root cause\n\n{}\n\n### Authorized scope\n\n{}\n\n### Sensitive scope\n\n{sensitive}\n\n### Dependencies\n\n{dependencies}\n\n### Open decisions\n\n{decisions}{inline}\n\nFull structured plan evidence is retained by Pip.",
         plan.plan_version,
         outcome_name(plan.outcome),
         plan.planned_base_sha,
-        plan.root_cause,
-        plan.authorized_scope,
-        plan.plan_artifact,
-        plan.common.task_id,
-    ))
+        prose(&plan.root_cause),
+        prose(&plan.authorized_scope),
+    )
 }
 
 fn published_command(

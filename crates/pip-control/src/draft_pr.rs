@@ -382,20 +382,34 @@ fn active_build(store: &Store, case: &StoredCase) -> Result<BuilderResult, Draft
 }
 
 fn render_body(case: &StoredCase, build: &BuilderResult) -> Result<String, DraftPullRequestError> {
-    let checks = serde_json::to_string_pretty(&build.local_checks)
-        .map_err(|error| DraftPullRequestError::Serialization(error.to_string()))?;
-    let resolutions = serde_json::to_string_pretty(&build.finding_resolutions)
-        .map_err(|error| DraftPullRequestError::Serialization(error.to_string()))?;
+    use crate::publication_text::{bullets, prose};
+    let checks = bullets(&build.local_checks, "No local checks reported.");
+    let resolutions = if build.finding_resolutions.is_empty() {
+        "No findings required remediation.".into()
+    } else {
+        build
+            .finding_resolutions
+            .iter()
+            .map(|resolution| {
+                format!(
+                    "- **{}:** {}\n\n  Checks: {}",
+                    prose(&resolution.finding_id),
+                    prose(&resolution.resolution_summary),
+                    prose(&resolution.tests.join("; ")),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    };
     Ok(format!(
-        "## Pip controller-owned draft PR\n\nCase: `{}`\n\nPlan version: {}\n\nRemediation round: {}\n\nExact head: `{}`\n\n### Local checks\n\n```json\n{checks}\n```\n\n### Finding resolutions\n\n```json\n{resolutions}\n```\n\nPip builder task: `{}`",
-        case.case_key,
+        "## Pip implementation for #{}\n\nPlan version: {} · Remediation round: {}\n\nCommit: `{}`\n\n### Local checks\n\n{checks}\n\n### Findings addressed\n\n{resolutions}\n\nChecks are builder-reported; required CI and independent reviews are evaluated separately. Full structured build evidence is retained by Pip.",
+        case.issue_number,
         build.plan_version,
         case.remediation_round,
         build
             .head_sha
             .as_deref()
             .ok_or(DraftPullRequestError::InvalidBuildJoin)?,
-        build.common.task_id,
     ))
 }
 

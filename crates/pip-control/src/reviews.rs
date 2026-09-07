@@ -334,43 +334,21 @@ fn publish_one<W: ReviewWriter>(
     } else {
         return Err(ReviewPublicationError::InvalidReviewJoin);
     };
-    let findings = reviews
-        .iter()
-        .flat_map(|review| review.blocking_findings.iter())
-        .collect::<Vec<_>>();
-    let findings = serde_json::to_string_pretty(&findings)
-        .map_err(|error| ReviewPublicationError::Serialization(error.to_string()))?;
-    let members = reviews
-        .iter()
-        .map(|review| {
-            format!(
-                "- `{}` using `{}`: `{}`",
-                review.reviewer_id,
-                review.common.requested_model,
-                outcome_name(review.outcome)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    // Preserve each reviewer's own checks and limitations, including missing
-    // verification. A verdict alone must not imply tests that never ran.
     let reports = reviews
         .iter()
-        .map(|review| {
-            serde_json::json!({
-                "reviewer_id": review.reviewer_id,
-                "suggestions": review.suggestions,
-                "reported_evidence": review.common.evidence,
-            })
-        })
-        .collect::<Vec<_>>();
-    let reports = serde_json::to_string_pretty(&reports)
-        .map_err(|error| ReviewPublicationError::Serialization(error.to_string()))?;
+        .map(render_review_summary)
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let lane = if role_name == "reviewer-general" {
+        "General review"
+    } else {
+        "Security and performance review"
+    };
     let body = format!(
-        "## Pip independent review: {role_name}\n\nOutcome: `{}`\n\nReviewed head: `{head}`\n\nRequired reviewer instances:\n{members}\n\nBlocking findings:\n```json\n{findings}\n```\n\nReviewer-reported suggestions, verification and limitations (not independent test attestation):\n```json\n{reports}\n```\n\nPip reviewer role: {role_name}",
+        "## {lane}: {}\n\nReviewed commit: `{head}`\n\n{reports}\n\nChecks are reviewer-reported, not independently rerun by Pip. Full structured evidence is retained by Pip.\n\nPip reviewer role: {role_name}",
         match event {
-            ReviewEvent::Approve => "APPROVE",
-            ReviewEvent::RequestChanges => "REQUEST_CHANGES",
+            ReviewEvent::Approve => "Approved",
+            ReviewEvent::RequestChanges => "Changes requested",
             _ => return Err(ReviewPublicationError::InvalidReviewJoin),
         },
     );
@@ -390,6 +368,69 @@ fn publish_one<W: ReviewWriter>(
             Err(ReviewPublicationError::UnexpectedMutationResult)
         }
     }
+}
+
+fn render_review_summary(review: &ReviewResult) -> String {
+    use crate::publication_text::{bullets, prose, summaries};
+    let mut body = format!(
+        "### {} — {} ({})\n\n{}",
+        prose(&review.reviewer_id),
+        prose(&review.common.requested_model),
+        if review.outcome == ReviewOutcome::Approve {
+            "Approved"
+        } else {
+            "Changes requested"
+        },
+        if review.blocking_findings.is_empty() {
+            "No blocking findings."
+        } else {
+            "Blocking findings:"
+        }
+    );
+    for finding in &review.blocking_findings {
+        body.push_str(&format!("\n\n**{}** ({})\n\n{}\n\nImpact: {}\n\nRequested change: {}\n\nVerification needed:\n\n{}",
+            prose(&finding.summary), prose(&finding.id), prose(&finding.defect),
+            prose(&finding.consequence), prose(&finding.corrective_direction),
+            bullets(&finding.required_evidence, "No additional verification specified.")));
+    }
+    if !review.suggestions.is_empty() {
+        body.push_str(&format!(
+            "\n\n**Suggestions**\n\n{}",
+            bullets(
+                review
+                    .suggestions
+                    .iter()
+                    .map(|item| format!("{} — {}", item.summary, item.rationale)),
+                ""
+            )
+        ));
+    }
+    for (label, key, empty) in [
+        ("Scope", "review_scope", ""),
+        ("Summary", "summary", ""),
+        (
+            "Reviewer-reported checks",
+            "local_checks",
+            "No readable check summary supplied; do not infer that tests ran.",
+        ),
+        (
+            "Limitations",
+            "limitations",
+            "No limitation summary supplied.",
+        ),
+        ("Earlier feedback", "prior_suggestions", ""),
+    ] {
+        let lines = review
+            .common
+            .evidence
+            .get(key)
+            .map(summaries)
+            .unwrap_or_default();
+        if !lines.is_empty() || !empty.is_empty() {
+            body.push_str(&format!("\n\n**{label}**\n\n{}", bullets(lines, empty)));
+        }
+    }
+    body
 }
 
 fn published_command(
@@ -449,13 +490,4 @@ fn published_command(
         evidence: vec![evidence],
         findings: Vec::new(),
     })
-}
-
-fn outcome_name(outcome: ReviewOutcome) -> &'static str {
-    match outcome {
-        ReviewOutcome::Approve => "APPROVE",
-        ReviewOutcome::RequestChanges => "REQUEST_CHANGES",
-        ReviewOutcome::Blocked => "BLOCKED",
-        ReviewOutcome::BlockedUnexpectedModel => "BLOCKED_UNEXPECTED_MODEL",
-    }
 }
