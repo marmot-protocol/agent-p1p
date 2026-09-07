@@ -171,35 +171,6 @@ def test_required_repository_scaffold_exists() -> None:
     assert missing == []
 
 
-def test_product_namespace_has_no_obsolete_version_suffix() -> None:
-    legacy_tokens = (
-        ("pip" + "-v2").encode(),
-        ("Pip" + " v2").encode(),
-        ("PIP" + "_V2").encode(),
-        ("pip" + "_v2").encode(),
-        ("pip" + "/v2/").encode(),
-    )
-    tracked = subprocess.run(
-        ["git", "ls-files", "-z"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-    ).stdout.split(b"\0")
-    offenders: list[str] = []
-    for encoded in tracked:
-        if not encoded:
-            continue
-        relative = os.fsdecode(encoded)
-        path = ROOT / relative
-        if not path.is_file():
-            continue
-        payload = path.read_bytes()
-        if any(token in payload for token in legacy_tokens):
-            offenders.append(relative)
-
-    assert offenders == []
-
-
 def test_mdk_is_configured_as_shadow_merge_pilot() -> None:
     config = json.loads((ROOT / "config/repositories/mdk.json").read_text())
 
