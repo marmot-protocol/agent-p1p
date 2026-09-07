@@ -28,8 +28,33 @@ const MIGRATIONS: &[&str] = &[
     MIGRATION_6,
     MIGRATION_7,
     dispatch_intents::MIGRATION,
+    MIGRATION_9,
 ];
 const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
+
+// Findings are named by reviewers within a case, not across all repositories.
+// Preserve historical identities, exact-head bindings and bytes during rekeying.
+const MIGRATION_9: &str = r#"
+CREATE TABLE findings_case_scoped (
+    finding_id TEXT NOT NULL,
+    case_key TEXT NOT NULL REFERENCES cases(case_key),
+    origin_role TEXT NOT NULL,
+    reviewed_head_sha TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    payload_sha256 TEXT NOT NULL,
+    recorded_at INTEGER NOT NULL,
+    PRIMARY KEY (case_key, finding_id)
+) STRICT;
+INSERT INTO findings_case_scoped SELECT * FROM findings;
+DROP TABLE findings;
+ALTER TABLE findings_case_scoped RENAME TO findings;
+CREATE TRIGGER findings_no_update BEFORE UPDATE ON findings BEGIN
+    SELECT RAISE(ABORT, 'findings are immutable');
+END;
+CREATE TRIGGER findings_no_delete BEFORE DELETE ON findings BEGIN
+    SELECT RAISE(ABORT, 'findings are immutable');
+END;
+"#;
 
 const MIGRATION_1: &str = r#"
 CREATE TABLE schema_migrations (

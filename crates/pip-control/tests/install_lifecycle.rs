@@ -211,7 +211,7 @@ fn clean_install_reinstall_and_upgrade_are_content_addressed_and_paused() {
 }
 
 #[test]
-fn upgrade_snapshots_schema_seven_before_migrating_to_eight() {
+fn upgrade_snapshots_schema_seven_before_migrating_to_current() {
     let sandbox = tempfile::tempdir().unwrap();
     let layout = layout(sandbox.path());
     prepare_layout(&layout);
@@ -227,7 +227,7 @@ fn upgrade_snapshots_schema_seven_before_migrating_to_eight() {
         .execute_batch(
             "DROP TABLE dispatch_create_attempts;
              DROP TABLE dispatch_batches;
-             DELETE FROM schema_migrations WHERE version = 8;
+             DELETE FROM schema_migrations WHERE version >= 8;
              PRAGMA user_version = 7;",
         )
         .unwrap();
@@ -241,7 +241,7 @@ fn upgrade_snapshots_schema_seven_before_migrating_to_eight() {
             .unwrap()
             .schema_version()
             .unwrap(),
-        8
+        9
     );
 }
 

@@ -16,9 +16,13 @@ remediation at `625bb4299187139461a64fd6eb5337ea35804261`.
 Signed Pip `8d3dde498fe60da1b4be9b5f2728610e6cdedcdb` is installed on Pirate.
 Its normal publication action pushed that exact commit and updated the existing
 PR, preserving accepted history. Fresh GitHub CI run `34104104224` passed; the
-case is `REVIEWING`, revision 23. Native task `t_d2cdf42a` and direct attempt 15
-are running the required general and Kimi re-reviews. The old head's reviews do
-not prove readiness of this new head. The PR is still draft; no merge occurred.
+case is `FINAL_REVIEW`, revision 26. Native task `t_d2cdf42a` and direct attempt
+15 passed required general and Kimi re-reviews; App approvals `5130401272` and
+`5130401511` bind this head. Final preflight remains pending: GitHub reports
+`mergeable=true` but state `blocked`; Safe Master requires signed commits and
+both PR commits are unsigned. Signing/publication identity needs correction;
+replacement commits require fresh CI and reviews. The holistic final reviewer
+has not started. The PR is still draft; no merge occurred.
 
 Live acceptance gates (partially satisfied):
 
@@ -43,7 +47,7 @@ Live acceptance gates (partially satisfied):
 | Failure isolation and ordinary recovery | Completed-result collection precedes GitHub access. Confirmed non-start backoff and bounded audited retry exist. Per-case/capability isolation and ordinary pause/resume still need completion. |
 | Immutable jobs across upgrades | Saved dispatch definitions are reused. Full preservation of actual execution settings and skill content across upgrades remains incomplete. Restrictive controls must still apply immediately. |
 | Compact evidence with durable provenance | Installed exports deduplicate accepted event/run payloads and provide role-specific indexes into retained artifacts. Full history remains duplicated in saved definitions; finish compact job inputs. |
-| Safe workers and storage | Real service-identity builder execution and controlled publication work; managed storage and credential isolation are installed. Fresh re-review must prove recent command/scratch fixes. Cleanup must remain independent of unrelated work. |
+| Safe workers and storage | Real service-identity builder execution and controlled publication work; managed storage and credential isolation are installed. Fresh native re-review ran tests successfully in its scratch layout. Kimi reported successful commands after shortening its temporary path; direct temporary-path handling still needs improvement. Cleanup must remain independent of unrelated work. |
 | Small packaging and operating surface | Signed install/rollback, policy preservation and schema-8 ordered migrations are verified. Remove obsolete operational scaffolding; normal operation must not require case-specific shell scripts. |
 | Retire legacy Pip Python | Pending complete live cutover proof. Keep upstream Hermes and useful small probes/fixtures; remove the obsolete Pip runtime, packaging and CI rather than maintaining two implementations. |
 | Final handoff | Pending exact-head readiness verification, documentation reconciliation and removal of temporary operator elevation. Never merge automatically. |

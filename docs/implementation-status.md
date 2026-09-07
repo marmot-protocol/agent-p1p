@@ -17,11 +17,11 @@ Installation preserved the stopped ledger and paused policy byte-for-byte.
   (security/performance, approved) are published on the old `05070de3` head under the
   separate App identities. Both include reported verification and limitations.
   Required Kimi attempt 11 and shadow Opus attempt 12 disclosed denied commands;
-  the next review must prove the installed noninteractive-execution fix.
+  those old reports do not provide successful command-execution proof.
 - The installed binding/retry fixes preserved six case-local failures and the
   completed remediation. Builder attempt 14 reverified and reused clean commit
   `625bb4299187139461a64fd6eb5337ea35804261`. Its result is accepted, with the
-  case now `REVIEWING` at revision 23, plan 1 and remediation round 1. The worker
+  case now `FINAL_REVIEW` at revision 26, plan 1 and remediation round 1. The worker
   reported passing CLI checks and `just fast-ci`, plus a Marmot parallel-test
   timeout whose isolated rerun passed. That limitation remains in its result.
 - Publication succeeded: the old dispatcher used an ambiguous builder round
@@ -32,10 +32,24 @@ Installation preserved the stopped ledger and paused policy byte-for-byte.
   first publication cycle hit a generic identity/head guard; its normal retry
   succeeded. GitHub and the ledger agree on the new head, with the builder's
   reported checks and limitations preserved in the PR body.
-- Fresh re-review started automatically: native task `t_d2cdf42a` runs the
-  configured `openai-codex/gpt-6-astra` general reviewer and direct attempt 15
-  runs required `cursor/kimi-k3-max`, both on head `625bb429`. The native worker
-  was observed executing Cargo/CLI tests. Neither new review is accepted yet.
+- Fresh re-review passed: native task `t_d2cdf42a` used configured
+  `openai-codex/gpt-6-astra`; direct attempt 15 used required
+  `cursor/kimi-k3-max`. Both approved head `625bb429`. App reviews `5130401272`
+  and `5130401511` are published on that exact head. Native retained logs and
+  their reported hashes were independently checked: 611 library tests and two
+  sanitization integration tests passed. Kimi reported successful tests and
+  hostile-input probes; its first long-TMPDIR test failure and short-path rerun
+  remain disclosed. Shadow comparison attempt 16 subsequently completed with
+  `APPROVE`; it is advisory evidence, not an additional required approval.
+- Final preflight is pending, not accepted; the holistic final reviewer has not
+  started. GitHub reports conflict-free `mergeable=true` but merge state
+  `blocked`. Safe Master requires signatures and both PR commits are unsigned.
+  Commit email also maps to `pip`, not the configured `agent-p1p` account.
+  Signing/publication identity must be corrected without giving workers GitHub
+  credentials or weakening branch rules. Any replacement head requires fresh
+  CI and reviews. The registered Pip signing public key was located; the private
+  key was not found in the scoped standard Pirate locations. Its location was
+  requested from Jeff; no private keys were read, created or registered.
 - #891, #1228 and #1639 are abandoned with history retained.
 - Hermes remains the upstream installation; Pip has not introduced a fork.
   Conversational Hermes was untouched. Pip execution timers and its dedicated
@@ -93,8 +107,8 @@ the case; a real live-outage drill remains unproven.
 
 Cursor now approves verification commands noninteractively, with an unchanged
 checkout postcondition and the credential-isolating service sandbox. This is
-not an OS-enforced read-only source mount. The next review round must prove
-real command execution; old reports are not retroactively upgraded. Published
+not an OS-enforced read-only source mount. Fresh Kimi review reports successful
+command execution; old reports are not retroactively upgraded. Published
 reviews now expose suggestions and reviewer-reported evidence and limitations.
 
 Review retry shares the bounded root/offline recovery path and preserves the
@@ -108,7 +122,7 @@ Ordinary pause/resume must stop requiring policy-copy commands.
 New native scratch schema 3 reserves space for MDK's private Unix-socket staging
 path; schemas 1 and 2 remain readable without rewriting existing task storage.
 Local socket/retirement tests, a real MDK socket probe and signed Linux gates
-pass. The next native review must prove the new layout in its actual sandbox.
+pass. The fresh native review above also proved the layout in its actual sandbox.
 
 Jobs reference a retained SHA-256-bound evidence file; new Cursor files support
 bounded line reads. Existing jobs keep their artifact bytes and references.
@@ -153,7 +167,23 @@ lifecycle tests change every fixture unit across upgrades and verify all bytes
 and modes, including rollback at every existing injected-failure point. The
 focused lifecycle suite passes before and after the behavior-preserving change;
 the full Rust suite, Clippy and formatting checks also pass. Signed deployment
-remains a separate gate; the running re-review is not interrupted for this change.
+remains a separate gate; the live re-review was not interrupted for this change.
+
+Source `5ca4ae3` passed CI `34106970663` and signed deployment build
+`34106970547`; Pirate remains on `8d3dde4`. A subsequent local final-gate change
+distinguishes merge conflicts, unknown mergeability and GitHub's observed merge
+state instead of one generic blocker. It still requires both conflict-free and
+`clean`; it does not infer a specific failed branch rule from `blocked` alone.
+
+Schema 9 narrows the finding primary key from globally unique `finding_id` to
+`(case_key, finding_id)`. A regression reproduced unrelated issues failing on
+the same reviewer-chosen ID. The migration copies existing payloads, digests,
+origins and heads unchanged, restores immutability triggers, and leaves
+same-case duplicates as transaction failures. Tests cover separate issues and
+repositories, replay, restart, schema-8 migration and schema-1 forward upgrade.
+The full Rust suite, Clippy and formatting checks pass, including all 13 local
+installer lifecycle tests. Signed Linux lifecycle verification and installation
+remain separate gates; the Pirate ledger remains schema 8.
 
 A subsequent local TDD change attempts both accepted review-lane publications
 even if one App is unavailable. The ledger advances only after both succeed;

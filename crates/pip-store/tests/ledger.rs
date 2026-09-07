@@ -6,7 +6,7 @@ use pip_store::{
     ReviewObservationInput, RunInput, Store, StoreError, TaskProjectionInput, TransitionInput,
     WebhookDeliveryInput, WorkspaceRetirementInput, WorkspaceRetirementOutcome,
 };
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -135,9 +135,133 @@ fn effect_claims_are_repository_scoped_before_leasing_and_across_restart() {
 }
 
 #[test]
+fn finding_ids_are_case_scoped_and_case_local_duplicates_remain_atomic() {
+    let (directory, mut store) = open();
+    let first = new_case();
+    store.create_case(&first).unwrap();
+    store.apply_transition(&transition(), None).unwrap();
+    let original = store.immutable_history_for_case(&first.case_key).unwrap();
+
+    for (index, repository_id, issue_number) in [(2, 984_321, 1241), (3, 984_322, 1240)] {
+        let mut case = new_case();
+        case.repository_id = repository_id;
+        case.issue_number = issue_number;
+        case.case_key = format!("repo:{repository_id}#{issue_number}@1");
+        case.event.event_id = format!("intake-{index}");
+        case.effects.clear();
+        store.create_case(&case).unwrap();
+        let mut input = transition();
+        input.case_key = case.case_key.clone();
+        input.event.event_id = format!("review-{index}");
+        input.run = None;
+        input.evidence.clear();
+        input.effects.clear();
+        input.findings[0].payload = json!({"case": case.case_key});
+        assert_eq!(
+            store.apply_transition(&input, None).unwrap(),
+            ApplyResult::Applied
+        );
+        assert_eq!(
+            store.apply_transition(&input, None).unwrap(),
+            ApplyResult::Replayed
+        );
+        let retained = store.immutable_history_for_case(&case.case_key).unwrap();
+        assert_eq!(retained.findings.len(), 1);
+        assert_eq!(retained.findings[0].finding_id, "GENERAL-R1-001");
+        assert_eq!(retained.findings[0].payload, input.findings[0].payload);
+        input.event.event_id = format!("duplicate-{index}");
+        input.expected_revision = 2;
+        assert!(store.apply_transition(&input, None).is_err());
+        assert_eq!(
+            store.immutable_history_for_case(&case.case_key).unwrap(),
+            retained
+        );
+        assert_eq!(
+            store.case(&case.case_key).unwrap().unwrap().state_revision,
+            2
+        );
+    }
+    drop(store);
+    let store = Store::open(directory.path().join("ledger.db")).unwrap();
+    assert_eq!(store.finding_count().unwrap(), 3);
+    assert_eq!(
+        store.immutable_history_for_case(&first.case_key).unwrap(),
+        original
+    );
+}
+
+#[test]
+fn schema_eight_findings_upgrade_preserves_payloads_digests_and_immutability() {
+    let (directory, mut store) = open();
+    store.create_case(&new_case()).unwrap();
+    store.apply_transition(&transition(), None).unwrap();
+    let history = store
+        .immutable_history_for_case(&new_case().case_key)
+        .unwrap();
+    let path = directory.path().join("ledger.db");
+    drop(store);
+    let connection = Connection::open(&path).unwrap();
+    // Reconstruct the deployed schema-8 global key, independently of the latest schema.
+    connection
+        .execute_batch(
+            "
+        DROP TRIGGER findings_no_update;
+        DROP TRIGGER findings_no_delete;
+        ALTER TABLE findings RENAME TO current_findings;
+        CREATE TABLE findings (
+            finding_id TEXT PRIMARY KEY,
+            case_key TEXT NOT NULL REFERENCES cases(case_key),
+            origin_role TEXT NOT NULL,
+            reviewed_head_sha TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            payload_sha256 TEXT NOT NULL,
+            recorded_at INTEGER NOT NULL
+        ) STRICT;
+        INSERT INTO findings SELECT * FROM current_findings;
+        DROP TABLE current_findings;
+        CREATE TRIGGER findings_no_update BEFORE UPDATE ON findings BEGIN
+            SELECT RAISE(ABORT, 'findings are immutable');
+        END;
+        CREATE TRIGGER findings_no_delete BEFORE DELETE ON findings BEGIN
+            SELECT RAISE(ABORT, 'findings are immutable');
+        END;
+        DELETE FROM schema_migrations WHERE version > 8;
+        PRAGMA user_version = 8;
+    ",
+        )
+        .unwrap();
+    drop(connection);
+    let upgraded = Store::open(&path).unwrap();
+    assert_eq!(upgraded.schema_version().unwrap(), 9);
+    assert_eq!(
+        upgraded
+            .immutable_history_for_case(&new_case().case_key)
+            .unwrap(),
+        history
+    );
+    drop(upgraded);
+    let connection = Connection::open(&path).unwrap();
+    assert!(
+        connection
+            .execute("UPDATE findings SET finding_id = 'changed'", [])
+            .is_err()
+    );
+    assert!(connection.execute("DELETE FROM findings", []).is_err());
+    assert!(
+        connection
+            .query_row("PRAGMA foreign_key_check", [], |_| Ok(()))
+            .optional()
+            .unwrap()
+            .is_none()
+    );
+    drop(connection);
+    assert_eq!(Store::open(&path).unwrap().schema_version().unwrap(), 9);
+}
+
+#[test]
 fn migration_creates_hardened_authoritative_schema() {
     let (_directory, store) = open();
-    assert_eq!(store.schema_version().unwrap(), 8);
+    assert_eq!(store.schema_version().unwrap(), 9);
     assert!(store.foreign_keys_enabled().unwrap());
     assert_eq!(store.journal_mode().unwrap(), "wal");
 }
@@ -751,7 +875,7 @@ fn operator_status_separates_pending_leased_and_delivered_work() {
         .unwrap();
 
     let status = store.status(110).unwrap();
-    assert_eq!(status.schema_version, 8);
+    assert_eq!(status.schema_version, 9);
     assert_eq!(status.cases.len(), 1);
     assert_eq!(status.cases[0].case_key, "repo:984321#1240@1");
     assert_eq!(status.events, 1);
@@ -1286,7 +1410,7 @@ fn schema_one_upgrades_forward_without_losing_existing_projections() {
     drop(connection);
 
     let upgraded = Store::open(&path).unwrap();
-    assert_eq!(upgraded.schema_version().unwrap(), 8);
+    assert_eq!(upgraded.schema_version().unwrap(), 9);
     assert_eq!(
         upgraded
             .task_projection("legacy-projection")
