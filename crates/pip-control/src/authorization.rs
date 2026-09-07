@@ -9,16 +9,19 @@ use pip_core::{
     CaseId, CaseState, Event, EventId, GitSha, IssueNumber, ObservedAt, PlanVersion,
     PolicyRevision, PullRequestNumber, RepositoryId, StateRevision, WorkflowVersion,
 };
+use pip_github::IntakeSnapshot;
 use pip_store::{EvidenceInput, Store, StoreError, StoredCase};
 use serde::Serialize;
 
-use crate::{IntakeSource, RepositoryPolicy, ShadowError};
+use crate::{IntakeSource, RepositoryPolicy};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AuthorizationBlock {
     pub case_key: String,
     pub blockers: Vec<String>,
     pub revoked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -33,11 +36,15 @@ impl ActiveAuthorization {
     pub const fn is_authorized(&self) -> bool {
         matches!(self, Self::Authorized { .. })
     }
+
+    #[must_use]
+    pub fn has_errors(&self) -> bool {
+        matches!(self, Self::Blocked { cases } if cases.iter().any(|case| case.error.is_some()))
+    }
 }
 
 #[derive(Debug)]
 pub enum AuthorizationError {
-    Evidence(ShadowError),
     Store(StoreError),
     Controller(ControllerError),
     InvalidCase,
@@ -47,7 +54,6 @@ pub enum AuthorizationError {
 impl fmt::Display for AuthorizationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Evidence(error) => error.fmt(formatter),
             Self::Store(error) => error.fmt(formatter),
             Self::Controller(error) => error.fmt(formatter),
             Self::InvalidCase => formatter.write_str("active authorization case is invalid"),
@@ -80,6 +86,15 @@ pub fn verify_active_authorization<S: IntakeSource>(
     policy: &RepositoryPolicy,
     store: &Store,
 ) -> Result<ActiveAuthorization, AuthorizationError> {
+    observe_authorization(source, policy, active_cases(policy, store)?, |_, _, _| {
+        Ok(false)
+    })
+}
+
+fn active_cases(
+    policy: &RepositoryPolicy,
+    store: &Store,
+) -> Result<Vec<StoredCase>, AuthorizationError> {
     let mut cases = store
         .status(0)?
         .cases
@@ -93,18 +108,40 @@ pub fn verify_active_authorization<S: IntakeSource>(
         })
         .collect::<Vec<_>>();
     cases.sort_by_key(|case| (case.issue_number, case.workflow_version));
+    Ok(cases)
+}
+
+fn observe_authorization<S: IntakeSource>(
+    source: &S,
+    policy: &RepositoryPolicy,
+    cases: Vec<StoredCase>,
+    mut record_revocation: impl FnMut(
+        &StoredCase,
+        &IntakeSnapshot,
+        &[String],
+    ) -> Result<bool, AuthorizationError>,
+) -> Result<ActiveAuthorization, AuthorizationError> {
     let case_count = cases.len();
     let mut blocked = Vec::new();
     for case in cases {
-        let evidence = source
-            .intake(
-                &policy.repository.owner,
-                &policy.repository.name,
-                case.issue_number,
-            )
-            .map_err(|error| {
-                AuthorizationError::Evidence(ShadowError::Evidence(error.to_string()))
-            })?;
+        let evidence = match source.intake(
+            &policy.repository.owner,
+            &policy.repository.name,
+            case.issue_number,
+        ) {
+            Ok(evidence) => evidence,
+            Err(error) => {
+                // Unknown authorization is never permission or revocation, but
+                // must not hide an independently observed revocation elsewhere.
+                blocked.push(AuthorizationBlock {
+                    case_key: case.case_key,
+                    blockers: vec!["EVIDENCE_UNAVAILABLE".into()],
+                    revoked: false,
+                    error: Some(error.to_string()),
+                });
+                continue;
+            }
+        };
         let mut blockers = Vec::new();
         if case.policy_revision != policy.revision {
             blockers.push("POLICY_REVISION_MISMATCH".into());
@@ -151,10 +188,12 @@ pub fn verify_active_authorization<S: IntakeSource>(
             Some(_) => {}
         }
         if !blockers.is_empty() {
+            let revoked = record_revocation(&case, &evidence, &blockers)?;
             blocked.push(AuthorizationBlock {
                 case_key: case.case_key,
                 blockers,
-                revoked: false,
+                revoked,
+                error: None,
             });
         }
     }
@@ -171,36 +210,18 @@ pub fn reconcile_active_authorization<S: IntakeSource>(
     store: &mut Store,
     observed_at: u64,
 ) -> Result<ActiveAuthorization, AuthorizationError> {
-    let mut authorization = verify_active_authorization(source, policy, store)?;
-    let ActiveAuthorization::Blocked { cases } = &mut authorization else {
-        return Ok(authorization);
-    };
-    for blocked in cases {
-        if !revocation_is_authoritative(&blocked.blockers) {
-            continue;
+    let cases = active_cases(policy, store)?;
+    observe_authorization(source, policy, cases, |case, evidence, blockers| {
+        if case.policy_revision != policy.revision || !revocation_is_authoritative(blockers) {
+            return Ok(false);
         }
-        let case = store
-            .case(&blocked.case_key)?
-            .ok_or(AuthorizationError::InvalidCase)?;
-        if case.policy_revision != policy.revision {
-            continue;
-        }
-        let evidence = source
-            .intake(
-                &policy.repository.owner,
-                &policy.repository.name,
-                case.issue_number,
-            )
-            .map_err(|error| {
-                AuthorizationError::Evidence(ShadowError::Evidence(error.to_string()))
-            })?;
-        let payload = serde_json::to_value(&evidence)
+        let payload = serde_json::to_value(evidence)
             .map_err(|error| AuthorizationError::Serialization(error.to_string()))?;
         let command = revocation_command(
-            &case,
+            case,
             policy,
             observed_at,
-            blocked.blockers.clone(),
+            blockers.to_vec(),
             EvidenceInput {
                 evidence_id: format!(
                     "evidence-authorization-revoked-repo{}-issue{}-workflow{}-revision{}",
@@ -215,9 +236,8 @@ pub fn reconcile_active_authorization<S: IntakeSource>(
             },
         )?;
         LedgerController::apply(store, &policy.case_policy(), &command)?;
-        blocked.revoked = true;
-    }
-    Ok(authorization)
+        Ok(true)
+    })
 }
 
 fn revocation_is_authoritative(blockers: &[String]) -> bool {

@@ -613,6 +613,7 @@ where
         && takeover.is_ok()
         && bounds.is_ok();
     let takeover = cycle_observation(takeover);
+    let authorization_has_errors = authorization.as_ref().is_ok_and(|state| state.has_errors());
     let authorization = cycle_observation(authorization);
     let bounds = cycle_observation(bounds);
     let work_authorized = advancement_authorized && workspace_ready;
@@ -728,7 +729,8 @@ where
         "dispatch": dispatch,
     });
     report["ok"] = json!(
-        collection["direct_worker"]["result"] != "error"
+        !authorization_has_errors
+            && collection["direct_worker"]["result"] != "error"
             && collection["worker_result"]["result"] != "error"
             && report
                 .as_object()

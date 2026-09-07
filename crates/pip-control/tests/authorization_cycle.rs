@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 #[derive(Default)]
 struct FakeSource {
     snapshots: RefCell<BTreeMap<u64, IntakeSnapshot>>,
+    reads: RefCell<Vec<u64>>,
 }
 
 impl IntakeSource for FakeSource {
@@ -33,11 +34,128 @@ impl IntakeSource for FakeSource {
         _repository: &str,
         issue_number: u64,
     ) -> Result<IntakeSnapshot, GitHubError> {
+        self.reads.borrow_mut().push(issue_number);
         self.snapshots
             .borrow()
             .get(&issue_number)
             .cloned()
             .ok_or(GitHubError::InvalidIdentity)
+    }
+}
+
+#[test]
+fn revocation_records_the_snapshot_that_was_checked_without_a_second_fetch() {
+    struct ChangingSource(RefCell<Vec<IntakeSnapshot>>);
+    impl IntakeSource for ChangingSource {
+        fn discover(&self, _: &str, _: &str, _: &str) -> Result<Vec<IssueSnapshot>, GitHubError> {
+            unreachable!()
+        }
+        fn intake(&self, _: &str, _: &str, _: u64) -> Result<IntakeSnapshot, GitHubError> {
+            Ok(self.0.borrow_mut().remove(0))
+        }
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    let policy = active_policy();
+    seed_case_with_dispatch(&mut store, 1240, policy.revision);
+    let mut removed = authorized_snapshot(1240);
+    removed.issue.labels.clear();
+    let expected = serde_json::to_value(&removed).unwrap();
+    let source = ChangingSource(RefCell::new(vec![removed, authorized_snapshot(1240)]));
+    reconcile_active_authorization(&source, &policy, &mut store, 100).unwrap();
+    let history = store
+        .immutable_history_for_case("repo:1055628515#1240@2")
+        .unwrap();
+    let recorded = history
+        .evidence
+        .iter()
+        .find(|entry| entry.kind == "GITHUB_AUTHORIZATION")
+        .unwrap();
+    assert_eq!(
+        recorded.payload, expected,
+        "accepted decision and evidence must use one observation"
+    );
+    assert_eq!(
+        source.0.borrow().len(),
+        1,
+        "never refetch just to record evidence"
+    );
+}
+
+#[test]
+fn unavailable_issue_evidence_does_not_hide_another_issues_authoritative_revocation() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    let policy = active_policy();
+    seed_case_with_dispatch(&mut store, 1240, policy.revision);
+    seed_case_with_dispatch(&mut store, 1241, policy.revision);
+    let source = FakeSource::default();
+    let mut removed = authorized_snapshot(1241);
+    removed.issue.labels.clear();
+    source.snapshots.borrow_mut().insert(1241, removed);
+    let ActiveAuthorization::Blocked { cases } =
+        reconcile_active_authorization(&source, &policy, &mut store, 100).unwrap()
+    else {
+        panic!("unknown and removed authorization must block")
+    };
+    assert_eq!(cases.len(), 2);
+    assert_eq!(cases[0].blockers, ["EVIDENCE_UNAVAILABLE"]);
+    assert!(cases[0].error.is_some());
+    assert!(!cases[0].revoked);
+    assert!(cases[1].revoked);
+    assert!(cases[1].error.is_none());
+    assert_eq!(
+        store.case("repo:1055628515#1240@2").unwrap().unwrap().state,
+        "PLANNING"
+    );
+    assert_eq!(
+        store.case("repo:1055628515#1241@2").unwrap().unwrap().state,
+        "ABANDONED"
+    );
+    assert_eq!(*source.reads.borrow(), [1240, 1241]);
+}
+
+#[test]
+fn untrusted_identity_or_missing_authorization_history_never_causes_revocation() {
+    for mismatch in ["repository", "issue", "history", "policy"] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+        let policy = active_policy();
+        seed_case_with_dispatch(
+            &mut store,
+            1240,
+            policy.revision + u64::from(mismatch == "policy"),
+        );
+        let source = FakeSource::default();
+        let mut snapshot = authorized_snapshot(1240);
+        snapshot.issue.labels.clear();
+        match mismatch {
+            "repository" => snapshot.repository.id += 1,
+            "issue" => snapshot.issue.number += 1,
+            "history" => snapshot.label_events.clear(),
+            _ => {}
+        }
+        source.snapshots.borrow_mut().insert(1240, snapshot);
+        let ActiveAuthorization::Blocked { cases } =
+            reconcile_active_authorization(&source, &policy, &mut store, 100).unwrap()
+        else {
+            panic!("untrusted evidence must block")
+        };
+        assert!(!cases[0].revoked);
+        assert_eq!(
+            store.case(&cases[0].case_key).unwrap().unwrap().state,
+            "PLANNING"
+        );
+        assert_eq!(store.status(100).unwrap().outbox_pending, 1);
+        assert_eq!(
+            store
+                .immutable_history_for_case(&cases[0].case_key)
+                .unwrap()
+                .events
+                .len(),
+            1
+        );
+        assert_eq!(*source.reads.borrow(), [1240]);
     }
 }
 

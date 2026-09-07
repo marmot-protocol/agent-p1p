@@ -47,11 +47,25 @@ Installation preserved the stopped ledger and paused policy byte-for-byte.
   Commit email also maps to `pip`, not the configured `agent-p1p` account.
   Signing/publication identity must be corrected without giving workers GitHub
   credentials or weakening branch rules. Any replacement head requires fresh
-  CI and reviews. The registered Pip signing public key was located; the private
-  key was not found in the scoped standard Pirate locations. Its location was
-  requested from Jeff; no private keys were read, created or registered.
+  CI and reviews. An earlier scoped search found the registered Pip public key
+  but not its private key. Jeff subsequently approved a dedicated signing-only
+  key. It was generated on Pirate at `/etc/pip/commit-signing/key`, root-owned
+  mode 0600 under a root-only mode-0700 directory. Fingerprint:
+  `SHA256:uoZahdy4QImrKeSOfbsfX6FeweFeHC+eEJ2OXVlO7wg`.
+  Worker access is denied. No private key contents were exported or placed in
+  this repository. The existing repository token cannot register account keys
+  (HTTP 403); Jeff was given the public-key-only command and asked to register
+  it as a **signing**, not authentication, key on `agent-p1p`. Registration and
+  controller signing integration are not yet verified. The previous registered
+  dual-purpose key is untouched.
+  A root-owned credential-store alias at `/etc/credstore/pip-commit-signing`
+  points to the private key. A collected transient systemd service running as
+  `pip-control` successfully loaded that credential by identifier and derived
+  the expected public fingerprint. It did not sign or publish a commit; the
+  live controller unit is unchanged. The key and alias remain staged for the
+  forthcoming signed-publication integration.
   GitHub's documented [`createCommitOnBranch` signing API](https://docs.github.com/en/graphql/reference/commits#createcommitonbranch)
-  may avoid a separate signing key. This is an investigation, not live proof:
+  was investigated as an alternative, not live proof:
   file-mode support, exact tree/parent/actor verification, recovery and the
   source-build-to-published-head binding must be established before adoption.
   A read-only GraphQL probe using Pirate's existing credential confirmed
@@ -61,6 +75,9 @@ Installation preserved the stopped ledger and paused policy byte-for-byte.
   `897111a9d9a9772b824cb4ed0ff60b9cb1242f5f`. No signing mutation or PR rewrite
   has occurred. This capability check does not prove server-side signing or
   authorize treating a different signed commit as the accepted builder SHA.
+  The dedicated-key route is preferred to avoid maintaining a second publication
+  transport with incomplete Git file-mode support. Signing still changes commit
+  SHAs and needs an explicit accepted-build-to-published-commit binding.
 - #891, #1228 and #1639 are abandoned with history retained.
 - Hermes remains the upstream installation; Pip has not introduced a fork.
   Conversational Hermes was untouched. Pip execution timers and its dedicated
@@ -244,6 +261,29 @@ cleanup after success and failures. Executor and production adapter tests pass.
 The full workspace Rust suite, Clippy with warnings denied, formatting and diff
 checks also pass (`/tmp/pip-direct-temp-validation-20260907.log`).
 This change is not installed and has not been exercised by a live provider.
+Source `a8bdb4c` subsequently passed CI `34112319335` and signed deployment build
+`34112319327`, including Linux lifecycle checks; Pirate remains on `8d3dde4`.
+
+### Authorization observations (local, 2026-09-07)
+
+Revocation now records the exact GitHub snapshot used to evaluate authorization,
+removing a second fetch that could record a re-authorized issue as evidence for
+abandonment. Read-only verification and reconciliation share that observation
+path. An unavailable issue produces a case-specific `EVIDENCE_UNAVAILABLE`
+blocker and error while independent authoritative revocations still commit.
+Missing evidence is never permission or a reason to abandon that case; identity,
+policy and missing-history guards remain in force. Controller reports retain
+`ok:false` for evidence outages rather than silently treating them as healthy.
+
+Regression tests reproduced contradictory retained evidence and an early issue
+read failure hiding a later revocation. Focused authorization/controller tests
+pass, including pending-work supersession and untrusted-evidence guards. The
+full Rust suite, Clippy with warnings denied, formatting and diff checks pass
+(`/tmp/pip-authorization-observation-verified-20260907.log`). The initial full
+run caught the outage-reporting regression; it was corrected before this pass.
+Deployment remains a separate gate. Healthy-case advancement still
+uses the repository-wide authorization gate; this is not complete per-case
+failure isolation.
 
 1. Finish one real issue through builder, exact-head CI, all required independent
    reviews, remediation where needed, and final human-ready disposition.

@@ -118,7 +118,19 @@ fn capability_failures_are_reported_without_aborting_unrelated_controller_phases
         let report = controller_cycle_with_transport(&arguments, OfflineGitHub)
             .unwrap_or_else(|error| panic!("{fault} aborted the cycle: {error}"));
         assert_eq!(report["ok"], fault == "none", "{fault}: {report}");
-        if fault != "none" {
+        if fault == "authorization" {
+            assert_eq!(report[fault]["result"], "blocked");
+            assert_eq!(
+                report[fault]["cases"][0]["blockers"],
+                json!(["EVIDENCE_UNAVAILABLE"])
+            );
+            assert!(
+                report[fault]["cases"][0]["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("fixture GitHub outage")
+            );
+        } else if fault != "none" {
             assert_eq!(report[fault]["result"], "error", "{report}");
         }
         assert_eq!(report["operational_bounds"]["result"], "idle");
