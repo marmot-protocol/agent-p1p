@@ -166,7 +166,7 @@ fn old_inline_batches_replay_without_rewriting_their_bytes() {
     connection
         .execute_batch(
             "DROP TRIGGER dispatch_batches_no_update;
-            DELETE FROM schema_migrations WHERE version > 9; PRAGMA user_version=9;",
+            DROP TABLE conversations; DELETE FROM schema_migrations WHERE version > 9; PRAGMA user_version=9;",
         )
         .unwrap();
     connection
@@ -177,7 +177,7 @@ fn old_inline_batches_replay_without_rewriting_their_bytes() {
         .unwrap();
     drop(connection);
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 12);
+    assert_eq!(store.schema_version().unwrap(), 13);
     assert_eq!(store.dispatch_intents("reviews").unwrap().unwrap(), intents);
     assert_eq!(
         store.freeze_dispatch_intents(&claim, &intents, 4).unwrap(),

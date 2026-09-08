@@ -63,10 +63,10 @@ fn repeated_workspace_retirement_preserves_each_terminal_generation() {
         INSERT INTO old_retirements SELECT * FROM workspace_retirements;
         DROP TABLE workspace_retirements;
         ALTER TABLE old_retirements RENAME TO workspace_retirements;
-        DELETE FROM schema_migrations WHERE version>10; PRAGMA user_version=10;").unwrap();
+        DROP TABLE conversations; DELETE FROM schema_migrations WHERE version>10; PRAGMA user_version=10;").unwrap();
     drop(connection);
     let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 12);
+    assert_eq!(store.schema_version().unwrap(), 13);
     assert_eq!(
         store.record_workspace_retirement(&retirement).unwrap(),
         ApplyResult::Replayed
@@ -469,14 +469,14 @@ fn legacy_findings_upgrade(version: u32) {
         CREATE TRIGGER findings_no_delete BEFORE DELETE ON findings BEGIN
             SELECT RAISE(ABORT, 'findings are immutable');
         END;
-        DELETE FROM schema_migrations WHERE version > {version};
+        DROP TABLE conversations; DELETE FROM schema_migrations WHERE version > {version};
         PRAGMA user_version = {version};
     "
         ))
         .unwrap();
     drop(connection);
     let mut upgraded = Store::open(&path).unwrap();
-    assert_eq!(upgraded.schema_version().unwrap(), 12);
+    assert_eq!(upgraded.schema_version().unwrap(), 13);
     assert_eq!(
         upgraded
             .immutable_history_for_case(&new_case().case_key)
@@ -539,13 +539,13 @@ fn legacy_findings_upgrade(version: u32) {
             .is_none()
     );
     drop(connection);
-    assert_eq!(Store::open(&path).unwrap().schema_version().unwrap(), 12);
+    assert_eq!(Store::open(&path).unwrap().schema_version().unwrap(), 13);
 }
 
 #[test]
 fn migration_creates_hardened_authoritative_schema() {
     let (_directory, store) = open();
-    assert_eq!(store.schema_version().unwrap(), 12);
+    assert_eq!(store.schema_version().unwrap(), 13);
     assert!(store.foreign_keys_enabled().unwrap());
     assert_eq!(store.journal_mode().unwrap(), "wal");
 }
@@ -1159,7 +1159,7 @@ fn operator_status_separates_pending_leased_and_delivered_work() {
         .unwrap();
 
     let status = store.status(110).unwrap();
-    assert_eq!(status.schema_version, 12);
+    assert_eq!(status.schema_version, 13);
     assert_eq!(status.cases.len(), 1);
     assert_eq!(status.cases[0].case_key, "repo:984321#1240@1");
     assert_eq!(status.events, 1);
@@ -1693,14 +1693,14 @@ fn schema_one_upgrades_forward_without_losing_existing_projections() {
              ) STRICT;
              INSERT INTO task_projections SELECT * FROM task_projections_v2;
              DROP TABLE task_projections_v2;
-             DELETE FROM schema_migrations WHERE version >= 2;
+             DROP TABLE conversations; DELETE FROM schema_migrations WHERE version >= 2;
              PRAGMA user_version = 1;",
         )
         .unwrap();
     drop(connection);
 
     let upgraded = Store::open(&path).unwrap();
-    assert_eq!(upgraded.schema_version().unwrap(), 12);
+    assert_eq!(upgraded.schema_version().unwrap(), 13);
     assert_eq!(
         upgraded
             .task_projection("legacy-projection")

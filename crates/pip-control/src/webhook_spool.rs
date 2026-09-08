@@ -220,7 +220,7 @@ impl WebhookSpool {
 
 fn validate_input(input: WebhookSpoolInput<'_>, secret: &[u8]) -> Result<(), WebhookSpoolError> {
     validate_webhook_authentication(input.delivery_id, input.signature, input.payload, secret)?;
-    if input.event_name != "issues" {
+    if input.event_name != "issues" && !crate::conversations::comment_event(input.event_name) {
         return Err(WebhookSpoolError::InvalidInput("unsupported event"));
     }
     if input.received_at == 0 {
@@ -306,7 +306,8 @@ fn read_envelope(
     let digest = hex(&Sha256::digest(&payload));
     if envelope.spool_format != 1
         || envelope.delivery_id != expected_delivery_id
-        || envelope.event_name != "issues"
+        || (envelope.event_name != "issues"
+            && !crate::conversations::comment_event(&envelope.event_name))
         || envelope.signature.is_empty()
         || !envelope.signature.is_ascii()
         || payload.is_empty()

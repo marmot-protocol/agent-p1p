@@ -112,6 +112,8 @@ impl RoleConfiguration {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RepositoryPolicy {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub conversations_enabled: bool,
     pub policy_format: u32,
     pub revision: u64,
     pub repository: RepositoryIdentity,

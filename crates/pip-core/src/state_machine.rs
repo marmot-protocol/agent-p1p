@@ -43,6 +43,7 @@ pub enum Event {
     HumanNarrowedScope,
     HumanApprovedStaleBase,
     HumanClarified,
+    HumanFeedbackReceived,
     BuilderDispatched,
     BuilderRetryAuthorized,
     ReviewRetryAuthorized,
@@ -74,7 +75,7 @@ pub enum Event {
 }
 
 impl Event {
-    pub const ALL: [Self; 41] = [
+    pub const ALL: [Self; 42] = [
         Self::PlanRecorded,
         Self::Proceed,
         Self::WaitingForIssueCreator,
@@ -88,6 +89,7 @@ impl Event {
         Self::HumanNarrowedScope,
         Self::HumanApprovedStaleBase,
         Self::HumanClarified,
+        Self::HumanFeedbackReceived,
         Self::BuilderDispatched,
         Self::BuilderRetryAuthorized,
         Self::ReviewRetryAuthorized,
@@ -199,6 +201,7 @@ string_enum!(Event, "event", {
     "HUMAN_NARROWED_SCOPE" => HumanNarrowedScope,
     "HUMAN_APPROVED_STALE_BASE" => HumanApprovedStaleBase,
     "HUMAN_CLARIFIED" => HumanClarified,
+    "HUMAN_FEEDBACK_RECEIVED" => HumanFeedbackReceived,
     "BUILDER_DISPATCHED" => BuilderDispatched,
     "BUILDER_RETRY_AUTHORIZED" => BuilderRetryAuthorized,
     "REVIEW_RETRY_AUTHORIZED" => ReviewRetryAuthorized,
@@ -345,6 +348,23 @@ pub fn transition(
     use Event as Ev;
 
     match (state, event) {
+        (
+            State::Planning
+            | State::WaitingHuman
+            | State::ReadyToBuild
+            | State::WaitingCi
+            | State::Reviewing
+            | State::Remediating
+            | State::FinalReview
+            | State::ShadowReady,
+            Ev::HumanFeedbackReceived,
+        ) => {
+            if context.remediation_round >= context.max_remediation_rounds {
+                decision(State::Escalated, &[Fx::Escalate])
+            } else {
+                decision(State::Planning, &[Fx::DispatchPlanner])
+            }
+        }
         (State::Planning, Ev::PlanRecorded) => decision(State::Planning, &[Fx::PublishPlan]),
         (State::Planning, Ev::Proceed) => decision(State::ReadyToBuild, &[Fx::DispatchBuilder]),
         (

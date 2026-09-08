@@ -11,6 +11,17 @@ type HmacSha256 = Hmac<Sha256>;
 
 #[test]
 fn verified_delivery_is_spooled_atomically_with_exact_raw_body() {
+    for event in [
+        "issues",
+        "issue_comment",
+        "pull_request_review_comment",
+        "pull_request_review",
+    ] {
+        verified_event(event);
+    }
+}
+
+fn verified_event(event: &str) {
     let directory = tempfile::tempdir().unwrap();
     prepare(directory.path());
     let spool = WebhookSpool::open(directory.path()).unwrap();
@@ -21,7 +32,7 @@ fn verified_delivery_is_spooled_atomically_with_exact_raw_body() {
         .store(
             WebhookSpoolInput {
                 delivery_id: "01234567-89ab-cdef-0123-456789abcdef",
-                event_name: "issues",
+                event_name: event,
                 signature: &signature,
                 payload,
                 received_at: 1_788_290_400,
@@ -51,7 +62,7 @@ fn verified_delivery_is_spooled_atomically_with_exact_raw_body() {
         envelope["delivery_id"],
         "01234567-89ab-cdef-0123-456789abcdef"
     );
-    assert_eq!(envelope["event_name"], "issues");
+    assert_eq!(envelope["event_name"], event);
     assert_eq!(envelope["signature"], signature);
     assert_eq!(envelope["received_at"], 1_788_290_400_u64);
     assert_eq!(

@@ -9,6 +9,20 @@ use serde::Serialize;
 use crate::RepositoryPolicy;
 
 pub trait IntakeSource {
+    fn actor_login(&self, _id: u64) -> Result<String, GitHubError> {
+        Err(GitHubError::InvalidIdentity)
+    }
+
+    fn discussion_comment(
+        &self,
+        _owner: &str,
+        _repository: &str,
+        _thread: u64,
+        _kind: &str,
+        _id: u64,
+    ) -> Result<pip_github::DiscussionComment, GitHubError> {
+        Err(GitHubError::InvalidIdentity)
+    }
     fn discover(
         &self,
         owner: &str,
@@ -25,6 +39,20 @@ pub trait IntakeSource {
 }
 
 impl<T: ReadTransport> IntakeSource for GitHubReader<T> {
+    fn actor_login(&self, id: u64) -> Result<String, GitHubError> {
+        self.read_actor_login(id)
+    }
+
+    fn discussion_comment(
+        &self,
+        owner: &str,
+        repository: &str,
+        thread: u64,
+        kind: &str,
+        id: u64,
+    ) -> Result<pip_github::DiscussionComment, GitHubError> {
+        self.read_discussion_comment(owner, repository, thread, kind, id)
+    }
     fn discover(
         &self,
         owner: &str,

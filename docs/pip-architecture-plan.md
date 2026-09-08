@@ -70,6 +70,18 @@ input, blocked or abandoned. Neither role guesses missing product intent.
 
 ## Jobs and evidence
 
+### GitHub conversation lane
+
+Opt-in mentions and human feedback use the existing webhook/queue/publication
+boundaries, with a separate durable inbox in the same Rust ledger. They are not
+new issue authorization. A native conversation task answers a question or
+recommends a bounded planning follow-up; only the controller may hand feedback to
+an existing, freshly authorized case at a safe worker boundary. This lane never
+approves CI, review heads, sensitive scope or merges. See
+[GitHub conversations](github-conversations.md) for behavior and rollout gates.
+
+### Case jobs
+
 Every job freezes its case/round, role/reviewer identity, exact provider/model,
 reasoning settings, skills version, workspace, input references and execution
 limit before dispatch. No silent model substitution is permitted.

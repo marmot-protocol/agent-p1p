@@ -51,6 +51,57 @@ fn reader(transport: FakeTransport) -> GitHubReader<FakeTransport> {
 }
 
 #[test]
+fn discussion_reads_bind_numeric_identity_and_parent_without_following_payload_urls() {
+    for (kind, parent, suffix) in [
+        ("issue_comment", "issue_url", "issues/42"),
+        (
+            "pull_request_review_comment",
+            "pull_request_url",
+            "pulls/42",
+        ),
+        ("pull_request_review", "pull_request_url", "pulls/42"),
+    ] {
+        let transport = FakeTransport::default();
+        let mut raw = serde_json::json!({"id":500,"user":{"id":99,"type":"User"},"body":"hello","updated_at":"2026-09-08T12:00:00Z"});
+        raw[parent] = serde_json::json!(format!("https://api.github.test/repos/org/repo/{suffix}"));
+        transport.push(response(&raw.to_string()));
+        let comment = reader(transport.clone())
+            .read_discussion_comment("org", "repo", 42, kind, 500)
+            .unwrap();
+        assert_eq!(comment.actor_id, 99);
+        assert!(comment.human);
+        raw[parent] = serde_json::json!("https://attacker.invalid/pulls/42");
+        transport.push(response(&raw.to_string()));
+        assert!(
+            reader(transport)
+                .read_discussion_comment("org", "repo", 42, kind, 500)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn inline_feedback_keeps_its_file_hunk_and_exact_commit_context() {
+    let transport = FakeTransport::default();
+    transport.push(response(&serde_json::json!({"id":11,"user":{"id":22,"type":"User"},
+        "pull_request_url":"https://api.github.test/repos/owner/repo/pulls/42","body":"Can this fail?",
+        "updated_at":"2026-09-08T12:00:00Z","path":"src/main.rs","diff_hunk":"@@ -1 +1 @@\n+changed()",
+        "commit_id":"a".repeat(40),"line":1,"in_reply_to_id":9}).to_string()));
+    let comment = reader(transport)
+        .read_discussion_comment("owner", "repo", 42, "pull_request_review_comment", 11)
+        .unwrap();
+    assert_eq!(comment.context["path"], "src/main.rs");
+    assert_eq!(comment.context["commit_id"], "a".repeat(40));
+    assert!(
+        comment.context["diff_hunk"]
+            .as_str()
+            .unwrap()
+            .contains("changed()")
+    );
+    assert_eq!(comment.reply_to, Some(9));
+}
+
+#[test]
 fn official_github_webhook_vector_verifies_in_constant_time_path() {
     let signature = "sha256=757107ea0eb2509fc211221cce984b8a37570b6d7586c22c46f4379c8b043e17";
     assert!(verify_webhook(

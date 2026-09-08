@@ -172,12 +172,16 @@ pub fn ingest_webhook<S: IntakeSource>(
     if envelope.received_at == 0 || envelope.received_at > observed_at {
         return Err(ActiveIntakeError::InvalidWebhook("invalid receive time"));
     }
-    if envelope.event_name != "issues"
-        || !pip_github::verify_webhook(secret, envelope.payload, envelope.signature)
-    {
+    if !pip_github::verify_webhook(secret, envelope.payload, envelope.signature) {
         return Err(ActiveIntakeError::InvalidWebhook(
             "event or signature rejected",
         ));
+    }
+    if crate::conversations::comment_event(envelope.event_name) {
+        return crate::conversations::ingest(source, policy, store, envelope, observed_at);
+    }
+    if envelope.event_name != "issues" {
+        return Err(ActiveIntakeError::InvalidWebhook("unsupported event"));
     }
     let payload: IssuesWebhook = serde_json::from_slice(envelope.payload)
         .map_err(|_| ActiveIntakeError::InvalidWebhook("malformed issues event"))?;

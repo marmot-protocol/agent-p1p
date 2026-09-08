@@ -125,8 +125,10 @@ fn transition_input(
     };
     let evaluated = evaluate_case_command(&snapshot, &command, policy)?;
     let next_plan_version = next_plan_version(workflow)?;
-    let next_remediation_round = if evaluated.transition.next_state == CaseState::Remediating
-        && workflow.expected_state != CaseState::Remediating
+    let next_remediation_round = if (evaluated.transition.next_state == CaseState::Remediating
+        && workflow.expected_state != CaseState::Remediating)
+        || (workflow.event == Event::HumanFeedbackReceived
+            && evaluated.transition.next_state == CaseState::Planning)
     {
         workflow
             .remediation_round

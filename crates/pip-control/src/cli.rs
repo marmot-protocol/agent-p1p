@@ -685,6 +685,11 @@ where
     cases.sort_by(|left, right| left.case_key.cmp(&right.case_key));
     let mut case_reports = Vec::with_capacity(cases.len());
     let mut work_cases = Vec::new();
+    let conversation_pending = policy.conversations_enabled
+        && !store
+            .conversations(policy.repository.id, 1)
+            .map_err(|error| CliError::Ledger(error.to_string()))?
+            .is_empty();
     for case in cases {
         let scope = crate::RepositoryScope::case(&policy, &case.case_key);
         let takeover = crate::reconcile_takeover_once(&reader, scope, &mut store, now);
@@ -702,7 +707,7 @@ where
         let authorization = cycle_observation(authorization);
         let bounds = cycle_observation(bounds);
         let work_authorized = advancement_authorized && workspace_ready;
-        if work_authorized {
+        if work_authorized && !conversation_pending {
             work_cases.push(case.case_key.clone());
         }
         let (result, ci) = if advancement_authorized {
@@ -769,7 +774,7 @@ where
             now,
             required(&options, "--owner")?,
             lease_seconds,
-            advancement_authorized,
+            advancement_authorized && !conversation_pending,
         ));
         let disposition = cycle_observation(crate::consume_disposition_once(
             (&reader, &writer),
@@ -778,7 +783,7 @@ where
             now,
             required(&options, "--owner")?,
             lease_seconds,
-            advancement_authorized,
+            advancement_authorized && !conversation_pending,
         ));
         let dispatch = cycle_observation(crate::dispatch_once(
             &mut store,
@@ -789,7 +794,7 @@ where
                 owner: required(&options, "--owner")?,
                 now,
                 lease_seconds,
-                authorization_valid: work_authorized,
+                authorization_valid: work_authorized && !conversation_pending,
             },
         ));
         let mut case_report = json!({
@@ -817,6 +822,20 @@ where
         );
         case_reports.push(case_report);
     }
+    let conversation = cycle_observation(crate::reconcile_conversation_once(
+        &reader,
+        &writer,
+        &policy,
+        &mut store,
+        pip_hermes::ProcessRunner::default(),
+        (required(&options, "--hermes")?, skills_commit),
+        now,
+    ));
+    // Intake runs independently: a message can arrive after the first inbox
+    // snapshot. Never prepare a direct worker alongside a newly queued reply.
+    if !matches!(conversation["result"].as_str(), Some("idle" | "disabled")) {
+        work_cases.clear();
+    }
     let direct_dispatch = (|| {
         let queue = crate::DirectQueue::new(required(&options, "--direct-queue")?)
             .map_err(|error| CliError::Reconciliation(error.to_string()))?;
@@ -840,6 +859,7 @@ where
         && collection["worker_result"]["result"] != "error"
         && workspace_lifecycle["result"] != "error"
         && intake["result"] != "error"
+        && conversation["result"] != "error"
         && case_reports.iter().all(|case| case["ok"] == true)
         && scheduling_ok;
     Ok(json!({
@@ -847,7 +867,7 @@ where
         "observed_at": now, "repository": policy.repository.full_name(),
         "policy_revision": policy.revision, "collection": collection,
         "workspace_lifecycle": workspace_lifecycle, "intake": intake,
-        "cases": case_reports, "direct_dispatch":direct_dispatch, "merge": {"result":"human_only"}
+        "cases": case_reports, "direct_dispatch":direct_dispatch, "conversation":conversation, "merge": {"result":"human_only"}
     }))
 }
 

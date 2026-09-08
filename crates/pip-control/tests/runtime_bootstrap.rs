@@ -31,6 +31,15 @@ impl CommandRunner for FakeRunner {
 
 #[test]
 fn policy_bootstrap_manages_only_hermes_roles_with_exact_reasoning() {
+    bootstrap(false);
+}
+
+#[test]
+fn conversation_opt_in_uses_the_exact_planner_model_and_reasoning() {
+    bootstrap(true);
+}
+
+fn bootstrap(conversations: bool) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("hermes");
     let skills = temp.path().join("skills");
@@ -42,6 +51,7 @@ fn policy_bootstrap_manages_only_hermes_roles_with_exact_reasoning() {
         "planner",
         "reviewer-general",
         "final-reviewer",
+        "conversation",
     ] {
         fs::create_dir_all(skills.join(path)).unwrap();
         fs::write(skills.join(path).join("SKILL.md"), "# managed\n").unwrap();
@@ -51,15 +61,20 @@ fn policy_bootstrap_manages_only_hermes_roles_with_exact_reasoning() {
     runner.output(r#"[{"slug":"pip-mdk","name":"Pip - marmot-protocol/mdk"}]"#);
     runner.output("--workspace --idempotency-key --created-by --max-runtime --max-retries --skill --model --provider --initial-status\n");
     runner.output("gateway run --external-supervisor\n");
-    for reasoning in ["xhigh", "high", "xhigh"] {
+    let mut efforts = vec!["xhigh", "high", "xhigh"];
+    if conversations {
+        efforts.push("xhigh");
+    }
+    for reasoning in efforts {
         runner.output(r#"{"default":"gpt-6-astra","provider":"openai-codex"}"#);
         runner.output(&format!("\"{reasoning}\"\n"));
         runner.output("\"profile\"\n");
     }
-    let policy = load_repository_policy(include_bytes!(
+    let mut policy = load_repository_policy(include_bytes!(
         "../../../config/target/repositories/mdk.json"
     ))
     .unwrap();
+    policy.conversations_enabled = conversations;
 
     let outcome = bootstrap_hermes_runtime_with(
         &policy,
@@ -70,7 +85,8 @@ fn policy_bootstrap_manages_only_hermes_roles_with_exact_reasoning() {
         runner,
     )
     .unwrap();
-    assert_eq!(outcome.profiles_created, 3);
+    assert_eq!(outcome.profiles_created, if conversations { 4 } else { 3 });
+    assert_eq!(root.join("profiles/conversation").is_dir(), conversations);
     assert!(root.join("profiles/planner").is_dir());
     assert!(root.join("profiles/reviewer-general").is_dir());
     assert!(root.join("profiles/final-reviewer").is_dir());

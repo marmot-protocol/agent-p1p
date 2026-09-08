@@ -53,6 +53,7 @@ fn capability_failures_are_reported_without_aborting_unrelated_controller_phases
         "plan_publication",
         "authorization",
         "peer_authorization",
+        "conversation",
     ] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
@@ -63,6 +64,7 @@ fn capability_failures_are_reported_without_aborting_unrelated_controller_phases
         policy.intake.enabled = fault == "intake";
         policy.intake.paused = false;
         policy.dispatch_enabled = true;
+        policy.conversations_enabled = fault == "conversation";
         policy.workspace = root.join("workspace").to_str().unwrap().into();
         policy.workspace_storage.require_distinct_filesystem = false;
         policy.workspace_storage.minimum_free_bytes = 1;
@@ -108,7 +110,10 @@ fn capability_failures_are_reported_without_aborting_unrelated_controller_phases
                 })
                 .unwrap();
         }
-        if matches!(fault, "peer_authorization" | "workspace_lifecycle") {
+        if matches!(
+            fault,
+            "peer_authorization" | "workspace_lifecycle" | "conversation"
+        ) {
             store
                 .create_case(&NewCase {
                     case_key: format!("repo:{}#78@3", policy.repository.id),
@@ -123,7 +128,28 @@ fn capability_failures_are_reported_without_aborting_unrelated_controller_phases
                         event_type: "ISSUE_AUTHORIZED".into(),
                         payload: json!({}),
                     },
-                    effects: vec![],
+                    effects: if fault == "conversation" {
+                        vec![EffectInput {
+                            effect_id: "existing-direct-work".into(),
+                            effect_type: "RUN_DIRECT_WORKER".into(),
+                            payload: json!({}),
+                        }]
+                    } else {
+                        vec![]
+                    },
+                })
+                .unwrap();
+        }
+        if fault == "conversation" {
+            store
+                .record_conversation(&pip_store::ConversationInput {
+                    key: "pending-feedback".into(),
+                    repository_id: policy.repository.id,
+                    thread_number: 78,
+                    actor_id: 99,
+                    case_key: None,
+                    received_at: 99,
+                    payload: json!({"body":"pending"}),
                 })
                 .unwrap();
         }
@@ -169,8 +195,11 @@ fn capability_failures_are_reported_without_aborting_unrelated_controller_phases
         let report = controller_cycle_with_transport(
             &arguments,
             OfflineGitHub {
-                healthy: matches!(fault, "peer_authorization" | "workspace_lifecycle")
-                    .then(|| policy.clone()),
+                healthy: matches!(
+                    fault,
+                    "peer_authorization" | "workspace_lifecycle" | "conversation"
+                )
+                .then(|| policy.clone()),
             },
         )
         .unwrap_or_else(|error| panic!("{fault} aborted the cycle: {error}"));
@@ -197,6 +226,12 @@ fn capability_failures_are_reported_without_aborting_unrelated_controller_phases
             continue;
         }
         let phases = &report["cases"][0];
+        if fault == "conversation" {
+            assert_eq!(
+                report["collection"]["direct_worker"]["result"],
+                "authorization_blocked"
+            );
+        }
         if fault == "authorization" {
             assert_eq!(phases[fault]["result"], "blocked");
             assert_eq!(
@@ -220,14 +255,17 @@ fn capability_failures_are_reported_without_aborting_unrelated_controller_phases
             assert_eq!(phases["operational_bounds"]["result"], "idle");
             assert_eq!(
                 phases["disposition"]["result"],
-                if fault == "authorization" {
+                if matches!(fault, "authorization" | "conversation") {
                     "authorization_blocked"
                 } else {
                     "idle"
                 }
             );
         }
-        if matches!(fault, "authorization" | "workspace_lifecycle") {
+        if matches!(
+            fault,
+            "authorization" | "workspace_lifecycle" | "conversation"
+        ) {
             assert_eq!(phases["dispatch"]["result"], "authorization_blocked");
         }
         let after = store.status(100).unwrap();

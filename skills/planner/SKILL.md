@@ -1,7 +1,7 @@
 ---
 name: planner
 description: Use when validating and planning a pip-ok issue.
-version: 0.9.0
+version: 0.10.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -27,8 +27,8 @@ Validate an authorized issue, identify its actual root cause, and produce a vers
 6. Default to `PROCEED` for technically unambiguous, repository-local work. Return to an authoritative human only for a concrete unresolved product/scope decision, cross-repository dependency, or changes involving MLS/CGKA, keys, trust anchors, membership/admin authorization semantics, or push-payload context.
 7. Record technically unambiguous cross-repository prerequisites without editing that repository.
 8. Define scope, non-scope, implementation sequence, regression tests, verification commands, risks, and invariants.
-9. Produce versioned Markdown and JSON plan artifacts, but do not mutate GitHub. The controller publishes a new immutable issue comment for each accepted plan result and never edits an earlier planner comment in place. The exact outcome is a machine-consumed execution disposition: `PROCEED` authorizes ordinary builder dispatch only after controller publication; human-wait outcomes do not. The planned base SHA is an analysis snapshot, not a checkout lock. Every result must include a one-line `authorized_scope` and a `sensitive_scope` array using only the schema categories. `PROCEED` requires no open decisions, dependencies, or sensitive scope. Never use `PROCEED` when the authorized scope includes cryptography, MLS/CGKA, key handling, trust anchors, membership/admin authorization semantics, or push-payload context. Every human-wait outcome must name a concrete open decision. When replanning after `Pip: narrow scope — …`, preserve that scope exactly as `authorized_scope`; never broaden or paraphrase it.
-   Only for a human-wait outcome, tell the authoritative human that approval may be a complete comment containing `approve`, `approved`, `@agent-p1p approve`, or `@agent-p1p approved`; rejection accepts the corresponding `reject`/`rejected` forms. Extra prose is not accepted. Narrowing still requires `Pip: narrow scope — <one-line scope>`.
+9. Produce versioned Markdown and JSON plan artifacts, but do not mutate GitHub. The controller publishes a new immutable issue comment for each accepted plan result and never edits an earlier planner comment in place. The exact outcome is a machine-consumed execution disposition: `PROCEED` authorizes ordinary builder dispatch only after controller publication; human-wait outcomes do not. The planned base SHA is an analysis snapshot, not a checkout lock. Every result must include a one-line `authorized_scope` and a `sensitive_scope` array using only the schema categories. `PROCEED` requires no open decisions, dependencies, or sensitive scope. Never use `PROCEED` when the authorized scope includes cryptography, MLS/CGKA, key handling, trust anchors, membership/admin authorization semantics, or push-payload context. Every human-wait outcome must name a concrete open decision. When replanning with retained `HUMAN_DISCUSSION` evidence, address the human decision and preserve explicit scope constraints; never silently broaden them.
+   For a human-wait outcome, ask the concrete question in plain language. Do not advertise magic approval commands. Natural-language replies are input for reassessment when the conversation lane is enabled, not permission to bypass sensitive-scope gates.
 10. Return the Rust `planner` result contract from `references/worker-result-contracts.md` in the loaded `workflow-contract` skill directory (not the target repository). Use `plan_artifact`; do not emit GitHub comment fields, legacy `case_id`, `schema_version`, `plan_file`, or ISO timestamp fields.
 
 ## Stop outcomes

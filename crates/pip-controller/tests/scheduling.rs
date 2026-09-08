@@ -258,6 +258,21 @@ fn role_evidence_focus_uses_exact_current_records_without_copying_history() {
 }
 
 #[test]
+fn human_feedback_is_included_in_planner_evidence_focus() {
+    let mut ctx = context();
+    ctx.immutable_evidence_bundle["records"]["evidence"] = json!([
+        {"kind":"HUMAN_DISCUSSION","payload_sha256":"human-feedback","payload":{"message":"Keep public API unchanged"}}
+    ]);
+    let planned =
+        schedule_effect("feedback-plan", Effect::DispatchPlanner, &ctx, &policy()).unwrap();
+    assert!(
+        planned[0].worker_body["evidence_focus"]
+            .to_string()
+            .contains("human-feedback")
+    );
+}
+
+#[test]
 fn hermes_storage_is_projection_scoped_and_direct_tasks_are_unchanged() {
     let configured = policy()
         .with_hermes_scratch_root("/var/lib/pip/worktrees/hermes-scratch".into())

@@ -42,7 +42,7 @@ pub fn bootstrap_hermes_runtime_with<R: CommandRunner + Clone>(
     hermes_program: &str,
     runner: R,
 ) -> Result<BootstrapOutcome, RuntimeBootstrapError> {
-    let profiles = policy
+    let mut profiles = policy
         .roles
         .iter()
         .filter(|role| role.is_hermes())
@@ -63,6 +63,23 @@ pub fn bootstrap_hermes_runtime_with<R: CommandRunner + Clone>(
         .collect::<Result<Vec<_>, _>>()?;
     if profiles.is_empty() {
         return Err(RuntimeBootstrapError::InvalidPolicy);
+    }
+    if policy.conversations_enabled {
+        let planner = policy
+            .roles
+            .iter()
+            .find(|role| role.role == pip_contracts::WorkerRole::Planner && role.is_hermes())
+            .ok_or(RuntimeBootstrapError::InvalidPolicy)?;
+        profiles.push(ProfileBootstrapSpec {
+            name: "conversation".into(),
+            provider: planner.provider.clone(),
+            model: planner.model.clone(),
+            reasoning_effort: planner
+                .reasoning_effort
+                .clone()
+                .ok_or(RuntimeBootstrapError::InvalidPolicy)?,
+            skills: vec!["conversation".into(), "workflow-contract".into()],
+        });
     }
     let repository = policy.repository.full_name();
     HermesBootstrap::new(

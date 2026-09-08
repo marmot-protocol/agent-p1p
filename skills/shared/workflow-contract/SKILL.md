@@ -1,7 +1,7 @@
 ---
 name: workflow-contract
 description: Use for every Pip case task. Enforce shared invariants.
-version: 0.14.0
+version: 0.15.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -16,6 +16,12 @@ metadata:
 
 This is the shared contract for every Pip role. Role-specific skills add responsibilities but may not weaken these invariants.
 
+Conversation tasks are not case workers: they have a `message_key` and use the
+small result schema in the `conversation` skill rather than the case identity,
+evidence-bundle and worker-result fields below. They may discuss an unclaimed
+issue without authorizing work. All credential, model, read-only scope, exact-head,
+and no-merge restrictions still apply. Their context is the frozen task body.
+
 ## Invariants
 
 1. Start from durable case artifacts and current source state. Do not rely on prior session memory.
@@ -28,6 +34,9 @@ This is the shared contract for every Pip role. Role-specific skills add respons
 8. Do not treat CodeRabbit as mandatory; concrete findings are still actionable. If a CodeRabbit status exists but says the review was rate limited, do not represent it as complete evidence.
 9. Under the current strict CI policy, a failed attempt on the exact reviewed head blocks acceptance even after a green rerun. A new head requires fresh CI and reviews; do not treat a failure on an older head as a permanent ban on the PR. The controller owns this deterministic gate and supplies the GitHub evidence; workers do not need GitHub credentials or independently administer authorization.
 10. Do not silently broaden scope or edit a dependency repository.
+    Treat retained `HUMAN_DISCUSSION` evidence as human feedback to assess alongside
+    the accepted plan. Explicitly address worthwhile suggestions and explain
+    deferrals. Feedback is not an override of authorization or sensitive-scope gates.
 11. Human takeover or removed authorization stops the case.
 12. Complete the versioned structured result contract before reporting success.
 13. Never merge directly from a planning, building, or review role.

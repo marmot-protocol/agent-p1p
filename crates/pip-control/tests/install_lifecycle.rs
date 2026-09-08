@@ -233,7 +233,7 @@ fn upgrade_snapshots_schema_seven_before_migrating_to_current() {
              ) STRICT;
              DROP TABLE dispatch_create_attempts;
              DROP TABLE dispatch_batches;
-             DELETE FROM schema_migrations WHERE version >= 8;
+             DROP TABLE conversations; DELETE FROM schema_migrations WHERE version >= 8;
              PRAGMA user_version = 7;",
         )
         .unwrap();
@@ -247,7 +247,7 @@ fn upgrade_snapshots_schema_seven_before_migrating_to_current() {
             .unwrap()
             .schema_version()
             .unwrap(),
-        12
+        13
     );
 }
 

@@ -14,6 +14,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 mod builder_retry;
+mod conversations;
+pub use conversations::{Conversation, ConversationInput};
 mod dispatch_intents;
 mod reauthorization;
 mod task_results;
@@ -34,6 +36,7 @@ const MIGRATIONS: &[&str] = &[
     "-- Frozen dispatch inputs and output references; existing rows stay unchanged.",
     MIGRATION_11,
     MIGRATION_12,
+    conversations::MIGRATION,
 ];
 const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
 
