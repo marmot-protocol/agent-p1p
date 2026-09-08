@@ -11,7 +11,7 @@ fn fixture(path: &std::path::Path) -> (Store, TransitionInput) {
                 repository_id: 123,
                 revision,
                 accepted_at: 1,
-                payload: json!({"intake":{"label":"approved","trusted_actor_ids":[100]}}),
+                payload: json!({"revision":revision,"intake":{"label":"approved","trusted_actor_ids":[100]}}),
             })
             .unwrap();
     }
@@ -135,4 +135,34 @@ fn reauthorization_cannot_change_accepted_plan_or_reuse_old_label_evidence() {
             "ABANDONED"
         );
     }
+}
+
+#[test]
+fn historical_policy_lookup_is_exact_and_survives_reauthorization() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("ledger.db");
+    let (mut store, input) = fixture(&path);
+    store.apply_transition(&input, None).unwrap();
+    drop(store);
+    let store = Store::open_read_only(&path).unwrap();
+    for (state_revision, policy_revision) in [(1, 1), (2, 1), (3, 2)] {
+        assert_eq!(
+            store
+                .accepted_policy_at_case_revision(&input.case_key, state_revision)
+                .unwrap(),
+            store.accepted_policy(123, policy_revision).unwrap()
+        );
+    }
+    for revision in [0, 4, 999] {
+        assert!(
+            store
+                .accepted_policy_at_case_revision(&input.case_key, revision)
+                .is_err()
+        );
+    }
+    assert!(
+        store
+            .accepted_policy_at_case_revision("foreign-case", 1)
+            .is_err()
+    );
 }

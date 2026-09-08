@@ -94,6 +94,12 @@ the remaining frozen-job gaps are tracked in implementation status. Keep
 releases needed for rollback or retained assignments. Never reset the ledger,
 delete an attempt, or relabel an issue merely to make an upgrade proceed.
 
+Native result collection resolves each job's accepted policy from its immutable
+case state revision. A later reauthorization may change the case's current
+policy, but must not reinterpret old archived tasks or late completions under
+new models. Missing historical bindings fail closed; collection never revives
+a superseded job.
+
 Schema 12 retains findings per accepted event and reviewer, allowing a stable
 finding ID to recur after remediation (even on the same head). Existing finding
 payloads, digests and head bindings stay unchanged; their new `event_id` is NULL

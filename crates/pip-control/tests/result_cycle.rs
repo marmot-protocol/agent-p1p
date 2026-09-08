@@ -157,6 +157,93 @@ fn paused_native_collection_rejects_a_foreign_result_before_retention() {
 }
 
 #[test]
+fn collection_keeps_each_job_policy_after_case_reauthorization() {
+    for archived in [true, false] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ledger.db");
+        let mut store = Store::open(&path).unwrap();
+        project_planner(&mut store);
+        let mut current = active_policy();
+        current.revision += 1;
+        current.roles[0].model = "replacement-model".into();
+        store
+            .record_policy(&pip_store::PolicyInput {
+                repository_id: current.repository.id,
+                revision: current.revision,
+                accepted_at: 4,
+                payload: serde_json::to_value(&current).unwrap(),
+            })
+            .unwrap();
+        let mut transition = pip_store::TransitionInput {
+            case_key: "repo:984321#1240@1".into(),
+            expected_revision: 1,
+            next_state: "ABANDONED".into(),
+            remediation_round: 0,
+            plan_version: 0,
+            pr_number: None,
+            head_sha: None,
+            observed_at: 5,
+            event: EventInput {
+                event_id: "withdrawn".into(),
+                event_type: "AUTHORIZATION_REMOVED".into(),
+                payload: json!({"blockers":["REQUIRED_LABEL_MISSING"]}),
+            },
+            run: None,
+            evidence: vec![],
+            findings: vec![],
+            effects: vec![],
+        };
+        store.apply_transition(&transition, None).unwrap();
+        transition.expected_revision = 2;
+        transition.next_state = "PLANNING".into();
+        transition.observed_at = 6;
+        transition.event = EventInput {
+            event_id: "reauthorized".into(),
+            event_type: "ISSUE_REAUTHORIZED".into(),
+            payload: json!({"label":current.intake.label,"label_actor_id":current.intake.trusted_actor_ids[0],"label_event_id":30,"removed_label_event_id":20,"policy_revision":current.revision}),
+        };
+        transition.effects = vec![EffectInput {
+            effect_id: "new-planner".into(),
+            effect_type: "DISPATCH_PLANNER".into(),
+            payload: json!({"case_key":transition.case_key,"state_revision":3,"effect":"DISPATCH_PLANNER"}),
+        }];
+        store.apply_transition(&transition, None).unwrap();
+        drop(store);
+        let mut store = Store::open(&path).unwrap();
+        let before = store.status(10).unwrap();
+        let runner = FakeRunner::default();
+        let mut completion = completed_planner("planner", planner_result());
+        if archived {
+            completion["task"]["status"] = json!("archived");
+        }
+        runner.json(completion);
+        let result = pip_control::reconcile_completed_once_with(
+            &mut store, &current, runner, "hermes", 10, false,
+        )
+        .unwrap();
+        assert_eq!(
+            result,
+            if archived {
+                ResultCycle::Idle
+            } else {
+                ResultCycle::Retained {
+                    task_id: "planner-1".into(),
+                }
+            }
+        );
+        assert_eq!(store.status(10).unwrap().cases, before.cases);
+        assert_eq!(store.status(10).unwrap().events, before.events);
+        assert_eq!(store.status(10).unwrap().runs, before.runs);
+        // A retained old completion must never advance the newly authorized job.
+        assert_eq!(
+            ingest_completed_once_with(&mut store, &current, FakeRunner::default(), "hermes", 11)
+                .unwrap(),
+            ResultCycle::Idle
+        );
+    }
+}
+
+#[test]
 fn paused_controller_collects_native_results_without_github_credentials() {
     paused_controller_collects_native(false);
 }
@@ -621,7 +708,7 @@ fn project_native_task(
             event: EventInput {
                 event_id: "event-intake".into(),
                 event_type: "ISSUE_AUTHORIZED".into(),
-                payload: json!({"label":"pip-ok"}),
+                payload: json!({"label":"pip-ok","label_event_id":10}),
             },
             effects: if review {
                 vec![]

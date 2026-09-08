@@ -149,7 +149,10 @@ pub fn reconcile_completed_once_with<'a, R: CommandRunner>(
         // Collection is evidence preservation, not authorization under today's
         // settings. Old completions keep their accepted model/profile policy.
         let saved_policy = if !advance {
-            let value = store.accepted_policy(case.repository_id, case.policy_revision)?;
+            let value = store.accepted_policy_at_case_revision(
+                case_key,
+                number(desired_body, "state_revision")?,
+            )?;
             Some(
                 crate::load_repository_policy(
                     &serde_json::to_vec(&value).map_err(|_| ResultCycleError::InvalidProjection)?,

@@ -74,6 +74,23 @@ pub(crate) fn validate(
 }
 
 impl Store {
+    /// Resolve a frozen job's policy from its immutable case event, not the
+    /// mutable current case projection. Never fall back across generations.
+    pub fn accepted_policy_at_case_revision(
+        &self,
+        case_key: &str,
+        state_revision: u64,
+    ) -> Result<Value> {
+        let (repository_id, policy_revision): (i64, i64) = self.connection.query_row(
+            "SELECT c.repository_id, e.policy_revision FROM events e
+             JOIN cases c ON c.case_key=e.case_key
+             WHERE e.case_key=?1 AND e.state_revision=?2",
+            params![case_key, sql_u64(state_revision)?],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        self.accepted_policy(unsigned(repository_id), unsigned(policy_revision))
+    }
+
     pub fn can_reauthorize(&self, case_key: &str, label_id: u64, removal_id: u64) -> Result<bool> {
         eligible(&self.connection, case_key, label_id, removal_id)
     }
