@@ -167,18 +167,27 @@ impl<R: GitRunner> IsolatedWorkspace<R> {
         // Never force over an independently changed controller-side branch.
         let head = self.git(spec.path(), &["rev-parse", "HEAD"])?;
         let branch_ref = format!("refs/heads/{}", spec.branch());
-        let refspec = format!("{branch_ref}:{branch_ref}");
-        self.git(
+        let retained = self.git(
             spec.repository(),
-            &[
-                "fetch",
-                "--quiet",
-                "--no-tags",
-                "--",
-                spec.path().to_str().ok_or(AllocationError::InvalidSpec)?,
-                &refspec,
-            ],
+            &["for-each-ref", "--format=%(objectname)", &branch_ref],
         )?;
+        // An earlier recovery may still have this branch checked out. Git
+        // rejects even a no-op fetch into it; exact existing retention needs
+        // no update. A differing head still uses the guarded non-force fetch.
+        if retained != head {
+            let refspec = format!("{branch_ref}:{branch_ref}");
+            self.git(
+                spec.repository(),
+                &[
+                    "fetch",
+                    "--quiet",
+                    "--no-tags",
+                    "--",
+                    spec.path().to_str().ok_or(AllocationError::InvalidSpec)?,
+                    &refspec,
+                ],
+            )?;
+        }
         if self.git(spec.repository(), &["rev-parse", "--verify", &branch_ref])? != head {
             return Err(AllocationError::VerificationFailed);
         }

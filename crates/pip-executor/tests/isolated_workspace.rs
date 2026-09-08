@@ -378,6 +378,33 @@ fn cross_uid_git_trust_is_exact_and_replaces_inherited_overrides() {
 }
 
 #[test]
+fn retirement_reuses_an_exact_head_retained_by_a_legacy_recovery_worktree() {
+    let tmp = tempfile::tempdir().unwrap();
+    let spec = fixture(tmp.path());
+    allocator().allocate(&spec, REMOTE).unwrap();
+    let recovery = tmp.path().join("legacy-recovery");
+    git(
+        spec.repository(),
+        &[
+            "worktree",
+            "add",
+            "-b",
+            spec.branch(),
+            recovery.to_str().unwrap(),
+            &spec.base().to_string(),
+        ],
+    );
+    let retained = git(&recovery, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        allocator().retire(&spec.retirement_spec()).unwrap(),
+        RetirementResult::Retired
+    );
+    assert!(!spec.path().exists());
+    assert_eq!(git(&recovery, &["rev-parse", "HEAD"]), retained);
+    assert!(recovery.join("tracked").is_file());
+}
+
+#[test]
 fn retirement_preserves_workspace_when_the_retained_branch_diverged() {
     let tmp = tempfile::tempdir().unwrap();
     let spec = fixture(tmp.path());

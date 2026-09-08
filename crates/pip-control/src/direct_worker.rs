@@ -247,10 +247,10 @@ pub(crate) fn validate_job(
     );
     let round = match task.role {
         WorkerRole::Planner => case.plan_version.saturating_add(1).max(1),
-        WorkerRole::Builder => case.remediation_round.max(1),
-        WorkerRole::ReviewerGeneral | WorkerRole::ReviewerSecperf | WorkerRole::FinalReviewer => {
-            case.remediation_round.saturating_add(1)
-        }
+        WorkerRole::Builder
+        | WorkerRole::ReviewerGeneral
+        | WorkerRole::ReviewerSecperf
+        | WorkerRole::FinalReviewer => case.remediation_round.saturating_add(1),
     };
     let expected_task_id = format!(
         "{}:{worker_id}:round:{round}:revision:{}:worker",

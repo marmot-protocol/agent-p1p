@@ -922,6 +922,62 @@ fn lease_expired_before_execution_is_an_outage_not_a_work_failure() {
 }
 
 #[test]
+fn scheduled_remediation_builders_pass_the_queue_boundary() {
+    use pip_core::{
+        CaseId, Effect, IssueNumber, PlanVersion, PullRequestNumber, RepositoryId, StateRevision,
+        WorkflowVersion,
+    };
+    use std::num::{NonZeroU32, NonZeroU64};
+    for remediation_round in [1, 2, 3] {
+        let directory = tempfile::tempdir().unwrap();
+        let policy = active_policy();
+        let context = pip_controller::DispatchContext {
+            case_id: CaseId::new(
+                RepositoryId::new(NonZeroU64::new(1_055_628_515).unwrap()),
+                IssueNumber::new(NonZeroU64::new(1240).unwrap()),
+                WorkflowVersion::new(NonZeroU32::new(3).unwrap()),
+            ),
+            state_revision: StateRevision::new(NonZeroU64::new(2).unwrap()),
+            plan_version: Some(PlanVersion::new(NonZeroU32::new(1).unwrap())),
+            remediation_round,
+            pr_number: Some(PullRequestNumber::new(NonZeroU64::new(77).unwrap())),
+            head_sha: Some("c".repeat(40).parse().unwrap()),
+            skills_repository_commit: "a".repeat(40).parse().unwrap(),
+            immutable_evidence_bundle: json!({"schema_version": 1, "sha256": "b".repeat(64)}),
+        };
+        let task = pip_controller::schedule_effect(
+            "effect-dispatch-builder",
+            Effect::DispatchBuilder,
+            &context,
+            &policy.workflow_policy().unwrap(),
+        )
+        .unwrap()
+        .remove(0)
+        .direct_task()
+        .unwrap();
+        let expected_id = task.task_id.clone();
+        let mut store = queued_builder_with(directory.path(), |value| {
+            *value = serde_json::to_value(task).unwrap();
+        });
+        let queue = queue(directory.path());
+        assert!(matches!(
+            reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 100, 30, true).unwrap(),
+            DirectQueueCycle::Prepared { task_id, .. } if task_id == expected_id
+        ));
+        let mut result = serde_json::to_value(builder_result()).unwrap();
+        result["task_id"] = json!(expected_id);
+        let runtime = runtime(Ok(serde_json::from_value(result).unwrap()));
+        execute_direct_queue_once(&runtime, &queue, 101).unwrap();
+        assert!(matches!(
+            reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 102, 30, true)
+                .unwrap(),
+            DirectQueueCycle::Ingested { .. }
+        ));
+        assert_eq!(runtime.tasks.borrow().len(), 1);
+    }
+}
+
+#[test]
 fn remediation_builder_can_return_a_new_head_for_an_existing_pull_request() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = queued_builder_with(directory.path(), |task| {
@@ -1157,8 +1213,13 @@ fn queued_builder_with(root: &std::path::Path, mutate: impl FnOnce(&mut Value)) 
             &TransitionInput {
                 case_key: case_key().into(),
                 expected_revision: 1,
-                next_state: "READY_TO_BUILD".into(),
-                remediation_round: 1,
+                next_state: if task["body"]["remediation_round"].as_u64().unwrap() > 0 {
+                    "REMEDIATING"
+                } else {
+                    "READY_TO_BUILD"
+                }
+                .into(),
+                remediation_round: task["body"]["remediation_round"].as_u64().unwrap() as u32,
                 plan_version: 1,
                 pr_number: task["body"]["pr_number"].as_u64(),
                 head_sha: task["body"]["expected_head_sha"]
@@ -1198,7 +1259,7 @@ fn direct_task() -> DirectTaskSpec {
             "workflow_version": 3,
             "state_revision": 2,
             "role": "builder",
-            "remediation_round": 1,
+            "remediation_round": 0,
             "plan_version": 1,
             "assigned_branch": "pip/repo-1055628515/issue-1240/workflow-3",
             "assigned_worktree": "/var/lib/pip/worktrees/mdk/repo-1055628515-issue-1240-workflow-3",
