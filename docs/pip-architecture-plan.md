@@ -174,6 +174,16 @@ identity, exclusions, pause and capacity limits. Label removal and takeover stop
 new work and downstream publication; do not promise instant termination of an
 already executing model. Replayed deliveries do not create duplicate cases.
 
+A fresh trusted label after withdrawal may reauthorize an abandoned pre-PR
+case through the controller poll once old jobs are terminal or removed and no
+direct attempt is running. Append a new planning generation under current policy;
+preserve prior plans, failures, effects and workspace-retirement records. Restart
+only the elapsed-time window, not failure allowances. Capacity and pause rules
+still apply. Completed work, human takeovers, other abandonment decisions and
+cases with a PR require explicit recovery rather than label-driven restart.
+Webhook intake records the delivery but cannot supply the execution-quiescence
+check needed to restart an existing case.
+
 Separate operational switches from immutable accepted work definitions.
 Configuration changes must not require rewriting case history. Use supported
 structured Hermes interfaces where available and narrowly scoped semantic

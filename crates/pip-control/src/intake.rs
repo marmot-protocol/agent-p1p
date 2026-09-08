@@ -98,6 +98,19 @@ pub fn reconcile_intake<S: IntakeSource>(
     observed_at: u64,
     global_paused: bool,
 ) -> Result<ActiveIntakeReport, ActiveIntakeError> {
+    // Webhook/standalone intake has no execution observation. Polling supplies
+    // the Hermes quiescence check before reopening any existing case.
+    reconcile_intake_with_quiescence(source, policy, store, observed_at, global_paused, |_| false)
+}
+
+pub fn reconcile_intake_with_quiescence<S: IntakeSource>(
+    source: &S,
+    policy: &RepositoryPolicy,
+    store: &mut Store,
+    observed_at: u64,
+    global_paused: bool,
+    mut quiescent: impl FnMut(&[String]) -> bool,
+) -> Result<ActiveIntakeReport, ActiveIntakeError> {
     if !policy.intake.enabled || policy.intake.paused || !policy.dispatch_enabled || global_paused {
         return Err(ActiveIntakeError::ActivationDisabled);
     }
@@ -137,6 +150,7 @@ pub fn reconcile_intake<S: IntakeSource>(
         observed_at,
         global_paused,
         validated_evidence,
+        &mut quiescent,
     )
 }
 
@@ -238,8 +252,14 @@ pub fn ingest_webhook<S: IntakeSource>(
     {
         return Err(ActiveIntakeError::Evidence(ShadowError::DiscoveryDrift));
     }
-    let report =
-        reconcile_validated_evidence(policy, store, observed_at, global_paused, vec![evidence])?;
+    let report = reconcile_validated_evidence(
+        policy,
+        store,
+        observed_at,
+        global_paused,
+        vec![evidence],
+        &mut |_| false,
+    )?;
     Ok(WebhookIntakeReport {
         report_format: 1,
         observed_at,
@@ -293,6 +313,7 @@ fn reconcile_validated_evidence(
     observed_at: u64,
     global_paused: bool,
     validated_evidence: Vec<pip_github::IntakeSnapshot>,
+    quiescent: &mut impl FnMut(&[String]) -> bool,
 ) -> Result<ActiveIntakeReport, ActiveIntakeError> {
     let policy_value = serde_json::to_value(policy)
         .map_err(|error| ActiveIntakeError::Serialization(error.to_string()))?;
@@ -316,6 +337,27 @@ fn reconcile_validated_evidence(
             .map(|event| event.actor_id);
         let case_id = case_id(policy, issue.number)?;
         let case_key = case_id.to_string();
+        let existing = store.case(&case_key)?;
+        let removed_label_id = evidence
+            .label_events
+            .iter()
+            .filter(|event| {
+                event.label == policy.intake.label
+                    && !event.labeled
+                    && latest_event.is_some_and(|latest| event.id < latest.id)
+            })
+            .map(|event| event.id)
+            .max()
+            .unwrap_or(0);
+        let reauthorize = if existing.is_some() {
+            store.can_reauthorize(
+                &case_key,
+                latest_event.map_or(0, |event| event.id),
+                removed_label_id,
+            )?
+        } else {
+            false
+        };
         let status = store.status(observed_at)?;
         let repository_active_cases = status
             .cases
@@ -336,7 +378,7 @@ fn reconcile_validated_evidence(
                 .map(ActorId::new),
             excluded: policy.intake.excluded_issue_numbers.contains(&issue.number),
             held: policy.intake.held_issue_numbers.contains(&issue.number),
-            already_owned: store.case(&case_key)?.is_some(),
+            already_owned: existing.is_some() && !reauthorize,
             repository_active_cases: u32::try_from(repository_active_cases).unwrap_or(u32::MAX),
             global_active_cases: u32::try_from(global_active_cases).unwrap_or(u32::MAX),
         };
@@ -352,6 +394,16 @@ fn reconcile_validated_evidence(
                 case_key: None,
             }),
             IntakeDecision::Eligible => {
+                if reauthorize && !quiescent(&store.case_task_ids(&case_key)?) {
+                    candidates.push(IntakeCandidateResult {
+                        issue_number: issue.number,
+                        issue_id: issue.id,
+                        decision: "INELIGIBLE".into(),
+                        blockers: vec!["PREVIOUS_WORK_NOT_QUIESCENT".into()],
+                        case_key: None,
+                    });
+                    continue;
+                }
                 // Freeze the controller's authenticated read with the authorization
                 // event. Workers receive this through the digest-bound history bundle,
                 // without GitHub credentials or a second live-read implementation.
@@ -377,7 +429,8 @@ fn reconcile_validated_evidence(
                     "repo{}-issue{}-workflow{}-label{}",
                     policy.repository.id, issue.number, policy.workflow_version, label_event.id
                 );
-                let result = store.create_case(&NewCase {
+                let next_revision = existing.as_ref().map_or(1, |case| case.state_revision + 1);
+                let mut input = NewCase {
                     case_key: case_key.clone(),
                     repository_id: policy.repository.id,
                     issue_number: issue.number,
@@ -403,11 +456,36 @@ fn reconcile_validated_evidence(
                         effect_type: "DISPATCH_PLANNER".into(),
                         payload: json!({
                             "case_key": case_key,
-                            "state_revision": 1,
+                            "state_revision": next_revision,
                             "effect": "DISPATCH_PLANNER",
                         }),
                     }],
-                })?;
+                };
+                let result = if let Some(case) = existing {
+                    input.event.event_type = "ISSUE_REAUTHORIZED".into();
+                    input.event.payload["removed_label_event_id"] = json!(removed_label_id);
+                    input.event.payload["policy_revision"] = json!(policy.revision);
+                    store.apply_transition(
+                        &pip_store::TransitionInput {
+                            case_key: case_key.clone(),
+                            expected_revision: case.state_revision,
+                            next_state: "PLANNING".into(),
+                            remediation_round: case.remediation_round,
+                            plan_version: case.plan_version,
+                            pr_number: None,
+                            head_sha: None,
+                            observed_at,
+                            event: input.event,
+                            run: None,
+                            evidence: vec![],
+                            findings: vec![],
+                            effects: input.effects,
+                        },
+                        None,
+                    )?
+                } else {
+                    store.create_case(&input)?
+                };
                 mutation_count += u64::from(result == ApplyResult::Applied);
                 candidates.push(IntakeCandidateResult {
                     issue_number: issue.number,

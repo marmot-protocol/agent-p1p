@@ -44,6 +44,212 @@ impl IntakeSource for FixtureSource {
 }
 
 #[test]
+fn fresh_reauthorization_preserves_history_and_restarts_once_under_current_policy() {
+    let directory = tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("cases.db")).unwrap();
+    let mut policy = active_policy(1, 1);
+    policy.max_case_elapsed_seconds = 60;
+    let source = source(&[42]);
+    reconcile_intake(&source, &policy, &mut store, 100, false).unwrap();
+    abandon(&mut store, "AUTHORIZATION_REMOVED", "ABANDONED");
+    let previous = store
+        .immutable_history_for_case("repo:1055628515#42@3")
+        .unwrap();
+    relabel(&source);
+    policy.revision += 1;
+    let report = pip_control::reconcile_intake_with_quiescence(
+        &source,
+        &policy,
+        &mut store,
+        200,
+        false,
+        |_| true,
+    )
+    .unwrap();
+    assert_eq!(report.candidates[0].decision, "ELIGIBLE");
+    let case = store.case("repo:1055628515#42@3").unwrap().unwrap();
+    assert_eq!(
+        (
+            case.state.as_str(),
+            case.state_revision,
+            case.policy_revision
+        ),
+        ("PLANNING", 3, policy.revision)
+    );
+    assert_eq!(
+        store.reconstruct_case(&case.case_key).unwrap().unwrap(),
+        case
+    );
+    let history = store.immutable_history_for_case(&case.case_key).unwrap();
+    assert_eq!(store.case_created_at(&case.case_key).unwrap(), Some(100));
+    assert_eq!(store.case_authorized_at(&case.case_key).unwrap(), Some(200));
+    assert_eq!(&history.events[..2], previous.events.as_slice());
+    assert_eq!(history.events[2].event_type, "ISSUE_REAUTHORIZED");
+    assert_eq!(store.status(200).unwrap().outbox_pending, 1);
+    let report = pip_control::reconcile_intake_with_quiescence(
+        &source,
+        &policy,
+        &mut store,
+        201,
+        false,
+        |_| true,
+    )
+    .unwrap();
+    assert_eq!(report.mutation_count, 0);
+    assert_eq!(
+        store.immutable_history_for_case(&case.case_key).unwrap(),
+        history
+    );
+    assert_eq!(
+        pip_control::enforce_operational_bounds(&mut store, &policy, 259).unwrap(),
+        pip_control::OperationalBoundsCycle::Idle
+    );
+    assert!(matches!(
+        pip_control::enforce_operational_bounds(&mut store, &policy, 260).unwrap(),
+        pip_control::OperationalBoundsCycle::Escalated {
+            bound: pip_control::OperationalBound::ElapsedTime,
+            observed: 60,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn reauthorization_does_not_bypass_terminal_decisions_freshness_or_execution_guards() {
+    for scenario in [
+        "same-label",
+        "no-removal",
+        "untrusted",
+        "runnable-task",
+        "running-direct",
+        "no-execution-observation",
+        "existing-pr",
+        "completed",
+        "takeover",
+        "explicit-abandon",
+        "capacity",
+        "paused",
+    ] {
+        let directory = tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("cases.db")).unwrap();
+        let mut policy = active_policy(1, 1);
+        let source = source(&[42]);
+        reconcile_intake(&source, &policy, &mut store, 100, false).unwrap();
+        if scenario == "running-direct" {
+            let claim = store.claim_effect("old-worker", 101, 200).unwrap().unwrap();
+            store.begin_direct_attempt(&claim, "old-task", 102).unwrap();
+        }
+        let (event, state) = match scenario {
+            "completed" => ("HUMAN_MERGED", "COMPLETED"),
+            "takeover" => ("HUMAN_TOOK_OVER", "TAKEN_OVER"),
+            "explicit-abandon" => ("ABANDON", "ABANDONED"),
+            _ => ("AUTHORIZATION_REMOVED", "ABANDONED"),
+        };
+        abandon(&mut store, event, state);
+        if scenario == "existing-pr" {
+            // A withdrawal after publication must never start an unrelated PR.
+            let connection = rusqlite::Connection::open(directory.path().join("cases.db")).unwrap();
+            connection
+                .execute("UPDATE cases SET pr_number=123 WHERE issue_number=42", [])
+                .unwrap();
+        }
+        if scenario != "same-label" {
+            relabel(&source);
+        }
+        if scenario == "no-removal" {
+            source
+                .snapshots
+                .borrow_mut()
+                .get_mut(&42)
+                .unwrap()
+                .label_events
+                .retain(|event| event.labeled);
+        }
+        if scenario == "untrusted" {
+            source
+                .snapshots
+                .borrow_mut()
+                .get_mut(&42)
+                .unwrap()
+                .label_events
+                .last_mut()
+                .unwrap()
+                .actor_id = 999;
+        }
+        if scenario == "capacity" {
+            let peer = self::source(&[99]);
+            reconcile_intake(&peer, &policy, &mut store, 120, false).unwrap();
+        }
+        let before = store
+            .immutable_history_for_case("repo:1055628515#42@3")
+            .unwrap();
+        if scenario == "paused" {
+            policy.intake.paused = true;
+        }
+        let report = if scenario == "no-execution-observation" {
+            reconcile_intake(&source, &policy, &mut store, 200, false)
+        } else {
+            pip_control::reconcile_intake_with_quiescence(
+                &source,
+                &policy,
+                &mut store,
+                200,
+                false,
+                |_| scenario != "runnable-task",
+            )
+        };
+        if scenario == "paused" {
+            assert!(report.is_err());
+        } else {
+            assert_eq!(
+                report.unwrap().candidates[0].decision,
+                "INELIGIBLE",
+                "{scenario}"
+            );
+        }
+        assert_eq!(
+            store
+                .immutable_history_for_case("repo:1055628515#42@3")
+                .unwrap(),
+            before,
+            "{scenario}"
+        );
+    }
+}
+
+fn abandon(store: &mut Store, event_type: &str, state: &str) {
+    store.apply_transition(&pip_store::TransitionInput {
+        case_key: "repo:1055628515#42@3".into(), expected_revision: 1,
+        next_state: state.into(), remediation_round: 0, plan_version: 0,
+        pr_number: None, head_sha: None, observed_at: 110,
+        event: pip_store::EventInput { event_id: "withdrawal".into(), event_type: event_type.into(),
+            payload: serde_json::json!({"blockers":["REQUIRED_LABEL_MISSING","LATEST_AUTHORIZATION_REMOVED"]}) },
+        run: None, evidence: vec![], findings: vec![], effects: vec![],
+    }, None).unwrap();
+}
+
+fn relabel(source: &FixtureSource) {
+    let mut snapshots = source.snapshots.borrow_mut();
+    let snapshot = snapshots.get_mut(&42).unwrap();
+    snapshot.label_events.extend([
+        LabelEvent {
+            id: 20_042,
+            labeled: false,
+            actor_id: 202880,
+            label: "pip-ok".into(),
+            created_at: "2026-08-21T12:00:00Z".into(),
+        },
+        LabelEvent {
+            id: 30_042,
+            labeled: true,
+            actor_id: 202880,
+            label: "pip-ok".into(),
+            created_at: "2026-08-22T12:00:00Z".into(),
+        },
+    ]);
+}
+
+#[test]
 fn intake_freezes_bounded_issue_context_for_credential_free_workers() {
     let directory = tempdir().unwrap();
     let mut store = Store::open(directory.path().join("cases.db")).unwrap();

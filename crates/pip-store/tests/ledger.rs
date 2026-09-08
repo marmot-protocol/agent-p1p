@@ -39,6 +39,95 @@ fn new_case() -> NewCase {
 }
 
 #[test]
+fn repeated_workspace_retirement_preserves_each_terminal_generation() {
+    let (directory, mut store) = open();
+    let mut case = new_case();
+    case.initial_state = "ABANDONED".into();
+    case.effects.clear();
+    store.create_case(&case).unwrap();
+    let retirement = WorkspaceRetirementInput {
+        case_key: case.case_key.clone(),
+        state_revision: 1,
+        worktree_path: "/managed/case-workspace".into(),
+        outcome: WorkspaceRetirementOutcome::Retired,
+        retired_at: case.observed_at + 1,
+    };
+    store.record_workspace_retirement(&retirement).unwrap();
+    // Recreate the actual schema-10 key with a populated historical record.
+    drop(store);
+    let connection = Connection::open(directory.path().join("ledger.db")).unwrap();
+    connection.execute_batch("CREATE TABLE old_retirements (
+        case_key TEXT PRIMARY KEY REFERENCES cases(case_key),
+        state_revision INTEGER NOT NULL CHECK(state_revision>0), worktree_path TEXT NOT NULL,
+        outcome TEXT NOT NULL CHECK(outcome IN ('RETIRED','ABSENT')), retired_at INTEGER NOT NULL) STRICT;
+        INSERT INTO old_retirements SELECT * FROM workspace_retirements;
+        DROP TABLE workspace_retirements;
+        ALTER TABLE old_retirements RENAME TO workspace_retirements;
+        DELETE FROM schema_migrations WHERE version>10; PRAGMA user_version=10;").unwrap();
+    drop(connection);
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    assert_eq!(store.schema_version().unwrap(), 11);
+    assert_eq!(
+        store.record_workspace_retirement(&retirement).unwrap(),
+        ApplyResult::Replayed
+    );
+    for (revision, state) in [(1, "PLANNING"), (2, "ABANDONED")] {
+        store
+            .apply_transition(
+                &TransitionInput {
+                    case_key: case.case_key.clone(),
+                    expected_revision: revision,
+                    next_state: state.into(),
+                    remediation_round: 0,
+                    plan_version: 0,
+                    pr_number: None,
+                    head_sha: None,
+                    observed_at: case.observed_at + revision + 1,
+                    event: EventInput {
+                        event_id: format!("generation-{revision}"),
+                        event_type: "FIXTURE".into(),
+                        payload: json!({}),
+                    },
+                    run: None,
+                    evidence: vec![],
+                    findings: vec![],
+                    effects: vec![],
+                },
+                None,
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        store
+            .terminal_workspace_candidates(case.repository_id, case.observed_at + 10, 1)
+            .unwrap()
+            .len(),
+        1
+    );
+    let second = WorkspaceRetirementInput {
+        state_revision: 3,
+        retired_at: case.observed_at + 10,
+        ..retirement.clone()
+    };
+    store.record_workspace_retirement(&second).unwrap();
+    assert_eq!(
+        store.record_workspace_retirement(&retirement).unwrap(),
+        ApplyResult::Replayed
+    );
+    assert_eq!(
+        store.record_workspace_retirement(&second).unwrap(),
+        ApplyResult::Replayed
+    );
+    assert_eq!(
+        store
+            .status(case.observed_at + 11)
+            .unwrap()
+            .workspace_retirements,
+        2
+    );
+}
+
+#[test]
 fn case_scoped_claim_skips_other_pending_work_before_leasing() {
     let (dir, mut store) = open();
     let first = new_case();
@@ -316,7 +405,7 @@ fn schema_eight_findings_upgrade_preserves_payloads_digests_and_immutability() {
         .unwrap();
     drop(connection);
     let upgraded = Store::open(&path).unwrap();
-    assert_eq!(upgraded.schema_version().unwrap(), 10);
+    assert_eq!(upgraded.schema_version().unwrap(), 11);
     assert_eq!(
         upgraded
             .immutable_history_for_case(&new_case().case_key)
@@ -339,13 +428,13 @@ fn schema_eight_findings_upgrade_preserves_payloads_digests_and_immutability() {
             .is_none()
     );
     drop(connection);
-    assert_eq!(Store::open(&path).unwrap().schema_version().unwrap(), 10);
+    assert_eq!(Store::open(&path).unwrap().schema_version().unwrap(), 11);
 }
 
 #[test]
 fn migration_creates_hardened_authoritative_schema() {
     let (_directory, store) = open();
-    assert_eq!(store.schema_version().unwrap(), 10);
+    assert_eq!(store.schema_version().unwrap(), 11);
     assert!(store.foreign_keys_enabled().unwrap());
     assert_eq!(store.journal_mode().unwrap(), "wal");
 }
@@ -959,7 +1048,7 @@ fn operator_status_separates_pending_leased_and_delivered_work() {
         .unwrap();
 
     let status = store.status(110).unwrap();
-    assert_eq!(status.schema_version, 10);
+    assert_eq!(status.schema_version, 11);
     assert_eq!(status.cases.len(), 1);
     assert_eq!(status.cases[0].case_key, "repo:984321#1240@1");
     assert_eq!(status.events, 1);
@@ -1494,7 +1583,7 @@ fn schema_one_upgrades_forward_without_losing_existing_projections() {
     drop(connection);
 
     let upgraded = Store::open(&path).unwrap();
-    assert_eq!(upgraded.schema_version().unwrap(), 10);
+    assert_eq!(upgraded.schema_version().unwrap(), 11);
     assert_eq!(
         upgraded
             .task_projection("legacy-projection")

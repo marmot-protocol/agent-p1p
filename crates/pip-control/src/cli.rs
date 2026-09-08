@@ -643,8 +643,32 @@ where
     let workspace_ready = workspace_lifecycle.as_ref().is_ok_and(|state| state.ready);
     let workspace_lifecycle = cycle_observation(workspace_lifecycle);
     let intake = if policy.intake.enabled && workspace_ready {
-        cycle_observation(crate::reconcile_intake(
-            &reader, &policy, &mut store, now, false,
+        cycle_observation(crate::reconcile_intake_with_quiescence(
+            &reader,
+            &policy,
+            &mut store,
+            now,
+            false,
+            |task_ids| {
+                // Old ready/running/blocked jobs can still execute. Only terminal
+                // or removed jobs permit a distinct, freshly authorized generation.
+                pip_hermes::HermesReader::new(
+                    pip_hermes::ProcessRunner::default(),
+                    options
+                        .get("--hermes")
+                        .map(String::as_str)
+                        .unwrap_or("hermes"),
+                    std::time::Duration::from_secs(30),
+                    4 * 1024 * 1024,
+                )
+                .and_then(|reader| reader.list_tasks(&policy.board))
+                .is_ok_and(|tasks| {
+                    tasks
+                        .iter()
+                        .filter(|task| task_ids.contains(&task.id))
+                        .all(|task| matches!(task.status.as_str(), "done" | "cancelled"))
+                })
+            },
         ))
     } else {
         json!({"result": "disabled"})

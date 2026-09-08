@@ -452,7 +452,12 @@ fn evidence_focus(context: &DispatchContext, binding: &RolePolicy) -> Value {
             selected.insert((kind, index));
         }
     };
-    latest("events", &|row| row["event_type"] == "ISSUE_AUTHORIZED");
+    latest("events", &|row| {
+        matches!(
+            row["event_type"].as_str(),
+            Some("ISSUE_AUTHORIZED" | "ISSUE_REAUTHORIZED")
+        )
+    });
     latest("runs", &|row| {
         row["role"] == "planner"
             && row["payload"]["plan_version"].as_u64()

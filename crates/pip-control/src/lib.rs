@@ -78,7 +78,7 @@ pub use install::{
 };
 pub use intake::{
     ActiveIntakeError, ActiveIntakeReport, IntakeCandidateResult, WebhookEnvelope,
-    WebhookIntakeReport, ingest_webhook, reconcile_intake,
+    WebhookIntakeReport, ingest_webhook, reconcile_intake, reconcile_intake_with_quiescence,
 };
 pub use plans::{PlanPublicationCycle, PlanPublicationError, PlanWriter, publish_plan_once};
 pub use policy::{

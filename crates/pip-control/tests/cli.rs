@@ -73,7 +73,7 @@ fn status_reads_an_existing_ledger_without_mutating_it() {
     );
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["ok"], true);
-    assert_eq!(value["ledger"]["schema_version"], 10);
+    assert_eq!(value["ledger"]["schema_version"], 11);
     assert_eq!(value["ledger"]["cases"], serde_json::json!([]));
 
     let missing = directory.path().join("missing.db");

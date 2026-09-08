@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 
 mod builder_retry;
 mod dispatch_intents;
+mod reauthorization;
 mod task_results;
 pub use builder_retry::BuilderRetryAuthorization;
 pub use dispatch_intents::{CreateReservation, DispatchIntent, DispatchTransport};
@@ -31,8 +32,30 @@ const MIGRATIONS: &[&str] = &[
     MIGRATION_9,
     // Format boundary: older binaries must not execute compact dispatch records.
     "-- Frozen dispatch inputs and output references; existing rows stay unchanged.",
+    MIGRATION_11,
 ];
 const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
+
+const MIGRATION_11: &str = r#"
+CREATE TABLE workspace_retirements_generations (
+    case_key TEXT NOT NULL REFERENCES cases(case_key),
+    state_revision INTEGER NOT NULL CHECK (state_revision > 0),
+    worktree_path TEXT NOT NULL,
+    outcome TEXT NOT NULL CHECK (outcome IN ('RETIRED', 'ABSENT')),
+    retired_at INTEGER NOT NULL,
+    PRIMARY KEY (case_key, state_revision)
+) STRICT;
+INSERT INTO workspace_retirements_generations SELECT * FROM workspace_retirements;
+DROP TABLE workspace_retirements;
+ALTER TABLE workspace_retirements_generations RENAME TO workspace_retirements;
+CREATE INDEX workspace_retirements_time ON workspace_retirements(retired_at, case_key);
+CREATE TRIGGER workspace_retirements_no_update BEFORE UPDATE ON workspace_retirements BEGIN
+    SELECT RAISE(ABORT, 'workspace retirements are immutable');
+END;
+CREATE TRIGGER workspace_retirements_no_delete BEFORE DELETE ON workspace_retirements BEGIN
+    SELECT RAISE(ABORT, 'workspace retirements are immutable');
+END;
+"#;
 
 // Findings are named by reviewers within a case, not across all repositories.
 // Preserve historical identities, exact-head bindings and bytes during rekeying.
@@ -908,7 +931,7 @@ impl Store {
                AND c.state IN ('COMPLETED', 'ABANDONED', 'TAKEN_OVER')
                AND c.updated_at <= ?2
                AND NOT EXISTS (
-                   SELECT 1 FROM workspace_retirements w WHERE w.case_key = c.case_key
+                   SELECT 1 FROM workspace_retirements w WHERE w.case_key = c.case_key AND w.state_revision = c.state_revision
                )
                AND NOT EXISTS (
                    SELECT 1 FROM direct_attempts d
@@ -959,8 +982,8 @@ impl Store {
             .connection
             .query_row(
                 "SELECT state_revision, worktree_path, outcome, retired_at
-                 FROM workspace_retirements WHERE case_key = ?1",
-                [&input.case_key],
+                 FROM workspace_retirements WHERE case_key = ?1 AND state_revision = ?2",
+                params![input.case_key, sql_u64(input.state_revision)?],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()?;
@@ -1153,6 +1176,11 @@ impl Store {
             ) {
                 builder_retry::validate_retry(&transaction, &current, input)?;
             }
+            let policy_revision = if input.event.event_type == "ISSUE_REAUTHORIZED" {
+                reauthorization::validate(&transaction, &current, input)?
+            } else {
+                current.policy_revision
+            };
             insert_event(
                 &transaction,
                 EventRecord {
@@ -1163,7 +1191,7 @@ impl Store {
                     command_hash: &command_hash,
                     previous_state: Some(&current.state),
                     next_state: &input.next_state,
-                    policy_revision: current.policy_revision,
+                    policy_revision,
                     remediation_round: input.remediation_round,
                     plan_version: input.plan_version,
                     pr_number: input.pr_number,
@@ -1195,7 +1223,7 @@ impl Store {
             )?;
             inject(fault, FaultPoint::AfterEvidence)?;
             let updated = transaction.execute(
-                "UPDATE cases SET state = ?1, state_revision = ?2, remediation_round = ?3, plan_version = ?4, pr_number = ?5, head_sha = ?6, updated_at = ?7
+                "UPDATE cases SET state = ?1, state_revision = ?2, remediation_round = ?3, plan_version = ?4, pr_number = ?5, head_sha = ?6, updated_at = ?7, policy_revision = ?10
                  WHERE case_key = ?8 AND state_revision = ?9",
                 params![
                     input.next_state,
@@ -1207,6 +1235,7 @@ impl Store {
                     sql_u64(input.observed_at)?,
                     input.case_key,
                     sql_u64(input.expected_revision)?,
+                    sql_u64(policy_revision)?,
                 ],
             )?;
             if updated != 1 {

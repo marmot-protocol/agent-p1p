@@ -90,7 +90,7 @@ pub fn enforce_operational_bounds<'a>(
             continue;
         }
         let created_at = store
-            .case_created_at(&case.case_key)?
+            .case_authorized_at(&case.case_key)?
             .ok_or(OperationalBoundsError::InvalidCase)?;
         let elapsed = now.saturating_sub(created_at);
         let elapsed_limit = policy.max_case_elapsed_seconds;

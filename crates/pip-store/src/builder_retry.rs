@@ -73,7 +73,7 @@ pub(crate) fn validate_retry(
         .as_u64()
         .ok_or_else(invalid)?;
     let (created, updated): (i64, i64) = transaction.query_row(
-        "SELECT created_at, updated_at FROM cases WHERE case_key=?1",
+        "SELECT COALESCE((SELECT MAX(observed_at) FROM events WHERE case_key=?1 AND event_type='ISSUE_REAUTHORIZED'),created_at), updated_at FROM cases WHERE case_key=?1",
         [&current.case_key],
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;

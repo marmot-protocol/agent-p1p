@@ -124,6 +124,19 @@ fn policy() -> WorkflowPolicy {
 }
 
 #[test]
+fn reauthorized_jobs_focus_the_new_issue_context() {
+    let mut ctx = context();
+    ctx.immutable_evidence_bundle["records"] = json!({"events":[
+        {"event_type":"ISSUE_AUTHORIZED","payload_sha256":"old-context"},
+        {"event_type":"ISSUE_REAUTHORIZED","payload_sha256":"fresh-context"}
+    ]});
+    let jobs = schedule_effect("reauth", Effect::DispatchPlanner, &ctx, &policy()).unwrap();
+    let focus = &jobs[0].worker_body["evidence_focus"]["records"];
+    assert_eq!(focus[0]["payload_sha256"], "fresh-context");
+    assert_eq!(focus.as_array().unwrap().len(), 1);
+}
+
+#[test]
 fn builders_receive_an_explicit_one_based_build_round() {
     for remediation in 0..3 {
         let mut ctx = context();
