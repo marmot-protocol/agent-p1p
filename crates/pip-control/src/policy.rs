@@ -112,6 +112,7 @@ impl RoleConfiguration {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RepositoryPolicy {
+    /// Operational inbox switch, excluded only from the immutable case-policy snapshot.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub conversations_enabled: bool,
     pub policy_format: u32,

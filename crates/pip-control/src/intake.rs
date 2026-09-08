@@ -319,7 +319,13 @@ fn reconcile_validated_evidence(
     validated_evidence: Vec<pip_github::IntakeSnapshot>,
     quiescent: &mut impl FnMut(&[String]) -> bool,
 ) -> Result<ActiveIntakeReport, ActiveIntakeError> {
-    let policy_value = serde_json::to_value(policy)
+    // Conversation intake is an operational switch, not part of accepted case
+    // authority. Keep all workflow/actor/model fields immutable while allowing
+    // this separate inbox to be enabled without rebinding an active case.
+    // Its absent representation also preserves pre-conversation policy hashes.
+    let mut case_policy = policy.clone();
+    case_policy.conversations_enabled = false;
+    let policy_value = serde_json::to_value(&case_policy)
         .map_err(|error| ActiveIntakeError::Serialization(error.to_string()))?;
     let policy_result = store.record_policy(&PolicyInput {
         repository_id: policy.repository.id,

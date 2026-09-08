@@ -44,6 +44,60 @@ impl IntakeSource for FixtureSource {
 }
 
 #[test]
+fn conversation_toggle_preserves_accepted_policy_and_active_work() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("cases.db");
+    let mut store = Store::open(&path).unwrap();
+    let mut policy = active_policy(1, 1);
+    let source = source(&[42]);
+    reconcile_intake(&source, &policy, &mut store, 100, false).unwrap();
+    let case_key = "repo:1055628515#42@3";
+    let before = store.immutable_history_for_case(case_key).unwrap();
+    let accepted_policy = || {
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT payload_json, payload_sha256, accepted_at FROM policies",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .unwrap()
+    };
+    let snapshot = accepted_policy();
+    for enabled in [true, false, true] {
+        policy.conversations_enabled = enabled;
+        assert_eq!(
+            reconcile_intake(&source, &policy, &mut store, 101, false)
+                .unwrap()
+                .mutation_count,
+            0
+        );
+        assert_eq!(accepted_policy(), snapshot);
+        assert_eq!(store.immutable_history_for_case(case_key).unwrap(), before);
+        assert!(
+            pip_control::verify_active_authorization(&source, &policy, &store)
+                .unwrap()
+                .is_authorized()
+        );
+    }
+    // The operational exception must not weaken immutable authorization/model policy.
+    policy.intake.trusted_actor_ids.push(999);
+    assert!(matches!(
+        reconcile_intake(&source, &policy, &mut store, 102, false),
+        Err(ActiveIntakeError::Store(
+            pip_store::StoreError::IdempotencyConflict { .. }
+        ))
+    ));
+    assert_eq!(accepted_policy(), snapshot);
+}
+
+#[test]
 fn fresh_reauthorization_preserves_history_and_restarts_once_under_current_policy() {
     let directory = tempdir().unwrap();
     let mut store = Store::open(directory.path().join("cases.db")).unwrap();

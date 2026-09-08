@@ -68,9 +68,13 @@ Hermes execution boundary.
    `pull_request_review`, and `pull_request_review_comment` in the
    [GitHub webhook reference](https://docs.github.com/en/webhooks/webhook-events-and-payloads).
    No new reviewer App or account is needed.
-3. Enable `conversations_enabled` through the normal policy revision procedure
-   and run `bootstrap-runtime` to create the conversation profile. Do not change
-   an accepted policy revision in place or silently rebind an active case.
+3. With native jobs drained, set `conversations_enabled: true` and run
+   `bootstrap-runtime` to create the conversation profile before resuming.
+   This one operational switch is excluded from immutable case-policy snapshots:
+   do not bump the policy revision just to enable it. Retain a copy of the prior
+   file for rollback. All actor, model and workflow settings remain immutable;
+   changing those still requires a separate policy transition. Never rebind an
+   active case or rewrite its accepted policy/history to enable conversations.
 4. Test one trusted mention on an unlabelled issue: exactly one readable reply,
    no new case, no builder. Redelivery must not create a second task/reply.
 5. Test a substantive reply to a waiting Pip question, then in-scope PR feedback:
