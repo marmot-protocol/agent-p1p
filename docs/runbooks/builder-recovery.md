@@ -96,7 +96,7 @@ a pre-retry release; retain a compatible release for rollback, or remain paused
 and explicitly assess recovery. A schema-version match alone is not proof of
 behavioral compatibility.
 
-## Replace an unsigned publication
+## Repair a legacy publication
 
 `authorize-publication-retry` is a separate, publication-only recovery for an
 already accepted build. Use it after installing controller signing support and
@@ -107,7 +107,8 @@ The same root, inert policy, stopped execution and drained queue requirements
 above apply; this command does not stop a worker for you.
 
 The case must be `WAITING_CI`, `REVIEWING` or `FINAL_REVIEW`, with an unsigned
-publication joined to its accepted builder result and plan. Obtain the current
+publication or an old signed publication without an `integrated_base` binding,
+joined to its accepted builder result and plan. Obtain the current
 revision/head from the ledger and compare the head with GitHub. Then run:
 
 ```sh
@@ -117,7 +118,7 @@ sudo /opt/pip/current/bin/pip-control authorize-publication-retry \
   --direct-queue /var/lib/pip/direct-queue \
   --case 'VERIFIED_CASE_KEY' \
   --expected-revision VERIFIED_STATE_REVISION \
-  --expected-head VERIFIED_UNSIGNED_PR_HEAD \
+  --expected-head VERIFIED_CURRENT_PR_HEAD \
   --request-id 'operator-sign-publication-UNIQUE_ID' \
   --reason 'Publish the accepted build with the registered controller signing identity'
 ```
@@ -130,7 +131,13 @@ does not add another effect. Changed arguments under that ID are rejected.
 
 Resume separately. The controller signs the exact accepted tree on the original
 planned base, replacing the unsigned range rather than retaining unsigned
-ancestors. It retains the source commit and publishes under an exact-old-head
+ancestors. It also preserves integrated target-branch ancestry as a second parent
+when necessary. The target is resolved through the policy-bound remote; a worker's
+local `origin/*` ref is not authority. For an ancestry repair, verify that the
+retained source contains the intended master integration and that the old local
+publication has exactly the accepted source tree. No checkout reset is needed.
+Already target-aware signed publications cannot use this legacy repair again.
+It retains the source commit and publishes under an exact-old-head
 lease. If GitHub has moved, inspect the conflict; do not force through it.
 The new head returns to CI and independent reviews; earlier head-bound approvals
 do not count. Final review and human merge remain required. Keep a compatible

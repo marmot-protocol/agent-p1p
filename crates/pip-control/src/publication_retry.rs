@@ -1,4 +1,4 @@
-//! Offline authorization to replace an unsigned publication of accepted work.
+//! Offline authorization to repair a legacy publication of accepted work.
 use crate::{
     RepositoryPolicy,
     builder_retry::{recovery_command, recovery_context},
@@ -65,7 +65,7 @@ pub fn authorize_publication_retry(
     if store.status(now).map_err(error)?.direct_attempts_running != 0 {
         return Err("publication retry requires stopped direct attempts".into());
     }
-    let (_, build_event_id) = publication_source(&history, &case, false).map_err(error)?;
+    let (_, build_event_id) = recoverable_source(&history, &case)?;
     let authorization = Authorization {
         schema_version: 1,
         operator_uid,
@@ -115,12 +115,32 @@ pub(crate) fn authorized_build(
     {
         return Err("invalid publication recovery binding".into());
     }
-    let (build, event_id) = publication_source(history, case, false).map_err(error)?;
+    let (build, event_id) = recoverable_source(history, case)?;
     let parent = planned_base(history, case).map_err(error)?;
     if event_id != auth.build_event_id || parent.to_string() != auth.parent_head {
         return Err("publication recovery source changed".into());
     }
     Ok((build, parent))
+}
+
+fn recoverable_source(
+    history: &ImmutableCaseHistory,
+    case: &StoredCase,
+) -> Result<(pip_contracts::BuilderResult, String), String> {
+    let publication = &history
+        .events
+        .iter()
+        .rev()
+        .find(|event| event.event_type == "REVIEW_READY")
+        .ok_or("missing publication")?
+        .payload["publication"];
+    let signing = &publication["signing"];
+    // Old unsigned publications and the original single-parent signer may be
+    // repaired. Do not repeatedly republish a target-aware signed result.
+    if !signing["integrated_base"].is_null() {
+        return Err("publication already binds integrated target ancestry".into());
+    }
+    publication_source(history, case, !signing.is_null()).map_err(error)
 }
 
 fn error(value: impl std::fmt::Display) -> String {

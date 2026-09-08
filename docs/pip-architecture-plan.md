@@ -143,11 +143,15 @@ implemented solution, link the accepted published plan, and include a closing
 `Fixes #N` reference. Reviewer-role identification belongs in hidden metadata,
 not a visible control-language footer.
 The dedicated commit-signing key is controller-only as well. Signing preserves
-the accepted tree exactly and uses a validated parent and automation identity;
+the accepted tree exactly and uses validated parents and automation identity;
 it never edits the accepted worker result to substitute a new SHA. Retain the
 original source commit before replacing workspace refs or reclaiming storage.
 CI, reviews and final readiness bind the published signed SHA, not its unsigned
-source SHA. Replacing an existing unsigned publication requires an audited
+source SHA. The controller resolves the policy's target branch from the bound
+remote and retains its common ancestor with the accepted source as an additional
+parent when needed. This preserves integrated target history without publishing
+unsigned worker ancestors or trusting worker-controlled remote-tracking refs.
+Replacing an unsigned or legacy ancestry-losing publication requires an audited
 recovery decision and fresh head-bound CI and reviews.
 Automatic merge is deferred; it is not part of the lean runtime's required
 execution path and cannot be enabled accidentally by a generic configuration.

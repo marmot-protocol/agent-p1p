@@ -148,7 +148,7 @@ key exactly matches the approved public half on Pirate. Signed commit
 `53ac3d8f8143ea9f186bf677f59c3a16f2632fca` is GitHub-verified for that account.
 The older dual-purpose key is untouched; no token scopes were broadened.
 
-Signing uses the exact accepted tree and validated parent, verifies the signature,
+Signing uses the exact accepted tree and validated parents, verifies the signature,
 retains the source and records its published-SHA mapping. Workers receive no key.
 Builder resolutions may join to their source build; CI, approvals and origin
 confirmations still require the published head.
@@ -158,7 +158,11 @@ checks with existing recovery. It appends one authorization, grants zero model
 attempts and preserves accepted runs, plan, remediation round and deadline.
 Unsigned-range recovery signs on the original planned base, not the old unsigned
 PR head. Normal publication uses an exact-old-head lease and requires fresh CI
-and reviews. Identical requests replay; stale/conflicting requests and unsigned
+and reviews. Target-aware signing retains integrated master ancestry using the
+accepted source's common ancestor with the policy-bound remote target. Legacy
+single-parent signed publications can be repaired from the retained source without
+another builder attempt; target-aware publications cannot repeat that recovery.
+Identical requests replay; stale/conflicting requests and unsigned
 publisher results are rejected. See [the recovery runbook](runbooks/builder-recovery.md).
 
 ## Next gates

@@ -59,8 +59,17 @@ impl GitRunner for LocalRemote {
         if command
             .args
             .iter()
-            .any(|arg| arg == "push" || arg == "ls-remote")
+            .any(|arg| arg == "push" || arg == "ls-remote" || arg == "fetch")
         {
+            if command.args.iter().any(|arg| arg == "fetch") {
+                assert_eq!(
+                    command
+                        .environment
+                        .get("GIT_NO_REPLACE_OBJECTS")
+                        .map(String::as_str),
+                    Some("1")
+                );
+            }
             for arg in &mut command.args {
                 if arg == REMOTE {
                     *arg = self.path.to_str().unwrap().to_owned();
@@ -248,6 +257,177 @@ fn signed_git_metadata_remains_group_accessible_under_the_controller_private_uma
         fs::metadata(&f.key).unwrap().permissions().mode() & 0o077,
         0
     );
+}
+
+#[test]
+fn republication_restores_integrated_base_without_rerunning_or_rewriting_the_build() {
+    let f = Fixture::new();
+    let old_pr = f.spec.local_head();
+    git(&f.worktree, &["switch", "--detach", &f.base.to_string()]);
+    fs::write(f.worktree.join("upstream"), "new master content\n").unwrap();
+    git(&f.worktree, &["add", "."]);
+    git(
+        &f.worktree,
+        &[
+            "-c",
+            "user.name=Worker",
+            "-c",
+            "user.email=worker@example.invalid",
+            "commit",
+            "-qm",
+            "advance master",
+        ],
+    );
+    let base: GitSha = git(&f.worktree, &["rev-parse", "HEAD"]).parse().unwrap();
+    git(&f.worktree, &["switch", BRANCH]);
+    git(
+        &f.worktree,
+        &[
+            "-c",
+            "user.name=Worker",
+            "-c",
+            "user.email=worker@example.invalid",
+            "merge",
+            "--no-ff",
+            "-m",
+            "integrate master",
+            &base.to_string(),
+        ],
+    );
+    git(
+        &f.worktree,
+        &[
+            "-c",
+            "user.name=Worker",
+            "-c",
+            "user.email=worker@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "finish accepted build",
+        ],
+    );
+    let source = git(&f.worktree, &["rev-parse", "HEAD"]).parse().unwrap();
+    let make_spec = |expected| {
+        GitPublicationSpec::new_scoped(
+            f.worktree.parent().unwrap(),
+            &f.worktree,
+            "origin",
+            REMOTE,
+            BRANCH,
+            source,
+            expected,
+        )
+        .unwrap()
+    };
+    let remote = f._temp.path().join("remote.git");
+    fs::create_dir(&remote).unwrap();
+    git(&remote, &["init", "--bare", "-q"]);
+    let fail_push = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let publisher = GitPublisher::new(
+        LocalRemote {
+            path: remote.clone(),
+            fail_push: fail_push.clone(),
+        },
+        "git",
+        std::time::Duration::from_secs(30),
+        1024 * 1024,
+    )
+    .unwrap();
+    // Reproduce the old controller: accepted tree, but only the previous PR parent.
+    let (_, broken) = publisher
+        .publish_signed(&make_spec(None), old_pr, &f.identity, &f.key)
+        .unwrap();
+    assert_ne!(
+        git(
+            &f.worktree,
+            &["merge-base", &base.to_string(), &broken.head.to_string()]
+        ),
+        base.to_string()
+    );
+    git(
+        &remote,
+        &[
+            "fetch",
+            f.worktree.to_str().unwrap(),
+            &format!("{base}:refs/heads/master"),
+        ],
+    );
+    // A worker's remote-tracking ref is not authoritative.
+    git(
+        &f.worktree,
+        &[
+            "update-ref",
+            "refs/remotes/origin/master",
+            &old_pr.to_string(),
+        ],
+    );
+    git(
+        &f.worktree,
+        &["replace", &base.to_string(), &old_pr.to_string()],
+    );
+    let recovery = publisher
+        .with_integrated_target(&make_spec(Some(broken.head)), "master")
+        .unwrap();
+    assert!(
+        publisher
+            .with_integrated_target(&make_spec(Some(broken.head)), "missing-target")
+            .is_err()
+    );
+    fail_push.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(matches!(
+        publisher.publish_signed(&recovery, old_pr, &f.identity, &f.key),
+        Err(PublicationError::CommandFailed(1))
+    ));
+    fail_push.store(false, std::sync::atomic::Ordering::SeqCst);
+    let (result, repaired) = publisher
+        .publish_signed(&recovery, old_pr, &f.identity, &f.key)
+        .unwrap();
+    assert_eq!(result, PublicationResult::Updated);
+    assert_eq!(repaired.tree, broken.tree);
+    assert_eq!(repaired.source_head, source);
+    assert_eq!(
+        git(
+            &f.worktree,
+            &["show", "-s", "--format=%P", &repaired.head.to_string()]
+        ),
+        format!("{old_pr} {base}")
+    );
+    assert_eq!(repaired.integrated_base, Some(base));
+    assert_eq!(
+        git(
+            &f.worktree,
+            &["merge-base", &base.to_string(), &repaired.head.to_string()]
+        ),
+        base.to_string()
+    );
+    assert_eq!(
+        git(
+            &f.worktree,
+            &["rev-parse", &format!("refs/pip/source-builds/{source}")]
+        ),
+        source.to_string()
+    );
+    assert!(git(&f.worktree, &["status", "--porcelain"]).is_empty());
+    assert_eq!(
+        publisher
+            .publish_signed(&recovery, old_pr, &f.identity, &f.key)
+            .unwrap()
+            .0,
+        PublicationResult::Existing
+    );
+    git(
+        &remote,
+        &[
+            "update-ref",
+            &format!("refs/heads/{BRANCH}"),
+            &base.to_string(),
+        ],
+    );
+    assert!(matches!(
+        publisher.publish_signed(&recovery, old_pr, &f.identity, &f.key),
+        Err(PublicationError::RemoteRace)
+    ));
 }
 
 struct Fixture {

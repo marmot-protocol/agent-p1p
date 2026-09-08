@@ -50,6 +50,7 @@ pub struct BranchPublicationRequest {
     pub branch: String,
     pub local_head: String,
     pub parent_head: String,
+    pub target_branch: String,
     pub expected_remote_head: Option<String>,
 }
 
@@ -121,7 +122,7 @@ impl BranchPublisher for ControllerPublisher<'_> {
         )?
         .with_askpass(self.git_askpass, self.github_token_file)?;
         let (result, signed) = publisher.publish_signed(
-            &request.spec()?,
+            &publisher.with_integrated_target(&request.spec()?, &request.target_branch)?,
             request
                 .parent_head
                 .parse()
@@ -304,6 +305,7 @@ pub fn publish_draft_pull_request_once_with<'a, W: DraftPullRequestWriter, P: Br
         branch: branch.clone(),
         local_head: head_sha.into(),
         parent_head: parent.to_string(),
+        target_branch: policy.repository.default_branch.clone(),
         expected_remote_head: case.head_sha.clone(),
     });
     let publication = match publication {
@@ -339,6 +341,7 @@ pub fn publish_draft_pull_request_once_with<'a, W: DraftPullRequestWriter, P: Br
         json!({
             "source_head": signed.source_head.to_string(), "head": signed.head.to_string(),
             "tree": signed.tree.to_string(), "parent": signed.parent.to_string(),
+            "integrated_base": signed.integrated_base.map(|sha| sha.to_string()),
             "signer_fingerprint": signed.signer_fingerprint,
         })
     });

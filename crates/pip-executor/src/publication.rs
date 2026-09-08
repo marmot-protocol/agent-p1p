@@ -20,6 +20,7 @@ pub struct GitPublicationSpec {
     branch: String,
     local_head: GitSha,
     expected_remote_head: Option<GitSha>,
+    integrated_base: Option<GitSha>,
 }
 
 impl GitPublicationSpec {
@@ -91,6 +92,7 @@ impl GitPublicationSpec {
             branch,
             local_head,
             expected_remote_head,
+            integrated_base: None,
         })
     }
 
@@ -122,6 +124,10 @@ impl GitPublicationSpec {
     #[must_use]
     pub const fn expected_remote_head(&self) -> Option<GitSha> {
         self.expected_remote_head
+    }
+
+    pub(crate) const fn integrated_base(&self) -> Option<GitSha> {
+        self.integrated_base
     }
 }
 
@@ -215,7 +221,10 @@ impl<R: GitRunner> GitPublisher<R> {
             program,
             timeout,
             max_output_bytes,
-            environment: BTreeMap::from([("GIT_OPTIONAL_LOCKS".into(), "0".into())]),
+            environment: BTreeMap::from([
+                ("GIT_OPTIONAL_LOCKS".into(), "0".into()),
+                ("GIT_NO_REPLACE_OBJECTS".into(), "1".into()),
+            ]),
         })
     }
 
@@ -439,6 +448,71 @@ impl<R: GitRunner> GitPublisher<R> {
 }
 
 impl<R: GitRunner + Clone> GitPublisher<R> {
+    /// Bind only target history shared with the accepted source. Never trust a
+    /// worker-controlled origin/* ref or import unsigned worker commits as parents.
+    pub fn with_integrated_target(
+        &self,
+        spec: &GitPublicationSpec,
+        target_branch: &str,
+    ) -> Result<GitPublicationSpec, PublicationError> {
+        let remote = spec
+            .expected_remote_url()
+            .ok_or(PublicationError::InvalidSpec)?;
+        crate::IsolatedWorkspace::new(
+            self.runner.clone(),
+            &self.program,
+            self.timeout,
+            self.max_output_bytes,
+        )
+        .and_then(|workspace| {
+            workspace.verify_for_controller(spec.worktree(), spec.branch(), remote)
+        })
+        .map_err(|error| PublicationError::Process(error.to_string()))?;
+        let reference = format!("refs/heads/{target_branch}");
+        self.execute(spec, vec!["check-ref-format".into(), reference.clone()])?;
+        let line = self.single_line(spec, ["ls-remote", "--heads", remote, &reference])?;
+        let (sha, actual_ref) = line
+            .split_once('\t')
+            .ok_or(PublicationError::VerificationFailed)?;
+        let target: GitSha = sha
+            .parse()
+            .map_err(|_| PublicationError::VerificationFailed)?;
+        if actual_ref != reference {
+            return Err(PublicationError::VerificationFailed);
+        }
+        // Fetch the observed immutable object, without moving refs or FETCH_HEAD.
+        // Group sharing keeps fetched objects readable across the controller/worker boundary.
+        self.execute(
+            spec,
+            vec![
+                "-c".into(),
+                "core.sharedRepository=group".into(),
+                "fetch".into(),
+                "--no-tags".into(),
+                "--no-write-fetch-head".into(),
+                "--no-auto-maintenance".into(),
+                "--".into(),
+                remote.into(),
+                target.to_string(),
+            ],
+        )?;
+        let base = self
+            .single_line(
+                spec,
+                [
+                    "merge-base",
+                    "--all",
+                    &spec.local_head().to_string(),
+                    &target.to_string(),
+                ],
+            )?
+            .parse()
+            .map_err(|_| PublicationError::VerificationFailed)?;
+        let mut bound = spec.clone();
+        bound.integrated_base = Some(base);
+        Ok(bound)
+    }
+
     /// Requires exclusive controller ownership, just like `sign_commit`.
     /// Retains accepted source history before changing the local branch. All
     /// steps replay against the original spec after a crash or failed push.
@@ -488,14 +562,18 @@ impl<R: GitRunner + Clone> GitPublisher<R> {
             ],
         )?;
         let current = self.single_line(spec, ["rev-parse", "--verify", "HEAD"])?;
-        if current == source {
+        if current == source
+            || spec
+                .expected_remote_head()
+                .is_some_and(|head| current == head.to_string())
+        {
             self.execute(
                 spec,
                 vec![
                     "update-ref".into(),
                     format!("refs/heads/{}", spec.branch()),
                     signed.head.to_string(),
-                    source,
+                    current,
                 ],
             )?;
         } else if current != signed.head.to_string() {

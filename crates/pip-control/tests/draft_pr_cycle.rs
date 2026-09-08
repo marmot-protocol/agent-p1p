@@ -78,7 +78,7 @@ impl BranchPublisher for FixturePublisher {
 
 #[test]
 fn signed_republication_reuses_the_accepted_tree_and_plan_without_rewriting_history() {
-    for remediated in [false, true] {
+    for (remediated, legacy_signed) in [(false, false), (true, false), (true, true)] {
         let temp = tempfile::tempdir().unwrap();
         let policy = active_policy();
         let mut store = if remediated {
@@ -99,6 +99,14 @@ fn signed_republication_reuses_the_accepted_tree_and_plan_without_rewriting_hist
             &writer,
             &FixturePublisher {
                 remote_head: RefCell::new(remediated.then(|| "b".repeat(40))),
+                signed: legacy_signed.then(|| SignedCommit {
+                    source_head: "f".repeat(40).parse().unwrap(),
+                    head: "9".repeat(40).parse().unwrap(),
+                    parent: "b".repeat(40).parse().unwrap(),
+                    tree: "e".repeat(40).parse().unwrap(),
+                    signer_fingerprint: "SHA256:fixture".into(),
+                    integrated_base: None,
+                }),
                 ..FixturePublisher::default()
             },
             &policy,
@@ -190,11 +198,15 @@ fn signed_republication_reuses_the_accepted_tree_and_plan_without_rewriting_hist
         let publisher = FixturePublisher {
             remote_head: RefCell::new(case.head_sha.clone()),
             signed: Some(SignedCommit {
-                source_head: case.head_sha.as_ref().unwrap().parse().unwrap(),
+                source_head: (if remediated { "f" } else { "b" })
+                    .repeat(40)
+                    .parse()
+                    .unwrap(),
                 head: "d".repeat(40).parse().unwrap(),
                 parent: "c".repeat(40).parse().unwrap(),
                 tree: "e".repeat(40).parse().unwrap(),
                 signer_fingerprint: "SHA256:fixture".into(),
+                integrated_base: Some("c".repeat(40).parse().unwrap()),
             }),
             ..FixturePublisher::default()
         };
@@ -311,6 +323,7 @@ fn signed_publication_records_the_mapping_without_rewriting_the_builder_result()
             tree: "e".repeat(40).parse().unwrap(),
             parent: "c".repeat(40).parse().unwrap(),
             signer_fingerprint: "SHA256:fixture".into(),
+            integrated_base: None,
         }),
         ..FixturePublisher::default()
     };
@@ -366,6 +379,7 @@ fn invalid_signing_bindings_never_reach_the_pr_writer() {
                 tree: "e".repeat(40).parse().unwrap(),
                 parent: parent.repeat(40).parse().unwrap(),
                 signer_fingerprint: fingerprint.into(),
+                integrated_base: None,
             }),
             ..FixturePublisher::default()
         };
@@ -655,6 +669,10 @@ fn remediation_updates_the_same_owned_pr_to_the_new_exact_head() {
     assert_eq!(spec.head_sha, "c".repeat(40));
     let publications = publisher.requests.borrow();
     assert_eq!(publications[0].local_head, "c".repeat(40));
+    assert_eq!(
+        publications[0].target_branch,
+        active_policy().repository.default_branch
+    );
     assert_eq!(publications[0].expected_remote_head, Some("b".repeat(40)));
     let case = store.case("repo:984321#1240@1").unwrap().unwrap();
     assert_eq!(case.pr_number, Some(77));

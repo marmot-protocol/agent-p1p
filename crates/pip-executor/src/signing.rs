@@ -25,6 +25,7 @@ pub struct SignedCommit {
     pub tree: GitSha,
     pub head: GitSha,
     pub parent: GitSha,
+    pub integrated_base: Option<GitSha>,
     pub signer_fingerprint: String,
 }
 
@@ -167,6 +168,38 @@ pub fn sign_commit<R: GitRunner + Clone>(
     )?
     .parse()
     .map_err(|_| PublicationError::VerificationFailed)?;
+    // A publication-only repair can start from the exact ledger-bound old
+    // publication, but never from another checkout or a different tree.
+    let prior_publication = spec
+        .expected_remote_head()
+        .is_some_and(|head| current_head == head.to_string())
+        && run(vec!["rev-parse".into(), "HEAD^{tree}".into()], &plain)? == tree.to_string();
+    let mut parents = vec![parent];
+    if let Some(base) = spec.integrated_base() {
+        run(
+            vec![
+                "merge-base".into(),
+                "--is-ancestor".into(),
+                base.to_string(),
+                source.clone(),
+            ],
+            &plain,
+        )?;
+        // Avoid redundant parents when the previous publication already includes
+        // the integrated target history. A single merge-base is required.
+        let shared = run(
+            vec![
+                "merge-base".into(),
+                "--all".into(),
+                parent.to_string(),
+                base.to_string(),
+            ],
+            &plain,
+        )?;
+        if shared != base.to_string() {
+            parents.push(base);
+        }
+    }
     let timestamp = run(
         vec![
             "show".into(),
@@ -220,15 +253,11 @@ pub fn sign_commit<R: GitRunner + Clone>(
         "Pip: publish accepted build\n\nPip-Source-Commit: {source}\nPip-Source-Tree: {tree}\n"
     );
     let mut args = signing_args.clone();
-    args.extend([
-        "commit-tree".into(),
-        "-S".into(),
-        "-p".into(),
-        parent.to_string(),
-        "-m".into(),
-        message,
-        tree.to_string(),
-    ]);
+    args.extend(["commit-tree".into(), "-S".into()]);
+    for parent in &parents {
+        args.extend(["-p".into(), parent.to_string()]);
+    }
+    args.extend(["-m".into(), message, tree.to_string()]);
     let head: GitSha = run(args, &signer_environment)?
         .parse()
         .map_err(|_| PublicationError::VerificationFailed)?;
@@ -273,13 +302,19 @@ pub fn sign_commit<R: GitRunner + Clone>(
         ],
         &plain,
     )?;
+    let parent_line = parents
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
     let expected = format!(
-        "{tree}\n{parent}\n{}\n{}\n{}\n{}\n{timestamp}",
+        "{tree}\n{parent_line}\n{}\n{}\n{}\n{}\n{timestamp}",
         identity.name, identity.email, identity.name, identity.email
     );
     // Publication may already have aligned the branch before a crash. Accept
-    // only the original source or this exact, independently recreated commit.
-    if current_head != source && current_head != head.to_string() {
+    // only the original source, the recreated commit, or the verified same-tree
+    // previous publication bound by the caller's exact remote-head lease.
+    if current_head != source && current_head != head.to_string() && !prior_publication {
         return Err(PublicationError::LocalHeadDrift);
     }
     if actual != expected || run(vec!["rev-parse".into(), "HEAD".into()], &plain)? != current_head {
@@ -290,6 +325,7 @@ pub fn sign_commit<R: GitRunner + Clone>(
         tree,
         head,
         parent,
+        integrated_base: spec.integrated_base(),
         signer_fingerprint: fingerprint,
     })
 }
