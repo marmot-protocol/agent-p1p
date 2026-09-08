@@ -33,8 +33,40 @@ const MIGRATIONS: &[&str] = &[
     // Format boundary: older binaries must not execute compact dispatch records.
     "-- Frozen dispatch inputs and output references; existing rows stay unchanged.",
     MIGRATION_11,
+    MIGRATION_12,
 ];
 const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
+
+// Reviewer-local IDs can recur across independent reviewers, heads and rounds.
+// Keep each accepted event's observation, not a mutable case-global finding.
+// Legacy rows retain every original byte; NULL means no event was recorded by
+// the old schema. Do not guess an attribution from timestamps or payloads.
+const MIGRATION_12: &str = r#"
+CREATE TABLE findings_observations (
+    finding_id TEXT NOT NULL,
+    case_key TEXT NOT NULL REFERENCES cases(case_key),
+    origin_role TEXT NOT NULL,
+    reviewed_head_sha TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    payload_sha256 TEXT NOT NULL,
+    recorded_at INTEGER NOT NULL,
+    event_id TEXT REFERENCES events(event_id),
+    UNIQUE (case_key, event_id, origin_role, finding_id)
+) STRICT;
+INSERT INTO findings_observations
+    (finding_id, case_key, origin_role, reviewed_head_sha, payload_json, payload_sha256, recorded_at)
+SELECT finding_id, case_key, origin_role, reviewed_head_sha, payload_json, payload_sha256, recorded_at
+FROM findings;
+DROP TABLE findings;
+ALTER TABLE findings_observations RENAME TO findings;
+CREATE UNIQUE INDEX findings_legacy_identity ON findings(case_key, finding_id) WHERE event_id IS NULL;
+CREATE TRIGGER findings_no_update BEFORE UPDATE ON findings BEGIN
+    SELECT RAISE(ABORT, 'findings are immutable');
+END;
+CREATE TRIGGER findings_no_delete BEFORE DELETE ON findings BEGIN
+    SELECT RAISE(ABORT, 'findings are immutable');
+END;
+"#;
 
 const MIGRATION_11: &str = r#"
 CREATE TABLE workspace_retirements_generations (
@@ -1218,6 +1250,7 @@ impl Store {
             insert_findings(
                 &transaction,
                 &input.case_key,
+                &input.event.event_id,
                 input.observed_at,
                 &input.findings,
             )?;
@@ -1675,7 +1708,8 @@ impl Store {
         let mut findings = self.connection.prepare(
             "SELECT finding_id, origin_role, reviewed_head_sha, payload_json,
                     payload_sha256, recorded_at
-             FROM findings WHERE case_key = ?1 ORDER BY recorded_at, finding_id",
+             FROM findings WHERE case_key = ?1
+             ORDER BY recorded_at, finding_id, origin_role, reviewed_head_sha, event_id",
         )?;
         let findings = findings
             .query_map([case_key], |row| {
@@ -3058,6 +3092,7 @@ fn insert_evidence(
 fn insert_findings(
     transaction: &Transaction<'_>,
     case_key: &str,
+    event_id: &str,
     recorded_at: u64,
     findings: &[FindingInput],
 ) -> Result<()> {
@@ -3073,8 +3108,8 @@ fn insert_findings(
         }
         let (payload_json, payload_hash) = payload(&item.payload)?;
         transaction.execute(
-            "INSERT INTO findings(finding_id, case_key, origin_role, reviewed_head_sha, payload_json, payload_sha256, recorded_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO findings(finding_id, case_key, origin_role, reviewed_head_sha, payload_json, payload_sha256, recorded_at, event_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 item.finding_id,
                 case_key,
@@ -3083,6 +3118,7 @@ fn insert_findings(
                 payload_json,
                 payload_hash,
                 sql_u64(recorded_at)?,
+                event_id,
             ],
         )?;
     }

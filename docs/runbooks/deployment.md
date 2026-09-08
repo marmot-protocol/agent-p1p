@@ -94,6 +94,15 @@ the remaining frozen-job gaps are tracked in implementation status. Keep
 releases needed for rollback or retained assignments. Never reset the ledger,
 delete an attempt, or relabel an issue merely to make an upgrade proceed.
 
+Schema 12 retains findings per accepted event and reviewer, allowing a stable
+finding ID to recur after remediation (even on the same head). Existing finding
+payloads, digests and head bindings stay unchanged; their new `event_id` is NULL
+because older schemas did not record that association. New observations bind to
+their accepting event. Duplicate IDs within one review still fail atomically,
+and exact-result replay does not insert another observation. A saved review
+blocked by the former case-global key can be accepted by normal reconciliation
+after upgrade; no result edit, attempt reset or new model call is needed.
+
 ## First-install prerequisites
 
 - Compatible Linux/systemd, architecture and libc for the actual artifact.

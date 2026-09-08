@@ -186,6 +186,51 @@ fn two_reviews_join_to_request_changes_and_preserve_both_runs_and_findings() {
     assert_eq!(case(&store).remediation_round, 1);
     assert_eq!(store.run_count().unwrap(), 4);
     assert_eq!(store.finding_count().unwrap(), 1);
+
+    // A real remediation cycle must accept the same reviewer-local ID again,
+    // without mutating the original result or letting an old-head review count.
+    let previous = store
+        .immutable_history_for_case(&case_id().to_string())
+        .unwrap();
+    let mut build = serde_json::to_value(&results[1]).unwrap();
+    build["task_id"] = json!("builder-2");
+    build["build_round"] = json!(2);
+    build["head_sha"] = json!("d".repeat(40));
+    let build: WorkerResult = serde_json::from_value(build).unwrap();
+    ingest_worker_result(&mut store, &policy(), &binding(&build), &build).unwrap();
+    publish_build(&mut store, &build);
+    accept_ci(&mut store);
+    for original in [&results[2], &results[3]] {
+        let mut review = serde_json::to_value(original).unwrap();
+        review["task_id"] = json!(format!("{}-again", original.common().task_id));
+        review["review_round"] = json!(2);
+        let wrong_head: WorkerResult = serde_json::from_value(review.clone()).unwrap();
+        let mut expected = binding(&wrong_head);
+        expected.expected_head_sha = Some("d".repeat(40));
+        assert!(ingest_worker_result(&mut store, &policy(), &expected, &wrong_head).is_err());
+        review["reviewed_head_sha"] = json!("d".repeat(40));
+        let review: WorkerResult = serde_json::from_value(review).unwrap();
+        ingest_worker_result(&mut store, &policy(), &binding(&review), &review).unwrap();
+        assert_eq!(
+            ingest_worker_result(&mut store, &policy(), &binding(&review), &review).unwrap(),
+            IngestResult::Replayed
+        );
+    }
+    assert_eq!(case(&store).state, "REMEDIATING");
+    assert_eq!(case(&store).remediation_round, 2);
+    let retained = store
+        .immutable_history_for_case(&case_id().to_string())
+        .unwrap();
+    assert_eq!(retained.findings.len(), 2);
+    assert!(retained.findings.contains(&previous.findings[0]));
+    assert_eq!(
+        retained
+            .findings
+            .iter()
+            .filter(|f| f.reviewed_head_sha == "d".repeat(40))
+            .count(),
+        1
+    );
 }
 
 fn results() -> Vec<WorkerResult> {
@@ -266,7 +311,8 @@ fn accept_ci(store: &mut Store) {
     let current = case(store);
     let workflow = WorkflowCommand {
         case_id: case_id(),
-        event_id: EventId::from_str("event-ci-accepted").unwrap(),
+        event_id: EventId::from_str(&format!("event-ci-accepted-{}", current.remediation_round))
+            .unwrap(),
         observed_at: ObservedAt::new(20),
         expected_state: CaseState::WaitingCi,
         expected_state_revision: StateRevision::new(
@@ -276,12 +322,12 @@ fn accept_ci(store: &mut Store) {
         remediation_round: current.remediation_round,
         plan_version: Some(PlanVersion::new(NonZeroU32::new(1).unwrap())),
         pr_number: Some(PullRequestNumber::new(NonZeroU64::new(77).unwrap())),
-        head_sha: Some(GitSha::from_str(&"b".repeat(40)).unwrap()),
+        head_sha: Some(GitSha::from_str(current.head_sha.as_deref().unwrap()).unwrap()),
         event: Event::CiAccepted,
         accepted_plan_version: None,
         next_pr_number: None,
         next_head_sha: None,
-        event_payload: json!({"head_sha": "b".repeat(40)}),
+        event_payload: json!({"head_sha": current.head_sha}),
         run: None,
         evidence: Vec::new(),
         findings: Vec::new(),

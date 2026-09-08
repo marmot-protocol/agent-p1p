@@ -66,7 +66,7 @@ fn repeated_workspace_retirement_preserves_each_terminal_generation() {
         DELETE FROM schema_migrations WHERE version>10; PRAGMA user_version=10;").unwrap();
     drop(connection);
     let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 11);
+    assert_eq!(store.schema_version().unwrap(), 12);
     assert_eq!(
         store.record_workspace_retirement(&retirement).unwrap(),
         ApplyResult::Replayed
@@ -308,7 +308,7 @@ fn effect_claims_are_repository_scoped_before_leasing_and_across_restart() {
 }
 
 #[test]
-fn finding_ids_are_case_scoped_and_case_local_duplicates_remain_atomic() {
+fn finding_ids_are_case_scoped_and_duplicates_within_one_review_remain_atomic() {
     let (directory, mut store) = open();
     let first = new_case();
     store.create_case(&first).unwrap();
@@ -344,6 +344,7 @@ fn finding_ids_are_case_scoped_and_case_local_duplicates_remain_atomic() {
         assert_eq!(retained.findings[0].payload, input.findings[0].payload);
         input.event.event_id = format!("duplicate-{index}");
         input.expected_revision = 2;
+        input.findings.push(input.findings[0].clone());
         assert!(store.apply_transition(&input, None).is_err());
         assert_eq!(
             store.immutable_history_for_case(&case.case_key).unwrap(),
@@ -364,7 +365,70 @@ fn finding_ids_are_case_scoped_and_case_local_duplicates_remain_atomic() {
 }
 
 #[test]
+fn recurring_findings_are_retained_per_review_event_and_replay_is_idempotent() {
+    let (directory, mut store) = open();
+    let case = new_case();
+    store.create_case(&case).unwrap();
+    let mut input = transition();
+    input.run = None;
+    input.evidence.clear();
+    input.effects.clear();
+    for round in 1..=3 {
+        input.expected_revision = round;
+        input.event.event_id = format!("review-{round}");
+        // A rereview may retain the same head, or follow a new build.
+        if round == 3 {
+            input.findings[0].reviewed_head_sha = "c".repeat(40);
+        }
+        input.findings[0].payload = json!({"round": round});
+        let mut independent = input.findings[0].clone();
+        independent.origin_role = "another-reviewer".into();
+        input.findings.truncate(1);
+        input.findings.push(independent);
+        assert_eq!(
+            store.apply_transition(&input, None).unwrap(),
+            ApplyResult::Applied
+        );
+        assert_eq!(
+            store.apply_transition(&input, None).unwrap(),
+            ApplyResult::Replayed
+        );
+        let before = store.immutable_history_for_case(&case.case_key).unwrap();
+        let mut conflicting = input.clone();
+        conflicting.findings[0].payload = json!({"changed": true});
+        assert!(store.apply_transition(&conflicting, None).is_err());
+        assert_eq!(
+            store.immutable_history_for_case(&case.case_key).unwrap(),
+            before
+        );
+    }
+    drop(store);
+    let store = Store::open(directory.path().join("ledger.db")).unwrap();
+    let history = store.immutable_history_for_case(&case.case_key).unwrap();
+    assert_eq!(history.findings.len(), 6);
+    for round in 1..=3 {
+        assert_eq!(
+            history
+                .findings
+                .iter()
+                .filter(|f| f.payload == json!({"round":round}))
+                .count(),
+            2
+        );
+    }
+}
+
+#[test]
 fn schema_eight_findings_upgrade_preserves_payloads_digests_and_immutability() {
+    legacy_findings_upgrade(8);
+}
+
+#[test]
+fn schema_eleven_findings_upgrade_preserves_history_and_accepts_saved_rereview() {
+    legacy_findings_upgrade(11);
+}
+
+fn legacy_findings_upgrade(version: u32) {
     let (directory, mut store) = open();
     store.create_case(&new_case()).unwrap();
     store.apply_transition(&transition(), None).unwrap();
@@ -374,23 +438,30 @@ fn schema_eight_findings_upgrade_preserves_payloads_digests_and_immutability() {
     let path = directory.path().join("ledger.db");
     drop(store);
     let connection = Connection::open(&path).unwrap();
-    // Reconstruct the deployed schema-8 global key, independently of the latest schema.
+    // Reconstruct both deployed keys independently of the latest schema.
+    let key = if version == 8 {
+        "finding_id"
+    } else {
+        "case_key, finding_id"
+    };
     connection
-        .execute_batch(
+        .execute_batch(&format!(
             "
         DROP TRIGGER findings_no_update;
         DROP TRIGGER findings_no_delete;
         ALTER TABLE findings RENAME TO current_findings;
         CREATE TABLE findings (
-            finding_id TEXT PRIMARY KEY,
+            finding_id TEXT NOT NULL,
             case_key TEXT NOT NULL REFERENCES cases(case_key),
             origin_role TEXT NOT NULL,
             reviewed_head_sha TEXT NOT NULL,
             payload_json TEXT NOT NULL,
             payload_sha256 TEXT NOT NULL,
-            recorded_at INTEGER NOT NULL
+            recorded_at INTEGER NOT NULL,
+            PRIMARY KEY ({key})
         ) STRICT;
-        INSERT INTO findings SELECT * FROM current_findings;
+        INSERT INTO findings SELECT finding_id, case_key, origin_role, reviewed_head_sha,
+            payload_json, payload_sha256, recorded_at FROM current_findings;
         DROP TABLE current_findings;
         CREATE TRIGGER findings_no_update BEFORE UPDATE ON findings BEGIN
             SELECT RAISE(ABORT, 'findings are immutable');
@@ -398,22 +469,62 @@ fn schema_eight_findings_upgrade_preserves_payloads_digests_and_immutability() {
         CREATE TRIGGER findings_no_delete BEFORE DELETE ON findings BEGIN
             SELECT RAISE(ABORT, 'findings are immutable');
         END;
-        DELETE FROM schema_migrations WHERE version > 8;
-        PRAGMA user_version = 8;
-    ",
-        )
+        DELETE FROM schema_migrations WHERE version > {version};
+        PRAGMA user_version = {version};
+    "
+        ))
         .unwrap();
     drop(connection);
-    let upgraded = Store::open(&path).unwrap();
-    assert_eq!(upgraded.schema_version().unwrap(), 11);
+    let mut upgraded = Store::open(&path).unwrap();
+    assert_eq!(upgraded.schema_version().unwrap(), 12);
     assert_eq!(
         upgraded
             .immutable_history_for_case(&new_case().case_key)
             .unwrap(),
         history
     );
+    let mut next = transition();
+    next.expected_revision = 2;
+    next.event.event_id = "saved-rereview".into();
+    next.run = None;
+    next.evidence.clear();
+    next.effects.clear();
+    next.findings[0].reviewed_head_sha = "d".repeat(40);
+    assert_eq!(
+        upgraded.apply_transition(&next, None).unwrap(),
+        ApplyResult::Applied
+    );
+    assert_eq!(
+        upgraded.apply_transition(&next, None).unwrap(),
+        ApplyResult::Replayed
+    );
+    let retained = upgraded
+        .immutable_history_for_case(&new_case().case_key)
+        .unwrap();
+    assert_eq!(retained.findings.len(), 2);
+    assert!(retained.findings.contains(&history.findings[0]));
     drop(upgraded);
     let connection = Connection::open(&path).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT count(*) FROM findings WHERE event_id IS NULL",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT event_id FROM findings WHERE event_id IS NOT NULL",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+        "saved-rereview"
+    );
     assert!(
         connection
             .execute("UPDATE findings SET finding_id = 'changed'", [])
@@ -428,13 +539,13 @@ fn schema_eight_findings_upgrade_preserves_payloads_digests_and_immutability() {
             .is_none()
     );
     drop(connection);
-    assert_eq!(Store::open(&path).unwrap().schema_version().unwrap(), 11);
+    assert_eq!(Store::open(&path).unwrap().schema_version().unwrap(), 12);
 }
 
 #[test]
 fn migration_creates_hardened_authoritative_schema() {
     let (_directory, store) = open();
-    assert_eq!(store.schema_version().unwrap(), 11);
+    assert_eq!(store.schema_version().unwrap(), 12);
     assert!(store.foreign_keys_enabled().unwrap());
     assert_eq!(store.journal_mode().unwrap(), "wal");
 }
@@ -1048,7 +1159,7 @@ fn operator_status_separates_pending_leased_and_delivered_work() {
         .unwrap();
 
     let status = store.status(110).unwrap();
-    assert_eq!(status.schema_version, 11);
+    assert_eq!(status.schema_version, 12);
     assert_eq!(status.cases.len(), 1);
     assert_eq!(status.cases[0].case_key, "repo:984321#1240@1");
     assert_eq!(status.events, 1);
@@ -1554,6 +1665,12 @@ fn schema_one_upgrades_forward_without_losing_existing_projections() {
     connection
         .execute_batch(
             "PRAGMA foreign_keys = OFF;
+             DROP TABLE findings;
+             CREATE TABLE findings (
+                 finding_id TEXT PRIMARY KEY, case_key TEXT NOT NULL REFERENCES cases(case_key),
+                 origin_role TEXT NOT NULL, reviewed_head_sha TEXT NOT NULL,
+                 payload_json TEXT NOT NULL, payload_sha256 TEXT NOT NULL, recorded_at INTEGER NOT NULL
+             ) STRICT;
              DROP TABLE dispatch_create_attempts;
              DROP TABLE dispatch_batches;
              DROP TABLE review_observations;
@@ -1583,7 +1700,7 @@ fn schema_one_upgrades_forward_without_losing_existing_projections() {
     drop(connection);
 
     let upgraded = Store::open(&path).unwrap();
-    assert_eq!(upgraded.schema_version().unwrap(), 11);
+    assert_eq!(upgraded.schema_version().unwrap(), 12);
     assert_eq!(
         upgraded
             .task_projection("legacy-projection")

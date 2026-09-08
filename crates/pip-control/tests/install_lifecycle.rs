@@ -225,7 +225,13 @@ fn upgrade_snapshots_schema_seven_before_migrating_to_current() {
     let connection = Connection::open(&ledger).unwrap();
     connection
         .execute_batch(
-            "DROP TABLE dispatch_create_attempts;
+            "DROP TABLE findings;
+             CREATE TABLE findings (
+                 finding_id TEXT PRIMARY KEY, case_key TEXT NOT NULL REFERENCES cases(case_key),
+                 origin_role TEXT NOT NULL, reviewed_head_sha TEXT NOT NULL,
+                 payload_json TEXT NOT NULL, payload_sha256 TEXT NOT NULL, recorded_at INTEGER NOT NULL
+             ) STRICT;
+             DROP TABLE dispatch_create_attempts;
              DROP TABLE dispatch_batches;
              DELETE FROM schema_migrations WHERE version >= 8;
              PRAGMA user_version = 7;",
@@ -241,7 +247,7 @@ fn upgrade_snapshots_schema_seven_before_migrating_to_current() {
             .unwrap()
             .schema_version()
             .unwrap(),
-        11
+        12
     );
 }
 
