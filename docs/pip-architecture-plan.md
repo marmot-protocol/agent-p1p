@@ -59,6 +59,15 @@ lifecycle boundary before use.
     A person reviews and merges. Promotion and notification retry idempotently;
     leaving draft after accepted final review is not itself a human takeover.
 
+If a person marks an owned, open PR ready before Pip finishes, Pip records human
+takeover and posts one concise handoff comment on that PR. The comment explains
+why automation stopped and that remaining checks/reviews belong to the human;
+it is not a claim that the PR passed Pip's gates. It uses the existing durable,
+idempotent publication path and still requires publication authorization. Other
+takeover causes (such as a closed/merged or foreign PR) must not receive this
+early-ready explanation. Already-recorded terminal history is not replayed just
+to backfill a notice.
+
 This is a dynamic bounded loop, not a pre-created multi-round DAG. Rust creates
 only currently authorized work; no synthetic activation-gate cards. Hermes
 dependencies may organize execution, but never bypass result acceptance.

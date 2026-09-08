@@ -170,6 +170,174 @@ fn takeover_record_is_consumed_locally_without_a_github_write() {
 }
 
 fn disposition_store(path: std::path::PathBuf, state: &str, effect_type: &str) -> Store {
+    disposition_store_with_event(
+        path,
+        state,
+        effect_type,
+        "FIXTURE_DISPOSITION",
+        json!({"state":state}),
+    )
+}
+
+#[test]
+fn early_ready_takeover_posts_one_plain_language_pr_notice() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = disposition_store_with_event(
+        directory.path().join("ledger.db"),
+        "TAKEN_OVER",
+        "RECORD_TAKEOVER",
+        "HUMAN_TOOK_OVER",
+        json!({"blockers":["PR_LEFT_DRAFT_STATE"]}),
+    );
+    let writer = FixtureWriter::default();
+    let before = store.case("repo:984321#1240@1").unwrap().unwrap();
+    assert!(matches!(
+        consume_disposition_once(
+            (&unused_source(), &writer),
+            &active_policy(),
+            &mut store,
+            100,
+            "disposition",
+            30,
+            true
+        )
+        .unwrap(),
+        DispositionCycle::Published {
+            target_number: 77,
+            ..
+        }
+    ));
+    assert_eq!(store.case(&before.case_key).unwrap().unwrap(), before);
+    assert_eq!(writer.comments.borrow().len(), 1);
+    let body = writer.comments.borrow()[0].body.clone();
+    assert!(body.contains("marked ready for review"));
+    assert!(body.contains("handing it over to you"));
+    assert!(body.contains("CI"));
+    assert!(!body.contains("PR_LEFT_DRAFT_STATE"));
+    assert!(!body.contains("repo:984321"));
+    assert!(!body.contains("```"));
+    assert_eq!(
+        consume_disposition_once(
+            (&unused_source(), &writer),
+            &active_policy(),
+            &mut store,
+            101,
+            "disposition",
+            30,
+            true
+        )
+        .unwrap(),
+        DispositionCycle::Idle
+    );
+    assert_eq!(writer.comments.borrow().len(), 1);
+}
+
+#[test]
+fn early_ready_notice_requires_authorization_and_retries_the_same_effect_after_restart() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("ledger.db");
+    let mut store = disposition_store_with_event(
+        path.clone(),
+        "TAKEN_OVER",
+        "RECORD_TAKEOVER",
+        "HUMAN_TOOK_OVER",
+        json!({"blockers":["PR_LEFT_DRAFT_STATE"]}),
+    );
+    let mut writer = FixtureWriter {
+        fail: true,
+        ..FixtureWriter::default()
+    };
+    assert_eq!(
+        consume_disposition_once(
+            (&unused_source(), &writer),
+            &active_policy(),
+            &mut store,
+            100,
+            "disposition",
+            30,
+            false
+        )
+        .unwrap(),
+        DispositionCycle::AuthorizationBlocked
+    );
+    assert!(writer.comments.borrow().is_empty());
+    assert_eq!(store.status(100).unwrap().outbox_leased, 0);
+    assert!(
+        consume_disposition_once(
+            (&unused_source(), &writer),
+            &active_policy(),
+            &mut store,
+            100,
+            "disposition",
+            30,
+            true
+        )
+        .is_err()
+    );
+    assert_eq!(store.status(100).unwrap().outbox_leased, 0);
+    assert_eq!(store.evidence_count().unwrap(), 0);
+    drop(store);
+    let mut store = Store::open(path).unwrap();
+    writer.fail = false;
+    assert!(matches!(
+        consume_disposition_once(
+            (&unused_source(), &writer),
+            &active_policy(),
+            &mut store,
+            101,
+            "disposition",
+            30,
+            true
+        )
+        .unwrap(),
+        DispositionCycle::Published { .. }
+    ));
+    let comments = writer.comments.borrow();
+    assert_eq!(comments[0].effect_id, comments[1].effect_id);
+    assert_eq!(comments[0].body, comments[1].body);
+}
+
+#[test]
+fn other_takeovers_do_not_get_a_misleading_early_ready_notice() {
+    for blockers in [
+        json!(["FOREIGN_HEAD_COMMIT"]),
+        json!(["PR_LEFT_DRAFT_STATE", "PR_DISPOSITION_CHANGED"]),
+        json!(["PR_LEFT_DRAFT_STATE", "FOREIGN_PR_AUTHOR"]),
+        json!(["PR_LEFT_DRAFT_STATE", "FOREIGN_HEAD_BRANCH"]),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = disposition_store_with_event(
+            directory.path().join("ledger.db"),
+            "TAKEN_OVER",
+            "RECORD_TAKEOVER",
+            "HUMAN_TOOK_OVER",
+            json!({"blockers":blockers}),
+        );
+        let writer = FixtureWriter::default();
+        assert!(matches!(
+            consume_disposition_once(
+                (&unused_source(), &writer),
+                &active_policy(),
+                &mut store,
+                100,
+                "disposition",
+                30,
+                true
+            )
+            .unwrap(),
+            DispositionCycle::Recorded { .. }
+        ));
+        assert!(writer.comments.borrow().is_empty());
+    }
+}
+
+fn disposition_store_with_event(
+    path: std::path::PathBuf,
+    state: &str,
+    effect_type: &str,
+    event_type: &str,
+    payload: Value,
+) -> Store {
     let mut store = Store::open(path).unwrap();
     let policy = active_policy();
     store
@@ -206,8 +374,8 @@ fn disposition_store(path: std::path::PathBuf, state: &str, effect_type: &str) -
                 observed_at: 2,
                 event: EventInput {
                     event_id: "event-disposition".into(),
-                    event_type: "FIXTURE_DISPOSITION".into(),
-                    payload: json!({"state":state}),
+                    event_type: event_type.into(),
+                    payload,
                 },
                 run: None,
                 evidence: Vec::new(),

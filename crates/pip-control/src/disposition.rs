@@ -132,7 +132,22 @@ pub fn consume_disposition_once<'a, S: crate::FinalPreflightSource, W: Dispositi
         store.release_effect(&claimed.effect_id, owner)?;
         return Err(DispositionError::InvalidCase);
     }
-    if LOCAL_EFFECTS.contains(&claimed.effect_type.as_str()) {
+    let takeover_notice = if claimed.effect_type == "RECORD_TAKEOVER" {
+        match early_ready_takeover(store, &case) {
+            Ok(target) => target,
+            Err(error) => {
+                store.release_effect(&claimed.effect_id, owner)?;
+                return Err(error);
+            }
+        }
+    } else {
+        None
+    };
+    if takeover_notice.is_some() && !authorization_valid {
+        store.release_effect(&claimed.effect_id, owner)?;
+        return Ok(DispositionCycle::AuthorizationBlocked);
+    }
+    if LOCAL_EFFECTS.contains(&claimed.effect_type.as_str()) && takeover_notice.is_none() {
         let evidence = EvidenceInput {
             evidence_id: format!("evidence-effect-{}", claimed.effect_id),
             kind: "LOCAL_EFFECT_COMPLETION".into(),
@@ -170,7 +185,11 @@ pub fn consume_disposition_once<'a, S: crate::FinalPreflightSource, W: Dispositi
     } else {
         None
     };
-    let (target_number, body) = disposition_comment(&case, &claimed.effect_type)?;
+    let (target_number, body) = if let Some(pr) = takeover_notice {
+        (pr, "This PR was marked ready for review before I finished my checks, so I’m handing it over to you. I won’t start further automated builds or reviews for this PR. Please finish the remaining review and CI checks before merging.".into())
+    } else {
+        disposition_comment(&case, &claimed.effect_type)?
+    };
     let result = match writer.ensure_comment(&CommentSpec {
         owner: policy.repository.owner.clone(),
         repository: policy.repository.name.clone(),
@@ -216,6 +235,36 @@ pub fn consume_disposition_once<'a, S: crate::FinalPreflightSource, W: Dispositi
         target_number,
         external_id,
     })
+}
+
+fn early_ready_takeover(store: &Store, case: &StoredCase) -> Result<Option<u64>, DispositionError> {
+    if case.state != "TAKEN_OVER" {
+        return Ok(None);
+    }
+    let history = store.immutable_history_for_case(&case.case_key)?;
+    let Some(event) = history.events.last().filter(|event| {
+        event.event_type == "HUMAN_TOOK_OVER" && event.state_revision == case.state_revision
+    }) else {
+        return Ok(None);
+    };
+    if !crate::draft_pr::payload_matches(&event.payload, &event.payload_sha256) {
+        return Err(DispositionError::InvalidCase);
+    }
+    let Some(blockers) = event.payload["blockers"].as_array() else {
+        return Ok(None);
+    };
+    let has = |reason: &str| blockers.iter().any(|value| value.as_str() == Some(reason));
+    if has("PR_LEFT_DRAFT_STATE")
+        && !has("PR_DISPOSITION_CHANGED")
+        && !has("FOREIGN_PR_AUTHOR")
+        && !has("FOREIGN_HEAD_BRANCH")
+    {
+        return case
+            .pr_number
+            .map(Some)
+            .ok_or(DispositionError::InvalidCase);
+    }
+    Ok(None)
 }
 
 fn publish_ready<S: crate::FinalPreflightSource, W: DispositionWriter>(
