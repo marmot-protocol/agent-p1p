@@ -179,6 +179,8 @@ fn conversation_roundtrip(follow_up: bool) {
     }
     assert_eq!(run(&mut store).unwrap()["result"], "waiting");
     queue.0.borrow_mut()[0].status = "done".into();
+    queue.0.borrow_mut()[0].configuration.workspace_path =
+        Some("/runtime/kanban/boards/pip-mdk/workspaces/task-conversation".into());
     drop(store);
     let mut store = Store::open(&path).unwrap();
     writer.1.set(true);

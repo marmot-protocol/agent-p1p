@@ -345,11 +345,32 @@ fn projection_matches(spec: &TaskCreateSpec, task: &TaskSnapshot) -> bool {
                     (kind, Some(path))
                 });
             task.configuration.workspace_kind.as_deref() == Some(kind)
-                && task.configuration.workspace_path.as_deref() == path
+                && (task.configuration.workspace_path.as_deref() == path
+                    || (kind == "scratch"
+                        && path.is_none()
+                        && allocated_scratch_matches(spec, task)))
         }
         && task.configuration.skills.as_ref() == Some(&spec.skills)
         && task.configuration.provider_override.as_ref() == Some(&spec.provider)
         && task.configuration.model_override.as_ref() == Some(&spec.model)
         && task.configuration.max_retries == Some(spec.max_retries)
         && task.configuration.priority == Some(spec.priority)
+}
+
+// Hermes materializes an unbound scratch workspace when it claims the task.
+// That transport-owned path is not a change to the frozen job. Only recognize
+// its standard board/task allocation; explicit workspaces still match exactly.
+fn allocated_scratch_matches(spec: &TaskCreateSpec, task: &TaskSnapshot) -> bool {
+    let Some(path) = task.configuration.workspace_path.as_deref() else {
+        return false;
+    };
+    let suffix = if spec.board == "default" {
+        format!("/kanban/workspaces/{}", task.id)
+    } else {
+        format!("/kanban/boards/{}/workspaces/{}", spec.board, task.id)
+    };
+    path.starts_with('/')
+        && valid_text(path, 4096)
+        && !path.split('/').any(|part| matches!(part, "." | ".."))
+        && path.ends_with(&suffix)
 }

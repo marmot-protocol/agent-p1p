@@ -11,6 +11,46 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 #[test]
+fn hermes_allocated_scratch_path_is_not_frozen_job_drift() {
+    let runner = FakeRunner::default();
+    let projector =
+        HermesProjector::new(runner.clone(), "hermes", Duration::from_secs(2), 4096).unwrap();
+    let desired = spec();
+    let mut observed = task("task-1", &desired.title, &desired.projection_key);
+    observed.status = "done".into();
+    let allocated = "/runtime/kanban/boards/pip-mdk/workspaces/task-1";
+    observed.configuration.workspace_path = Some(allocated.into());
+    assert_eq!(
+        projector.reconcile(&desired, &[observed.clone()]).unwrap(),
+        Some("task-1".into())
+    );
+    for path in [
+        "/different",
+        "/runtime/kanban/boards/other/workspaces/task-1",
+        "/runtime/kanban/boards/pip-mdk/workspaces/task-2",
+        "relative/kanban/boards/pip-mdk/workspaces/task-1",
+        "/runtime/../kanban/boards/pip-mdk/workspaces/task-1",
+    ] {
+        observed.configuration.workspace_path = Some(path.into());
+        assert_eq!(
+            projector
+                .reconcile(&desired, &[observed.clone()])
+                .unwrap_err(),
+            ProjectionError::ProjectionDrift
+        );
+    }
+    let mut explicit = desired;
+    explicit.workspace = "dir:/fixed".into();
+    observed.configuration.workspace_kind = Some("dir".into());
+    observed.configuration.workspace_path = Some(allocated.into());
+    assert_eq!(
+        projector.reconcile(&explicit, &[observed]).unwrap_err(),
+        ProjectionError::ProjectionDrift
+    );
+    assert!(runner.commands.borrow().is_empty());
+}
+
+#[test]
 fn large_evidence_is_referenced_not_duplicated_in_the_hermes_argument() {
     let runner = FakeRunner::default();
     let mut desired = spec();
