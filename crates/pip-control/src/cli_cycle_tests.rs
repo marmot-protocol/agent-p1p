@@ -2,6 +2,113 @@ use super::*;
 use pip_github::{GitHubError, MutationRequest, ReadRequest, ReadResponse};
 use pip_store::{EffectInput, EventInput, NewCase};
 
+struct QueueSnapshot(pip_hermes::CommandOutput);
+
+impl pip_hermes::CommandRunner for QueueSnapshot {
+    fn run(
+        &self,
+        spec: &pip_hermes::CommandSpec,
+    ) -> Result<pip_hermes::CommandOutput, pip_hermes::HermesError> {
+        assert_eq!(spec.program, "fixture-hermes");
+        assert_eq!(
+            spec.args,
+            [
+                "kanban",
+                "--board",
+                "fixture-board",
+                "list",
+                "--archived",
+                "--json"
+            ]
+        );
+        Ok(self.0.clone())
+    }
+}
+
+fn queue_snapshot(tasks: Value) -> QueueSnapshot {
+    QueueSnapshot(pip_hermes::CommandOutput {
+        status: 0,
+        stdout: serde_json::to_vec(&tasks).unwrap(),
+        stderr: vec![],
+        timed_out: false,
+    })
+}
+
+#[test]
+fn reauthorization_queue_accepts_archived_and_other_terminal_tasks() {
+    for status in ["archived", "done", "cancelled"] {
+        let snapshot = queue_snapshot(json!([
+            {"id":"previous-plan","title":"Plan","body":"{}","status":status},
+            {"id":"unrelated-task","title":"Other case","body":"{}","status":"running"}
+        ]));
+        assert!(
+            prior_tasks_quiescent(
+                snapshot,
+                "fixture-hermes",
+                "fixture-board",
+                &["previous-plan".into()]
+            ),
+            "{status}"
+        );
+    }
+    assert!(prior_tasks_quiescent(
+        queue_snapshot(json!([])),
+        "fixture-hermes",
+        "fixture-board",
+        &["removed-plan".into()]
+    ));
+}
+
+#[test]
+fn reauthorization_queue_rejects_runnable_and_unknown_task_states() {
+    for status in [
+        "triage",
+        "todo",
+        "scheduled",
+        "ready",
+        "running",
+        "blocked",
+        "review",
+        "unknown",
+    ] {
+        let snapshot = queue_snapshot(json!([
+            {"id":"old-archived","title":"Old plan","body":"{}","status":"archived"},
+            {"id":"previous-plan","title":"Plan","body":"{}","status":status}
+        ]));
+        assert!(
+            !prior_tasks_quiescent(
+                snapshot,
+                "fixture-hermes",
+                "fixture-board",
+                &["old-archived".into(), "previous-plan".into()]
+            ),
+            "{status}"
+        );
+    }
+}
+
+#[test]
+fn reauthorization_queue_read_failures_remain_fail_closed() {
+    for fault in ["exit", "timeout", "json"] {
+        let mut snapshot = queue_snapshot(json!([]));
+        match fault {
+            "exit" => snapshot.0.status = 1,
+            "timeout" => snapshot.0.timed_out = true,
+            "json" => snapshot.0.stdout = b"not JSON".to_vec(),
+            _ => unreachable!(),
+        }
+        assert!(
+            !prior_tasks_quiescent(
+                snapshot,
+                "fixture-hermes",
+                "fixture-board",
+                &["previous-plan".into()]
+            ),
+            "{fault}"
+        );
+    }
+}
+
 #[derive(Clone)]
 struct OfflineGitHub {
     healthy: Option<crate::RepositoryPolicy>,

@@ -652,22 +652,15 @@ where
             |task_ids| {
                 // Old ready/running/blocked jobs can still execute. Only terminal
                 // or removed jobs permit a distinct, freshly authorized generation.
-                pip_hermes::HermesReader::new(
+                prior_tasks_quiescent(
                     pip_hermes::ProcessRunner::default(),
                     options
                         .get("--hermes")
                         .map(String::as_str)
                         .unwrap_or("hermes"),
-                    std::time::Duration::from_secs(30),
-                    4 * 1024 * 1024,
+                    &policy.board,
+                    task_ids,
                 )
-                .and_then(|reader| reader.list_tasks(&policy.board))
-                .is_ok_and(|tasks| {
-                    tasks
-                        .iter()
-                        .filter(|task| task_ids.contains(&task.id))
-                        .all(|task| matches!(task.status.as_str(), "done" | "cancelled"))
-                })
             },
         ))
     } else {
@@ -1453,6 +1446,22 @@ fn required<'a>(options: &'a BTreeMap<String, String>, name: &str) -> Result<&'a
         .get(name)
         .map(String::as_str)
         .ok_or(CliError::Usage("required option is missing"))
+}
+
+fn prior_tasks_quiescent(
+    runner: impl pip_hermes::CommandRunner,
+    hermes: &str,
+    board: &str,
+    task_ids: &[String],
+) -> bool {
+    pip_hermes::HermesReader::new(runner, hermes, Duration::from_secs(30), 4 * 1024 * 1024)
+        .and_then(|reader| reader.list_tasks(board))
+        .is_ok_and(|tasks| {
+            tasks
+                .iter()
+                .filter(|task| task_ids.contains(&task.id))
+                .all(|task| matches!(task.status.as_str(), "done" | "cancelled" | "archived"))
+        })
 }
 
 fn current_time() -> Result<u64, CliError> {
