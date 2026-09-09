@@ -100,6 +100,14 @@ policy, but must not reinterpret old archived tasks or late completions under
 new models. Missing historical bindings fail closed; collection never revives
 a superseded job.
 
+Final preflight routes unresolved GitHub review threads back to the builder
+when fresh authorization, ownership, exact-head reviews and CI otherwise pass.
+The full bounded comment snapshot is retained as `GITHUB_REVIEW_FEEDBACK` and
+highlighted in builder evidence. This uses the existing remediation round limit;
+it does not bypass final review or mark the PR ready. Identical feedback already
+sent through a builder pass escalates instead of looping. Thread closure remains
+with the reviewer/operator; a builder disposition alone is not proof of closure.
+
 Schema 12 retains findings per accepted event and reviewer, allowing a stable
 finding ID to recur after remediation (even on the same head). Existing finding
 payloads, digests and head bindings stay unchanged; their new `event_id` is NULL

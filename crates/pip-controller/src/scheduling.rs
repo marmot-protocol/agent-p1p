@@ -479,6 +479,9 @@ fn evidence_focus(context: &DispatchContext, binding: &RolePolicy) -> Value {
     if binding.role == WorkerRole::FinalReviewer {
         latest("evidence", &|row| row["kind"] == "GITHUB_FINAL_PREFLIGHT");
     }
+    if binding.role == WorkerRole::Builder {
+        latest("evidence", &|row| row["kind"] == "GITHUB_REVIEW_FEEDBACK");
+    }
     // Human constraints remain visible through replanning and subsequent
     // builds/reviews, rather than disappearing behind the latest model result.
     for (index, row) in rows("evidence").iter().enumerate() {

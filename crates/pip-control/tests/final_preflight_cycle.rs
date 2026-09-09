@@ -350,7 +350,7 @@ fn signed_publication(task: &str, source: &str, parent: &str) -> Value {
 }
 
 #[test]
-fn unresolved_threads_fail_closed_without_stranding_the_observation_lease() {
+fn unresolved_threads_route_one_bounded_builder_pass_without_releasing_final_review() {
     let directory = tempfile::tempdir().unwrap();
     let policy = active_policy();
     let mut source = accepted_source();
@@ -367,18 +367,35 @@ fn unresolved_threads_fail_closed_without_stranding_the_observation_lease() {
         true,
     )
     .unwrap();
-    assert!(matches!(
-        result,
-        FinalPreflightCycle::Pending { blockers, .. }
-            if blockers == ["UNRESOLVED_REVIEW_THREAD:PRRT_1"]
-    ));
-    assert_eq!(store.evidence_count().unwrap(), 5);
+    let case = store.case("repo:984321#1240@1").unwrap().unwrap();
+    assert_eq!(case.state, "REMEDIATING", "{result:?}");
+    assert_eq!(case.remediation_round, 1);
+    assert_eq!(case.head_sha, Some("b".repeat(40)));
+    assert_eq!(store.evidence_count().unwrap(), 6);
     assert!(
         store
-            .claim_effect_matching("retry", 200, 30, &["OBSERVE_FINAL_PREFLIGHT"])
+            .claim_effect_matching(
+                "final",
+                200,
+                30,
+                &["DISPATCH_FINAL_REVIEWER", "OBSERVE_FINAL_PREFLIGHT"]
+            )
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .claim_effect_matching("builder", 200, 30, &["DISPATCH_BUILDER"])
             .unwrap()
             .is_some()
     );
+    let before = store.status(201).unwrap();
+    assert_eq!(
+        reconcile_final_preflight_once(&source, &policy, &mut store, 201, "retry", 30, true)
+            .unwrap(),
+        FinalPreflightCycle::Idle
+    );
+    assert_eq!(store.status(201).unwrap(), before);
 }
 
 #[test]
@@ -434,6 +451,134 @@ fn mergeability_blockers_distinguish_conflicts_unknown_and_branch_requirements()
         assert!(
             store
                 .claim_effect_matching("retry", 200, 30, &["OBSERVE_FINAL_PREFLIGHT"])
+                .unwrap()
+                .is_some()
+        );
+    }
+}
+
+#[test]
+fn review_feedback_routing_preserves_other_gates_and_requires_comment_content() {
+    for fault in ["authorization", "ci", "head", "ownership", "empty-comments"] {
+        let directory = tempfile::tempdir().unwrap();
+        let policy = active_policy();
+        let mut source = accepted_source();
+        let mut store = final_review_store(directory.path().join("ledger.db"), &policy, &source);
+        source.threads[0].is_resolved = false;
+        match fault {
+            "authorization" => source.issue_authorized = false,
+            "ci" => source.evidence.check_runs[0].conclusion = Some(CheckConclusion::Failure),
+            "head" => source.evidence.pull_request.head_sha = "e".repeat(40),
+            "ownership" => source.evidence.pull_request.draft = false,
+            "empty-comments" => source.threads[0].comments.clear(),
+            _ => unreachable!(),
+        }
+        let before = store.status(200).unwrap();
+        let result = reconcile_final_preflight_once(
+            &source,
+            &policy,
+            &mut store,
+            200,
+            "preflight",
+            30,
+            true,
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                result,
+                FinalPreflightCycle::Pending { .. } | FinalPreflightCycle::AuthorizationBlocked
+            ),
+            "{fault}: {result:?}"
+        );
+        assert_eq!(store.status(200).unwrap(), before, "{fault}");
+    }
+}
+
+#[test]
+fn unchanged_feedback_or_exhausted_remediation_escalates_instead_of_building_again() {
+    for repeat in [true, false] {
+        let directory = tempfile::tempdir().unwrap();
+        let policy = active_policy();
+        let mut source = accepted_source();
+        source.threads[0].is_resolved = false;
+        let mut store = final_review_store(directory.path().join("ledger.db"), &policy, &source);
+        let case = store.case("repo:984321#1240@1").unwrap().unwrap();
+        // Seed a previous feedback pass, or the policy's exhausted round count.
+        let prior_feedback = EvidenceInput {
+            evidence_id: "previous-feedback".into(),
+            kind: "GITHUB_REVIEW_FEEDBACK".into(),
+            source: "github-pr-77".into(),
+            payload: json!({
+                "head_sha": "a".repeat(40),
+                "threads": [{
+                    "id": source.threads[0].id,
+                    "path": source.threads[0].path,
+                    "comments": source.threads[0].comments,
+                }],
+            }),
+        };
+        store
+            .apply_transition(
+                &TransitionInput {
+                    case_key: case.case_key.clone(),
+                    expected_revision: case.state_revision,
+                    next_state: "FINAL_REVIEW".into(),
+                    remediation_round: if repeat {
+                        1
+                    } else {
+                        policy.max_remediation_rounds
+                    },
+                    plan_version: case.plan_version,
+                    pr_number: case.pr_number,
+                    head_sha: case.head_sha,
+                    observed_at: 150,
+                    event: EventInput {
+                        event_id: "previous-feedback-pass".into(),
+                        event_type: "REVIEWS_PUBLISHED".into(),
+                        payload: json!({}),
+                    },
+                    run: None,
+                    findings: vec![],
+                    evidence: if repeat { vec![prior_feedback] } else { vec![] },
+                    effects: vec![EffectInput {
+                        effect_id: "preflight-again".into(),
+                        effect_type: "OBSERVE_FINAL_PREFLIGHT".into(),
+                        payload: json!({}),
+                    }],
+                },
+                None,
+            )
+            .unwrap();
+        let result = reconcile_final_preflight_once(
+            &source,
+            &policy,
+            &mut store,
+            200,
+            "preflight",
+            30,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            store.case(&case.case_key).unwrap().unwrap().state,
+            "ESCALATED",
+            "{result:?}"
+        );
+        assert!(
+            store
+                .claim_effect_matching(
+                    "builder",
+                    200,
+                    30,
+                    &["DISPATCH_BUILDER", "DISPATCH_FINAL_REVIEWER"]
+                )
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .claim_effect_matching("notify", 200, 30, &["ESCALATE"])
                 .unwrap()
                 .is_some()
         );
@@ -918,6 +1063,12 @@ fn accepted_source() -> FixtureSource {
             is_resolved: true,
             is_outdated: false,
             path: "src/lib.rs".into(),
+            comments: vec![pip_github::ReviewThreadComment {
+                id: "comment-1".into(),
+                body: "Check each action ID independently.".into(),
+                updated_at: "2026-09-09T01:00:00Z".into(),
+                url: "https://github.test/review/1".into(),
+            }],
         }],
         issue_authorized: true,
     }

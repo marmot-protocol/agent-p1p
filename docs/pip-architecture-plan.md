@@ -139,6 +139,13 @@ current PR head, no unresolved mandatory findings, no blocking GitHub reviews
 or threads, and clean mergeability. A new head invalidates earlier head-bound
 approvals. Applicable findings require resolution confirmation by their origin.
 
+Unresolved GitHub threads are actionable feedback, not an indefinite polling
+state: when the other final-preflight gates pass, freeze their complete bounded
+comment text and return to the existing builder loop. The builder assesses each
+request within the accepted scope and records addressed/deferred dispositions.
+Fresh CI and reviews still follow. Repeated identical feedback or exhausted
+remediation bounds escalate; thread closure remains a reviewer/operator action.
+
 Controllers publish plans, draft PRs, lane reviews and readiness comments using
 stable markers. Workers do not receive GitHub publication credentials.
 GitHub text is for humans: concise outcomes, scope, actionable findings, reported

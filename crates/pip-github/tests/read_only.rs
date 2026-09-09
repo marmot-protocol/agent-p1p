@@ -403,6 +403,41 @@ fn review_thread_pagination_requires_a_cursor_and_stays_bounded() {
 }
 
 #[test]
+fn review_feedback_includes_bounded_complete_comment_text() {
+    for fault in ["none", "pagination", "duplicate", "oversized"] {
+        let transport = FakeTransport::default();
+        let comment = serde_json::json!({"id":"PRRC_1","body":"Check both action IDs.","updatedAt":"2026-09-09T01:00:00Z","url":"https://github.test/comment/1"});
+        let mut comments = vec![comment.clone()];
+        if fault == "duplicate" {
+            comments.push(comment);
+        }
+        if fault == "oversized" {
+            comments[0]["body"] = serde_json::json!("x".repeat(64 * 1024 + 1));
+        }
+        let payload = serde_json::json!({"data":{"repository":{"databaseId":984321,"pullRequest":{"number":77,"reviewThreads":{"nodes":[{"id":"PRRT_1","isResolved":false,"isOutdated":false,"path":"src/lib.rs","comments":{"nodes":comments,"pageInfo":{"hasNextPage":fault=="pagination","endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}});
+        transport.push(response(&payload.to_string()));
+        let result =
+            reader(transport.clone()).read_review_threads("marmot-protocol", "mdk", 984321, 77);
+        if fault == "none" {
+            assert_eq!(
+                result.unwrap()[0].comments[0].body,
+                "Check both action IDs."
+            );
+            let request: serde_json::Value =
+                serde_json::from_slice(&transport.requests.borrow()[0].body).unwrap();
+            assert!(
+                request["query"]
+                    .as_str()
+                    .unwrap()
+                    .contains("comments(first:100)")
+            );
+        } else {
+            assert!(result.is_err(), "{fault}");
+        }
+    }
+}
+
+#[test]
 fn review_threads_reject_graphql_errors_identity_drift_and_duplicates() {
     let transport = FakeTransport::default();
     transport.push(response(

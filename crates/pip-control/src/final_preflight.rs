@@ -64,6 +64,10 @@ pub enum FinalPreflightCycle {
         case_key: String,
         head_sha: String,
     },
+    FeedbackRouted {
+        case_key: String,
+        state: String,
+    },
 }
 
 #[derive(Debug)]
@@ -196,6 +200,68 @@ pub fn reconcile_final_preflight_once<'a, S: FinalPreflightSource>(
         }
     };
     if !blockers.is_empty() {
+        // Only review feedback can authorize this bounded follow-up. Do not
+        // turn CI, ownership, authorization or head failures into builder work.
+        if blockers
+            .iter()
+            .all(|blocker| blocker.starts_with("UNRESOLVED_REVIEW_THREAD:"))
+            && threads
+                .iter()
+                .filter(|thread| !thread.is_resolved)
+                .all(|thread| !thread.comments.is_empty())
+        {
+            let mut feedback = threads
+                .iter()
+                .filter(|thread| !thread.is_resolved)
+                .map(|thread| {
+                    let mut comments = thread.comments.clone();
+                    comments.sort_by(|a, b| a.id.cmp(&b.id));
+                    json!({"id":thread.id,"path":thread.path,"comments":comments})
+                })
+                .collect::<Vec<_>>();
+            feedback.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+            let repeated = store
+                .immutable_history_for_case(&case.case_key)?
+                .evidence
+                .iter()
+                .any(|record| {
+                    record.kind == "GITHUB_REVIEW_FEEDBACK"
+                        && record.payload["threads"] == json!(feedback)
+                });
+            let mut command = workflow(
+                &case,
+                policy,
+                observed_at,
+                EvidenceInput {
+                    evidence_id: format!(
+                        "evidence-review-feedback-{}-revision{}",
+                        case.case_key.replace([':', '#', '@'], "-"),
+                        case.state_revision
+                    ),
+                    kind: "GITHUB_REVIEW_FEEDBACK".into(),
+                    source: format!("github-pr-{pr_number}"),
+                    payload: json!({"head_sha":head_sha,"pull_request_number":pr_number,"threads":feedback}),
+                },
+            )?;
+            command.event = if repeated {
+                Event::OperationalBoundReached
+            } else {
+                Event::ReturnToBuild
+            };
+            command.event_payload = json!({
+                "reason": if repeated { "REVIEW_FEEDBACK_ALREADY_ATTEMPTED" } else { "UNRESOLVED_REVIEW_FEEDBACK" },
+                "head_sha":head_sha,"pull_request_number":pr_number,"blockers":blockers,
+                "summary": if repeated { "Review feedback remains unresolved after a builder pass; human review is required." } else { "Assess the unresolved review threads and reviewer suggestions; address useful in-scope changes and explain any deferrals." },
+            });
+            LedgerController::apply(store, &policy.case_policy(), &command)?;
+            return Ok(FinalPreflightCycle::FeedbackRouted {
+                case_key: case.case_key.clone(),
+                state: store
+                    .case(&case.case_key)?
+                    .ok_or(FinalPreflightError::InvalidCase)?
+                    .state,
+            });
+        }
         store.release_effect(&claimed.effect_id, owner)?;
         return Ok(FinalPreflightCycle::Pending {
             case_key: case.case_key,

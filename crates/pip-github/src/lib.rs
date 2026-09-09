@@ -357,6 +357,16 @@ pub struct ReviewThreadSnapshot {
     pub is_resolved: bool,
     pub is_outdated: bool,
     pub path: String,
+    pub comments: Vec<ReviewThreadComment>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewThreadComment {
+    pub id: String,
+    pub body: String,
+    pub updated_at: String,
+    pub url: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -701,6 +711,15 @@ struct GraphqlReviewThread {
     #[serde(rename = "isOutdated")]
     is_outdated: bool,
     path: String,
+    #[serde(default)]
+    comments: Option<GraphqlThreadComments>,
+}
+
+#[derive(Deserialize)]
+struct GraphqlThreadComments {
+    nodes: Vec<ReviewThreadComment>,
+    #[serde(rename = "pageInfo")]
+    page_info: GraphqlPageInfo,
 }
 
 #[derive(Deserialize)]
@@ -1121,7 +1140,7 @@ impl<T: ReadTransport> GitHubReader<T> {
         if repository_id == 0 || pull_request_number == 0 {
             return Err(GitHubError::InvalidIdentity);
         }
-        const QUERY: &str = "query PipReviewThreads($owner:String!,$repository:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repository){databaseId pullRequest(number:$number){number reviewThreads(first:100,after:$after){nodes{id isResolved isOutdated path} pageInfo{hasNextPage endCursor}}}}}";
+        const QUERY: &str = "query PipReviewThreads($owner:String!,$repository:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repository){databaseId pullRequest(number:$number){number reviewThreads(first:100,after:$after){nodes{id isResolved isOutdated path comments(first:100){nodes{id body updatedAt url} pageInfo{hasNextPage endCursor}}} pageInfo{hasNextPage endCursor}}}}}";
         let number =
             i64::try_from(pull_request_number).map_err(|_| GitHubError::InvalidIdentity)?;
         let mut after: Option<String> = None;
@@ -1160,11 +1179,31 @@ impl<T: ReadTransport> GitHubReader<T> {
                 {
                     return Err(GitHubError::InvalidIdentity);
                 }
+                let comments = match thread.comments {
+                    Some(comments) => {
+                        if comments.page_info.has_next_page {
+                            return Err(GitHubError::PaginationLimit);
+                        }
+                        let mut comment_ids = BTreeSet::new();
+                        if comments.nodes.iter().any(|comment| {
+                            comment.id.trim().is_empty()
+                                || comment.updated_at.trim().is_empty()
+                                || comment.url.trim().is_empty()
+                                || comment.body.len() > 64 * 1024
+                                || !comment_ids.insert(&comment.id)
+                        }) {
+                            return Err(GitHubError::InvalidIdentity);
+                        }
+                        comments.nodes
+                    }
+                    None => Vec::new(),
+                };
                 threads.push(ReviewThreadSnapshot {
                     id: thread.id,
                     is_resolved: thread.is_resolved,
                     is_outdated: thread.is_outdated,
                     path: thread.path,
+                    comments,
                 });
             }
             if !pull.review_threads.page_info.has_next_page {

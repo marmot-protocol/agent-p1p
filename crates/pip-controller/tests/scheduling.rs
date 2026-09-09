@@ -173,7 +173,8 @@ fn role_evidence_focus_uses_exact_current_records_without_copying_history() {
             {"kind":"GITHUB_CI","payload_sha256":"old-ci","payload":{"pull_request":{"head_sha":"c".repeat(40)}}},
             {"kind":"GITHUB_CI","payload_sha256":"ci","payload":{"pull_request":{"head_sha":"b".repeat(40)}}},
             {"kind":"GITHUB_FINAL_PREFLIGHT","payload_sha256":"preflight","payload":{}},
-            {"kind":"GITHUB_CI","payload_sha256":"different-head-ci","payload":{"pull_request":{"head_sha":"d".repeat(40)}}}
+            {"kind":"GITHUB_CI","payload_sha256":"different-head-ci","payload":{"pull_request":{"head_sha":"d".repeat(40)}}},
+            {"kind":"GITHUB_REVIEW_FEEDBACK","payload_sha256":"feedback","payload":{"head_sha":"b".repeat(40)}}
         ]
     });
     for (effect, expected) in [
@@ -192,6 +193,7 @@ fn role_evidence_focus_uses_exact_current_records_without_copying_history() {
                 "ci",
                 "general-finding",
                 "kimi-finding",
+                "feedback",
             ],
         ),
         (
