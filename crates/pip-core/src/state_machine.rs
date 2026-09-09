@@ -327,6 +327,12 @@ pub fn transition(
     if context.max_remediation_rounds == 0 {
         return Err(TransitionError::InvalidLoopBound);
     }
+    // A proven historical merge misclassification can correct terminal
+    // bookkeeping, never reopen work. The controller verifies prior readiness
+    // and the original takeover evidence before accepting this fact.
+    if state == CaseState::TakenOver && event == Event::HumanMerged {
+        return decision(CaseState::Completed, &[Effect::RecordCompletion]);
+    }
     if state.is_terminal() {
         return Err(TransitionError::TerminalState(state));
     }

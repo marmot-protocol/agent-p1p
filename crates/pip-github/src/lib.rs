@@ -323,7 +323,7 @@ pub struct ReviewSnapshot {
     pub body: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PullRequestSnapshot {
     pub id: u64,
     pub number: u64,

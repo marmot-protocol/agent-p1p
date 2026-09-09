@@ -9,7 +9,7 @@ use pip_core::{
     CaseId, CaseState, Event, EventId, GitSha, IssueNumber, ObservedAt, PlanVersion,
     PolicyRevision, PullRequestNumber, RepositoryId, StateRevision, WorkflowVersion,
 };
-use pip_github::{GitHubError, PullRequestEvidence};
+use pip_github::{GitHubError, PullRequestSnapshot};
 use pip_store::{EvidenceInput, Store, StoreError, StoredCase};
 use serde::Serialize;
 
@@ -89,19 +89,26 @@ pub fn reconcile_takeover_once<'a, S: PullRequestSource>(
         .filter(|case| {
             scope.matches(case)
                 && case.pr_number.is_some()
-                && !matches!(
-                    case.state.as_str(),
-                    "COMPLETED" | "ABANDONED" | "TAKEN_OVER"
-                )
+                && !matches!(case.state.as_str(), "COMPLETED" | "ABANDONED")
         })
         .collect::<Vec<_>>();
     cases.sort_by_key(|case| (case.issue_number, case.workflow_version));
     if cases.is_empty() {
         return Ok(TakeoverCycle::Idle);
     }
-    let case_count = cases.len();
+    let mut case_count = 0;
     let mut transitioned = Vec::new();
     for case in cases {
+        let historical_ready = if case.state == "TAKEN_OVER" {
+            let Some(ready) = legacy_merged_ready_case(store, &case, policy, expected_actor)?
+            else {
+                continue;
+            };
+            Some(ready)
+        } else {
+            None
+        };
+        case_count += 1;
         if case.policy_revision != policy.revision {
             return Err(TakeoverError::InvalidCase);
         }
@@ -112,14 +119,28 @@ pub fn reconcile_takeover_once<'a, S: PullRequestSource>(
             policy.repository.id,
             pr_number,
         )?;
-        validate_repository_identity(&case, policy, &evidence)?;
-        let blockers = takeover_blockers(&case, policy, expected_actor, &evidence)?;
+        validate_repository_identity(&case, policy, &evidence.pull_request)?;
+        let binding = historical_ready
+            .as_ref()
+            .map(|(ready, _)| ready)
+            .unwrap_or(&case);
+        let blockers = takeover_blockers(binding, policy, expected_actor, &evidence.pull_request)?;
+        let completed = binding.state == "SHADOW_READY"
+            && blockers == ["PR_DISPOSITION_CHANGED"]
+            && confirmed_merge(&evidence.pull_request)
+            && historical_ready.as_ref().is_none_or(|(_, merge_sha)| {
+                evidence.pull_request.merge_commit_sha.as_ref() == Some(merge_sha)
+            });
+        // A correction cannot reinterpret a later human change as Pip success.
+        if historical_ready.is_some() && !completed {
+            continue;
+        }
         if blockers.is_empty() {
             continue;
         }
         let payload = serde_json::to_value(&evidence)
             .map_err(|error| TakeoverError::Serialization(error.to_string()))?;
-        let command = takeover_command(
+        let mut command = takeover_command(
             &case,
             policy,
             observed_at,
@@ -132,15 +153,31 @@ pub fn reconcile_takeover_once<'a, S: PullRequestSource>(
                     case.workflow_version,
                     case.state_revision
                 ),
-                kind: "GITHUB_TAKEOVER".into(),
+                kind: if completed {
+                    "GITHUB_HUMAN_MERGE"
+                } else {
+                    "GITHUB_TAKEOVER"
+                }
+                .into(),
                 source: format!("github-pr-{pr_number}"),
                 payload,
             },
         )?;
+        if completed {
+            command.event = Event::HumanMerged;
+            command.event_payload = serde_json::json!({
+                "pull_request_number": pr_number,
+                "head_sha": evidence.pull_request.head_sha,
+                "merge_commit_sha": evidence.pull_request.merge_commit_sha,
+                "corrects_takeover_revision": historical_ready.as_ref().map(|_| case.state_revision),
+            });
+        }
         LedgerController::apply(store, &policy.case_policy(), &command)?;
         transitioned.push(case.case_key);
     }
-    if transitioned.is_empty() {
+    if case_count == 0 {
+        Ok(TakeoverCycle::Idle)
+    } else if transitioned.is_empty() {
         Ok(TakeoverCycle::Owned { case_count })
     } else {
         Ok(TakeoverCycle::Transitioned {
@@ -149,12 +186,83 @@ pub fn reconcile_takeover_once<'a, S: PullRequestSource>(
     }
 }
 
+fn confirmed_merge(pull: &PullRequestSnapshot) -> bool {
+    pull.merged
+        && !pull.open
+        && !pull.draft
+        && pull
+            .merge_commit_sha
+            .as_deref()
+            .is_some_and(|sha| GitSha::from_str(sha).is_ok())
+}
+
+/// Correct only the former ready -> takeover-on-merge bug. No event or evidence
+/// is rewritten, and genuine takeovers are not polled or revived.
+fn legacy_merged_ready_case(
+    store: &Store,
+    case: &StoredCase,
+    policy: &RepositoryPolicy,
+    expected_actor: u64,
+) -> Result<Option<(StoredCase, String)>, TakeoverError> {
+    let Some(revision) = case.state_revision.checked_sub(1) else {
+        return Ok(None);
+    };
+    let Some(prior) = store.case_at_revision(&case.case_key, revision)? else {
+        return Ok(None);
+    };
+    if prior.state != "SHADOW_READY"
+        || prior.head_sha != case.head_sha
+        || prior.pr_number != case.pr_number
+        || prior.policy_revision != case.policy_revision
+    {
+        return Ok(None);
+    }
+    let history = store.immutable_history_for_case(&case.case_key)?;
+    let Some(event) = history.events.last() else {
+        return Ok(None);
+    };
+    if event.state_revision != case.state_revision
+        || event.event_type != "HUMAN_TOOK_OVER"
+        || event.payload["blockers"] != serde_json::json!(["PR_DISPOSITION_CHANGED"])
+        || !crate::draft_pr::payload_matches(&event.payload, &event.payload_sha256)
+    {
+        return Ok(None);
+    }
+    let evidence_id = format!(
+        "evidence-takeover-repo{}-issue{}-workflow{}-revision{}",
+        case.repository_id, case.issue_number, case.workflow_version, revision
+    );
+    let Some(record) = history
+        .evidence
+        .iter()
+        .find(|record| record.evidence_id == evidence_id && record.kind == "GITHUB_TAKEOVER")
+    else {
+        return Ok(None);
+    };
+    if !crate::draft_pr::payload_matches(&record.payload, &record.payload_sha256) {
+        return Ok(None);
+    }
+    let Ok(pull) =
+        serde_json::from_value::<PullRequestSnapshot>(record.payload["pull_request"].clone())
+    else {
+        return Ok(None);
+    };
+    let valid = confirmed_merge(&pull)
+        && validate_repository_identity(&prior, policy, &pull).is_ok()
+        && takeover_blockers(&prior, policy, expected_actor, &pull)? == ["PR_DISPOSITION_CHANGED"];
+    Ok(valid.then(|| {
+        (
+            prior,
+            pull.merge_commit_sha.expect("confirmed merge has a commit"),
+        )
+    }))
+}
+
 fn validate_repository_identity(
     case: &StoredCase,
     policy: &RepositoryPolicy,
-    evidence: &PullRequestEvidence,
+    pull: &PullRequestSnapshot,
 ) -> Result<(), TakeoverError> {
-    let pull = &evidence.pull_request;
     if pull.number != case.pr_number.ok_or(TakeoverError::InvalidCase)?
         || pull.head_repository_id != policy.repository.id
         || pull.head_repository != policy.repository.full_name()
@@ -169,9 +277,8 @@ fn takeover_blockers(
     case: &StoredCase,
     policy: &RepositoryPolicy,
     expected_actor: u64,
-    evidence: &PullRequestEvidence,
+    pull: &PullRequestSnapshot,
 ) -> Result<Vec<String>, TakeoverError> {
-    let pull = &evidence.pull_request;
     let expected_branch = format!(
         "{}repo-{}/issue-{}/workflow-{}",
         policy.branch_prefix, case.repository_id, case.issue_number, case.workflow_version

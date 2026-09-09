@@ -1375,6 +1375,21 @@ fn accepted_transition_replays_without_duplicate_history_or_effects() {
     assert_eq!(projected.plan_version, rebuilt.plan_version);
     assert_eq!(projected.pr_number, rebuilt.pr_number);
     assert_eq!(projected.head_sha, rebuilt.head_sha);
+    let original = store
+        .case_at_revision(&projected.case_key, 1)
+        .unwrap()
+        .unwrap();
+    assert_eq!(original.state, "PLANNING");
+    assert_eq!(original.state_revision, 1);
+    assert_eq!(
+        store.case_at_revision(&projected.case_key, 2).unwrap(),
+        Some(rebuilt)
+    );
+    assert_eq!(
+        store.case_at_revision(&projected.case_key, 3).unwrap(),
+        None
+    );
+    assert_eq!(store.case_at_revision("missing-case", 1).unwrap(), None);
 }
 
 #[test]

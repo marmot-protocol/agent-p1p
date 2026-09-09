@@ -58,13 +58,19 @@ fn curated_target_transition_oracle_passes() {
 }
 
 #[test]
-fn terminal_states_reject_every_event() {
+fn terminal_states_reject_work_and_only_allow_merge_classification_correction() {
     for state in [
         CaseState::Completed,
         CaseState::Abandoned,
         CaseState::TakenOver,
     ] {
         for event in Event::ALL {
+            if state == CaseState::TakenOver && event == Event::HumanMerged {
+                let result = transition(state, event, TransitionContext::default()).unwrap();
+                assert_eq!(result.next_state, CaseState::Completed);
+                assert_eq!(result.effects, [Effect::RecordCompletion]);
+                continue;
+            }
             assert_eq!(
                 transition(state, event, TransitionContext::default()),
                 Err(TransitionError::TerminalState(state))

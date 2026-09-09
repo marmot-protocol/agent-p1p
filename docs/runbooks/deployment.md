@@ -100,6 +100,14 @@ policy, but must not reinterpret old archived tasks or late completions under
 new models. Missing historical bindings fail closed; collection never revives
 a superseded job.
 
+Human merges now consume the existing `HUMAN_MERGED` transition from
+`SHADOW_READY` to `COMPLETED`; no merge permission or issue reauthorization is
+needed to observe this fact. Reconciliation can also append a correction for the
+old merge-as-takeover bug, but only with immediately prior readiness, a sole
+disposition-change blocker, and matching original/fresh merged-PR evidence.
+Actual takeovers stay terminal. Do not edit historical rows or reset a case to
+replay the merge; the normal controller records completion without new work.
+
 Final preflight routes unresolved GitHub review threads back to the builder
 when fresh authorization, ownership, exact-head reviews and CI otherwise pass.
 The full bounded comment snapshot is retained as `GITHUB_REVIEW_FEEDBACK` and

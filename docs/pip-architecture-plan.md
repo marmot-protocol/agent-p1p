@@ -58,6 +58,9 @@ lifecycle boundary before use.
     draft PR ready for review and publish a human-held readiness recommendation.
     A person reviews and merges. Promotion and notification retry idempotently;
     leaving draft after accepted final review is not itself a human takeover.
+11. Observe the human merge of the same accepted PR head and record `COMPLETED`,
+    retaining GitHub's merge commit SHA separately from the reviewed head. This
+    is read-only observation, not merge authority, and works after issue closure.
 
 If a person marks an owned, open PR ready before Pip finishes, Pip records human
 takeover and posts one concise handoff comment on that PR. The comment explains
@@ -67,6 +70,12 @@ idempotent publication path and still requires publication authorization. Other
 takeover causes (such as a closed/merged or foreign PR) must not receive this
 early-ready explanation. Already-recorded terminal history is not replayed just
 to backfill a notice.
+
+A narrowly proven historical ready-to-takeover misclassification may append
+`HUMAN_MERGED` and move to `COMPLETED`: the immediately preceding state must be
+`SHADOW_READY`, the original takeover must record only the PR disposition change,
+and original plus fresh GitHub evidence must confirm the same owned, merged PR
+and head. Original events remain intact. Other terminal cases cannot reopen work.
 
 This is a dynamic bounded loop, not a pre-created multi-round DAG. Rust creates
 only currently authorized work; no synthetic activation-gate cards. Hermes

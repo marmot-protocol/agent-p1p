@@ -1337,6 +1337,19 @@ impl Store {
     }
 
     pub fn reconstruct_case(&self, case_key: &str) -> Result<Option<StoredCase>> {
+        self.case_at_revision_limit(case_key, None)
+    }
+
+    /// Immutable case projection at an exact accepted revision, never a fallback.
+    pub fn case_at_revision(&self, case_key: &str, revision: u64) -> Result<Option<StoredCase>> {
+        self.case_at_revision_limit(case_key, Some(revision))
+    }
+
+    fn case_at_revision_limit(
+        &self,
+        case_key: &str,
+        revision: Option<u64>,
+    ) -> Result<Option<StoredCase>> {
         Ok(self
             .connection
             .query_row(
@@ -1344,8 +1357,9 @@ impl Store {
                         e.plan_version, e.pr_number, e.head_sha,
                         c.repository_id, c.issue_number, c.workflow_version
                  FROM events e JOIN cases c ON c.case_key = e.case_key
-                 WHERE e.case_key = ?1 ORDER BY e.state_revision DESC LIMIT 1",
-                [case_key],
+                 WHERE e.case_key = ?1 AND (?2 IS NULL OR e.state_revision = ?2)
+                 ORDER BY e.state_revision DESC LIMIT 1",
+                params![case_key, revision.map(sql_u64).transpose()?],
                 |row| {
                     let revision: i64 = row.get(1)?;
                     let policy: i64 = row.get(2)?;
