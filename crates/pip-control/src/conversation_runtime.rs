@@ -138,6 +138,14 @@ pub fn reconcile_conversation_once<
             .map(|k| store.case(k))
             .transpose()?
             .flatten();
+        if let Some(case) = &case
+            && (case.repository_id != policy.repository.id
+                || (case.issue_number != message.input.thread_number
+                    && case.pr_number != Some(message.input.thread_number)))
+        {
+            return Err("discussion case identity changed".into());
+        }
+        let pipeline_status = pipeline_status(store, case.as_ref(), policy, now)?;
         let plan = if let Some(case) = &case {
             store
                 .runs_for_case(&case.case_key)?
@@ -157,7 +165,7 @@ pub fn reconcile_conversation_once<
                 "thread_number":message.input.thread_number,"source_comment":original,
                 "title":context.issue_content.title,"issue_body":excerpt(&context.issue_content.body,16_000),
                 "recent_comments":context.comments.iter().rev().take(12).map(|c| json!({"id":c.id,"actor_id":c.actor_id,"body":excerpt(&c.body,1500)})).collect::<Vec<_>>(),
-                "case":case,"latest_plan_excerpt":plan,"read_only_repository":policy.checkout,
+                "case":case,"pipeline_status":pipeline_status,"latest_plan_excerpt":plan,"read_only_repository":policy.checkout,
                 "provider":role.provider,"model":role.model,"reasoning_effort":role.reasoning_effort,
                 "skills_repository_commit":skills_commit,"policy_revision":policy.revision,
                 "instructions":"Answer the specific human message using the conversation skill. Do not edit files, run builds, or mutate GitHub. A mention does not authorize a build."}),
@@ -246,6 +254,86 @@ pub fn reconcile_conversation_once<
     };
     store.finish_conversation(&key, "PUBLISHED", Some(reply))?;
     Ok(json!({"result":"published","message_key":key,"reply_id":reply}))
+}
+
+/// A frozen, case-scoped explanation input, never permission to retry work.
+fn pipeline_status(
+    store: &Store,
+    case: Option<&pip_store::StoredCase>,
+    policy: &RepositoryPolicy,
+    now: u64,
+) -> Result<Value> {
+    let mut status = json!({
+        "source":"rust_ledger", "observed_at":now, "case":case,
+        "tracking":if case.is_some() {"TRACKED"} else {"NO_BOUND_CASE"},
+        "limitations":["Frozen at conversation dispatch, not a live status query.",
+            "Recent history only; absent evidence does not prove success or no activity.",
+            "GitHub CI, runner health, logs and native worker liveness are not refreshed here.",
+            "An attempt completing does not by itself mean its result was accepted."]
+    });
+    let Some(case) = case else {
+        return Ok(status);
+    };
+    let activity = store.case_activity(&case.case_key)?;
+    status["recent_events"] = json!(
+        activity
+            .recent_events
+            .iter()
+            .map(|event| {
+                let mut details = json!({});
+                // Deliberately omit raw evidence, prompts, provider results and error strings.
+                for key in ["head_sha", "verdict", "pull_request_number"] {
+                    if let Some(value) = event.payload.get(key) {
+                        if let Some(value) = value.as_str() {
+                            details[key] = json!(excerpt(value, 160));
+                        } else if value.is_u64() {
+                            details[key] = value.clone();
+                        }
+                    }
+                }
+                if let Some(blockers) = event.payload["blockers"].as_array() {
+                    details["blockers"] = json!(
+                        blockers
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .take(8)
+                            .map(|s| excerpt(s, 240))
+                            .collect::<Vec<_>>()
+                    );
+                    details["blockers_truncated"] = json!(blockers.len() > 8);
+                }
+                json!({"event_id":event.event_id, "state_revision":event.state_revision,
+            "observed_at":event.observed_at, "event":event.event_type, "details":details})
+            })
+            .collect::<Vec<_>>()
+    );
+    status["recent_direct_attempts"] = json!(activity.recent_attempts);
+    status["pending_effect_count"] = json!(activity.pending_effect_count);
+    status["history_limit_per_kind"] = json!(8);
+    status["operator_recovery_required"] =
+        json!(matches!(case.state.as_str(), "ESCALATED" | "BLOCKED"));
+    status["next_step"] = json!(match case.state.as_str() {
+        "PLANNING" => "Await an accepted planner result.",
+        "WAITING_HUMAN" => "Await human clarification or scope decision.",
+        "READY_TO_BUILD" => "Await authorized builder dispatch; not proof a builder is running.",
+        "BUILDING" | "REMEDIATING" => "Await an accepted implementation result.",
+        "WAITING_CI" => "Await required CI for the recorded PR head.",
+        "REVIEWING" => "Await required independent reviews for the recorded PR head.",
+        "FINAL_REVIEW" => "Await final review and fresh readiness checks.",
+        "SHADOW_READY" =>
+            "Await readiness publication and human review/merge; no autonomous merge.",
+        "ESCALATED" | "BLOCKED" =>
+            "Operator attention required; this conversation cannot restart work.",
+        "COMPLETED" => "Work is completed; no restart is authorized.",
+        "TAKEN_OVER" => "Work belongs to the human; automation must not resume it.",
+        "ABANDONED" => "Work is retired; this conversation cannot reopen it.",
+        _ => "Consult the recorded state and policy; no additional action is authorized here.",
+    });
+    status["current_policy"] = json!({"revision":policy.revision,
+        "max_remediation_rounds":policy.max_remediation_rounds,
+        "max_case_elapsed_seconds":policy.max_case_elapsed_seconds,
+        "note":"Current policy, not necessarily the policy of historical events or jobs."});
+    Ok(status)
 }
 
 fn handoff<S: IntakeSource>(

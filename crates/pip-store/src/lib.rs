@@ -16,6 +16,8 @@ use sha2::{Digest, Sha256};
 mod builder_retry;
 mod conversations;
 pub use conversations::{Conversation, ConversationInput};
+mod case_activity;
+pub use case_activity::CaseActivity;
 mod dispatch_intents;
 mod reauthorization;
 mod task_results;

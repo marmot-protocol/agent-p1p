@@ -1,7 +1,7 @@
 ---
 name: conversation
 description: Answer a human GitHub mention or reply and assess feedback without changing code.
-version: 0.1.0
+version: 0.2.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -35,6 +35,26 @@ honest explanation rather than reporting a successful result.
 
 ## Behavior
 
+- For pipeline/status questions, use `pipeline_status`: the controller's bounded,
+  read-only snapshot of the Rust ledger for this issue or its owned PR. Explain
+  the stage, latest relevant recorded blocker, and next step in plain language.
+  Say when the snapshot was taken (`observed_at`, Unix seconds); never describe
+  it as a live GitHub/runner check. If it is absent on an older frozen task,
+  acknowledge that limitation rather than inventing state.
+- Compare event `details.head_sha` with `case.head_sha` before attributing CI or
+  review outcomes to the current head. Older decisions are history, not current
+  approvals. A completed direct attempt is not necessarily an accepted build.
+  Pending effects mean outstanding controller actions, not running workers.
+  Do not infer a failure's root cause from a failed check name alone.
+- History is newest-first and bounded. Missing diagnostics, native worker
+  liveness, or live CI must be described as unavailable. `NO_BOUND_CASE` means
+  no case was bound to this message, not proof this issue has never been tracked.
+  Current policy limits may differ from the policy of historical jobs.
+- A status question alone uses `follow_up: NONE`. Explaining an escalated,
+  blocked, taken-over, retired, or completed case never authorizes recovery.
+  State clearly when operator intervention is needed; do not promise that a
+  comment has restarted it. Keep JSON, internal IDs and routine history dumps
+  out of the reply; use a short summary and relevant issue/PR links instead.
 - Answer direct mentions on configured repositories, including threads with no
   Pip case. Explain findings without claiming the issue or promising a build.
 - On Pip work, evaluate human suggestions as well as blocking findings. Recommend

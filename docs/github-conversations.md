@@ -58,6 +58,30 @@ read-only and must disclose missing evidence. Read-only is the task's mandate;
 this feature does not add a new OS-level sandbox. It inherits the existing native
 Hermes execution boundary.
 
+### Pipeline introspection
+
+New conversation tasks also receive a frozen `pipeline_status` snapshot produced
+by the controller from the authoritative Rust ledger. It includes the bound
+issue/PR case, observation time, the eight newest decisions and direct attempt
+summaries, pending-effect count, current policy limits, and the next expected
+step. Decision details whitelist recorded head, CI verdict and bounded blocker
+strings; provider output, raw errors, credentials and full history are excluded.
+No database credential, new status daemon, schema migration or recovery authority
+is added. Queries are case-scoped and read-only.
+
+Answers must distinguish recorded state from live observations. The snapshot
+does not refresh CI, inspect service health or attest that a native worker is
+running. Old-head decisions cannot approve a new head; attempt completion does
+not prove result acceptance. Missing history is not proof of success. Unbound
+messages report no bound case, not that no case exists. A status-only question
+must not request replanning, and an escalated case can be explained without being
+restarted. Replies remain concise human-readable Markdown.
+
+The existing serial scheduling boundary still applies: a conversation can wait
+for an active worker to finish. Its snapshot is taken when the conversation is
+reserved and stays immutable across retries; it is not a continuously refreshing
+dashboard. Deploy with conversation jobs drained before updating the skill.
+
 ## Enablement checklist
 
 1. Install a tested release containing schema 13 and the `conversation` skill.

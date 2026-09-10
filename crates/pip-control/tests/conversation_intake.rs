@@ -72,15 +72,25 @@ impl pip_control::DispositionWriter for Replies {
 
 #[test]
 fn conversation_runs_once_and_publishes_without_creating_a_case() {
-    conversation_roundtrip(false);
+    conversation_roundtrip(false, None);
 }
 
 #[test]
 fn clarification_replans_once_preserving_history_and_label_authority() {
-    conversation_roundtrip(true);
+    conversation_roundtrip(true, Some("WAITING_HUMAN"));
 }
 
-fn conversation_roundtrip(follow_up: bool) {
+#[test]
+fn escalated_pipeline_can_be_explained_without_restarting_work() {
+    conversation_roundtrip(false, Some("ESCALATED"));
+}
+
+#[test]
+fn conversation_replan_recommendation_cannot_restart_escalated_work() {
+    conversation_roundtrip(true, Some("ESCALATED"));
+}
+
+fn conversation_roundtrip(follow_up: bool, state: Option<&str>) {
     let dir = tempfile::tempdir().unwrap();
     let mut path = dir.path().join("ledger.db");
     let mut store = Store::open(&path).unwrap();
@@ -117,8 +127,8 @@ fn conversation_roundtrip(follow_up: bool) {
         })
         .unwrap();
     let queue = Queue::default();
-    if follow_up {
-        queue.1.set(true);
+    if let Some(state) = state {
+        queue.1.set(follow_up);
         let case_key = format!("repo:{}#42@3", policy.repository.id);
         store
             .create_case(&pip_store::NewCase {
@@ -127,12 +137,12 @@ fn conversation_roundtrip(follow_up: bool) {
                 issue_number: 42,
                 workflow_version: 3,
                 policy_revision: policy.revision,
-                initial_state: "WAITING_HUMAN".into(),
+                initial_state: state.into(),
                 observed_at: 90,
                 event: pip_store::EventInput {
                     event_id: "authorized-before-conversation".into(),
-                    event_type: "ISSUE_AUTHORIZED".into(),
-                    payload: json!({}),
+                    event_type: "CI_FAILED".into(),
+                    payload: json!({"head_sha":"b".repeat(40),"blockers":["CHECK_RUN_FAILURE: Required CI"],"private_debug":"must not reach the conversation"}),
                 },
                 effects: vec![],
             })
@@ -165,7 +175,23 @@ fn conversation_roundtrip(follow_up: bool) {
     };
     assert_eq!(run(&mut store).unwrap()["result"], "queued");
     assert_eq!(queue.0.borrow().len(), 1);
-    if !follow_up {
+    let body: serde_json::Value = serde_json::from_str(&queue.0.borrow()[0].body).unwrap();
+    let snapshot = &body["pipeline_status"];
+    assert_eq!(snapshot["observed_at"], 101);
+    assert_eq!(snapshot["source"], "rust_ledger");
+    if let Some(state) = state {
+        assert_eq!(snapshot["case"]["state"], state);
+        assert_eq!(
+            snapshot["recent_events"][0]["details"]["blockers"][0],
+            "CHECK_RUN_FAILURE: Required CI"
+        );
+        assert_eq!(snapshot["recent_events"][0]["observed_at"], 90);
+        assert!(!snapshot.to_string().contains("private_debug"));
+        assert_eq!(snapshot["operator_recovery_required"], state == "ESCALATED");
+    } else {
+        assert_eq!(snapshot["tracking"], "NO_BOUND_CASE");
+    }
+    if state.is_none() {
         let message = store.conversation(key).unwrap().unwrap();
         path = dir.path().join("crash-before-binding.db");
         let mut recovered = Store::open(&path).unwrap();
@@ -189,7 +215,7 @@ fn conversation_roundtrip(follow_up: bool) {
     assert_eq!(run(&mut store).unwrap()["result"], "idle");
     assert_eq!(writer.0.borrow().len(), 1);
     assert!(writer.0.borrow()[0].contains("Here is the explanation."));
-    if follow_up {
+    if follow_up && state == Some("WAITING_HUMAN") {
         let case = &store.status(102).unwrap().cases[0];
         assert_eq!(case.state, "PLANNING");
         assert_eq!(case.state_revision, 2);
@@ -197,6 +223,12 @@ fn conversation_roundtrip(follow_up: bool) {
         let history = store.immutable_history_for_case(&case.case_key).unwrap();
         assert_eq!(history.events.len(), 2);
         assert_eq!(history.evidence[0].kind, "HUMAN_DISCUSSION");
+    } else if let Some(state) = state {
+        let cases = store.status(102).unwrap().cases;
+        assert_eq!(cases.len(), 1);
+        assert_eq!(cases[0].state, state);
+        assert_eq!(cases[0].state_revision, 1);
+        assert_eq!(store.outbox_count().unwrap(), 0);
     } else {
         assert!(store.status(102).unwrap().cases.is_empty());
         assert_eq!(store.outbox_count().unwrap(), 0);

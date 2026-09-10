@@ -97,6 +97,9 @@ recommends a bounded planning follow-up; only the controller may hand feedback t
 an existing, freshly authorized case at a safe worker boundary. This lane never
 approves CI, review heads, sensitive scope or merges. See
 [GitHub conversations](github-conversations.md) for behavior and rollout gates.
+Conversation jobs receive bounded, timestamped case-status evidence from the
+ledger so they can explain progress and blockers without direct database access
+or retry authority. Historical decisions are not live CI or runner-health checks.
 
 ### Case jobs
 
