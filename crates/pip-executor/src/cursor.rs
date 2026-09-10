@@ -261,7 +261,10 @@ impl<R: ProcessRunner> CursorExecutor<R> {
             }),
         )?;
 
-        let reviewer_before = if task.binding.role == WorkerRole::ReviewerSecperf {
+        let reviewer_before = if matches!(
+            task.binding.role,
+            WorkerRole::ReviewerGeneral | WorkerRole::ReviewerSecperf
+        ) {
             let snapshot = self.git_snapshot(&worktree)?;
             if !snapshot.status.is_empty() {
                 return Err(CursorExecutionError::ReviewerDirtyBaseline);
@@ -383,7 +386,7 @@ struct GitSnapshot {
 fn validate_task(task: &CursorTask) -> Result<(), CursorExecutionError> {
     if !matches!(
         task.binding.role,
-        WorkerRole::Builder | WorkerRole::ReviewerSecperf
+        WorkerRole::Builder | WorkerRole::ReviewerGeneral | WorkerRole::ReviewerSecperf
     ) || !task.immutable_input.is_object()
         || task.workflow_skill.trim().is_empty()
         || task.role_skill.trim().is_empty()

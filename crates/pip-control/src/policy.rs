@@ -39,6 +39,31 @@ pub struct IntakeConfiguration {
     pub global_active_limit: u32,
 }
 
+/// Execution capacity is distinct from the number of admitted issues.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionCapacity {
+    pub native_sessions: u32,
+    pub builders: u32,
+    pub direct_reviewers: u32,
+    pub ready_plans: u32,
+    pub cargo_jobs: u32,
+}
+
+impl ExecutionCapacity {
+    pub(crate) fn valid(self) -> bool {
+        [
+            self.native_sessions,
+            self.builders,
+            self.direct_reviewers,
+            self.ready_plans,
+            self.cargo_jobs,
+        ]
+        .into_iter()
+        .all(|n| (1..=8).contains(&n))
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GitHubConfiguration {
@@ -128,6 +153,8 @@ pub struct RepositoryPolicy {
     pub github: GitHubConfiguration,
     pub intake: IntakeConfiguration,
     pub dispatch_enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_capacity: Option<ExecutionCapacity>,
     pub merge: MergeConfiguration,
     pub max_remediation_rounds: u32,
     pub max_case_elapsed_seconds: u64,
@@ -143,6 +170,26 @@ pub struct RepositoryPolicy {
 }
 
 impl RepositoryPolicy {
+    /// Capacity-only rollouts may change execution scheduling, never the accepted
+    /// authority, models, retry budgets or paths of an existing case.
+    pub fn execution_policy_for(&self, accepted: &Self) -> Option<Self> {
+        let normalize = |policy: &Self| {
+            let mut policy = policy.clone();
+            policy.revision = 1;
+            policy.execution_capacity = None;
+            policy.intake.repository_active_limit = 1;
+            policy.intake.global_active_limit = 1;
+            policy.conversations_enabled = false;
+            serde_json::to_value(policy).ok()
+        };
+        if normalize(self)? != normalize(accepted)? {
+            return None;
+        }
+        let mut effective = self.clone();
+        effective.revision = accepted.revision;
+        Some(effective)
+    }
+
     pub fn intake_policy(&self, global_paused: bool) -> IntakePolicy {
         IntakePolicy {
             revision: PolicyRevision::new(
@@ -187,6 +234,12 @@ impl RepositoryPolicy {
             })
             .collect();
         WorkflowPolicy::new(&self.board, &self.workspace, &self.branch_prefix, roles)
+            .and_then(|workflow| match self.execution_capacity {
+                Some(capacity) => workflow
+                    .with_isolated_reviews()
+                    .with_cargo_jobs(capacity.cargo_jobs),
+                None => Ok(workflow),
+            })
             .and_then(|workflow| {
                 workflow.with_sensitive_scope_categories(self.sensitive_scope_categories.clone())
             })
@@ -330,6 +383,9 @@ fn validate_policy(policy: &RepositoryPolicy) -> Result<(), PolicyError> {
         && exclusions.is_disjoint(&held)
         && policy.intake.repository_active_limit > 0
         && policy.intake.global_active_limit > 0
+        && policy
+            .execution_capacity
+            .is_none_or(ExecutionCapacity::valid)
         && policy.merge.is_shadow()
         && !policy.merge.autonomous
         && matches!(policy.merge.method.as_str(), "merge" | "squash" | "rebase")

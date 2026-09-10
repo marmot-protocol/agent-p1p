@@ -260,6 +260,7 @@ fn bootstrap_refuses_unmanaged_profile_or_redirected_authentication() {
 
 fn spec(root: &std::path::Path, skills: &std::path::Path) -> RuntimeBootstrapSpec {
     RuntimeBootstrapSpec {
+        max_native_sessions: 1,
         root: root.into(),
         skills_root: skills.into(),
         auth_source: root.join("auth.json"),

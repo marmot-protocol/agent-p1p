@@ -11,6 +11,15 @@ pub struct CaseActivity {
 }
 
 impl Store {
+    pub fn running_direct_attempts_for_case(&self, case_key: &str) -> Result<u64> {
+        let count: i64 = self.connection.query_row(
+            "SELECT COUNT(*) FROM direct_attempts WHERE case_key=?1 AND status='RUNNING'",
+            [case_key],
+            |row| row.get(0),
+        )?;
+        Ok(unsigned(count))
+    }
+
     /// Newest first, at most eight records per history. No leases are acquired.
     pub fn case_activity(&self, case_key: &str) -> Result<CaseActivity> {
         let mut events = self.connection.prepare(
@@ -108,12 +117,27 @@ mod tests {
                 store.connection.execute(
                     "INSERT INTO direct_attempts (effect_id,case_key,state_revision,task_id,lease_owner,
                      lease_until,started_at,completed_at,status,error)
-                     VALUES (?1,?1,?2,'task','private-owner',100,1,2,'FAILED','private-error')",
+                     VALUES (?1,?1,?2,'task','private-owner',100,1,
+                       CASE WHEN ?1='target' AND ?2=2 THEN NULL ELSE 2 END,
+                       CASE WHEN ?1='target' AND ?2=2 THEN 'RUNNING' ELSE 'FAILED' END,
+                       CASE WHEN ?1='target' AND ?2=2 THEN NULL ELSE 'private-error' END)",
                     rusqlite::params![key,revision],
                 ).unwrap();
             }
         }
         drop(store);
+        let writable = Store::open(&path).unwrap();
+        assert_eq!(
+            writable.running_direct_attempts_for_case("target").unwrap(),
+            1
+        );
+        assert_eq!(
+            writable
+                .running_direct_attempts_for_case("unrelated")
+                .unwrap(),
+            0
+        );
+        drop(writable);
         let store = Store::open_read_only(&path).unwrap();
         let activity = store.case_activity("target").unwrap();
         assert_eq!(activity.recent_events.len(), 8);

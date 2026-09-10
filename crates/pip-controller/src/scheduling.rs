@@ -47,6 +47,8 @@ pub struct WorkflowPolicy {
     max_provider_failures: u32,
     max_hermes_attempts: Option<u32>,
     hermes_scratch_root: Option<String>,
+    isolated_reviews: bool,
+    cargo_jobs: Option<u32>,
     roles: Vec<RolePolicy>,
 }
 
@@ -102,8 +104,23 @@ impl WorkflowPolicy {
             max_provider_failures: 1,
             max_hermes_attempts: None,
             hermes_scratch_root: None,
+            isolated_reviews: false,
+            cargo_jobs: None,
             roles,
         })
+    }
+
+    pub fn with_isolated_reviews(mut self) -> Self {
+        self.isolated_reviews = true;
+        self
+    }
+
+    pub fn with_cargo_jobs(mut self, jobs: u32) -> Result<Self, DispatchError> {
+        if !(1..=8).contains(&jobs) {
+            return Err(DispatchError::InvalidPolicy);
+        }
+        self.cargo_jobs = Some(jobs);
+        Ok(self)
     }
 
     pub fn with_max_provider_failures(
@@ -613,6 +630,38 @@ fn dispatch(
         context.state_revision.get()
     );
     let worker_projection_key = format!("{projection_base}:worker");
+    let case_workspace = format!(
+        "{}/repo-{}-issue-{}-workflow-{}",
+        policy.workspace.trim_end_matches('/'),
+        context.case_id.repository().get(),
+        context.case_id.issue().get(),
+        context.case_id.workflow().get()
+    );
+    let snapshot = if policy.isolated_reviews
+        && matches!(
+            role,
+            WorkerRole::ReviewerGeneral | WorkerRole::ReviewerSecperf | WorkerRole::FinalReviewer
+        ) {
+        Some(review_snapshot(
+            &case_workspace,
+            &worker_projection_key,
+            &context
+                .head_sha
+                .ok_or(DispatchError::InvalidPolicy)?
+                .to_string(),
+        ))
+    } else {
+        None
+    };
+    let workspace = snapshot.as_ref().map_or_else(
+        || case_workspace.clone(),
+        |snapshot| {
+            format!(
+                "{}/source",
+                snapshot["root"].as_str().expect("generated root")
+            )
+        },
+    );
     let mut body = Map::from_iter([
         ("case_key".into(), json!(context.case_id.to_string())),
         (
@@ -715,6 +764,12 @@ fn dispatch(
         context.immutable_evidence_bundle.clone(),
     );
     body.insert("evidence_focus".into(), evidence_focus(context, binding));
+    if let Some(jobs) = policy.cargo_jobs {
+        body.insert("cargo_jobs".into(), json!(jobs));
+    }
+    if let Some(snapshot) = snapshot {
+        body.insert("review_snapshot".into(), snapshot);
+    }
     if binding.execution == ExecutionKind::Hermes
         && let Some(root) = &policy.hermes_scratch_root
     {
@@ -738,15 +793,18 @@ fn dispatch(
                 "sha256": hex_digest(&Sha256::digest(evidence)),
             }),
         );
-        body.insert("storage".into(), json!({
-            "schema_version": 3,
-            "root": root,
-            "source": format!("{}/repo-{}-issue-{}-workflow-{}", policy.workspace.trim_end_matches('/'), context.case_id.repository().get(), context.case_id.issue().get(), context.case_id.workflow().get()),
-            "cargo_target": format!("{root}/disposable/target"),
-            "cargo_home": format!("{root}/disposable/cargo-home"),
-            "temporary": format!("{root}/t"),
-            "results": format!("{root}/results"),
-        }));
+        body.insert(
+            "storage".into(),
+            json!({
+                "schema_version": 3,
+                "root": root,
+                "source": workspace,
+                "cargo_target": format!("{root}/disposable/target"),
+                "cargo_home": format!("{root}/disposable/cargo-home"),
+                "temporary": format!("{root}/t"),
+                "results": format!("{root}/results"),
+            }),
+        );
     }
 
     Ok(WorkflowDispatch {
@@ -757,20 +815,8 @@ fn dispatch(
         worker_title: format!("Run {worker_id} for {}", context.case_id),
         source_effect_id: source_effect_id.into(),
         profile: binding.profile.clone(),
-        workspace: format!(
-            "{}/repo-{}-issue-{}-workflow-{}",
-            policy.workspace.trim_end_matches('/'),
-            context.case_id.repository().get(),
-            context.case_id.issue().get(),
-            context.case_id.workflow().get(),
-        ),
-        direct_workspace: format!(
-            "{}/repo-{}-issue-{}-workflow-{}",
-            policy.workspace.trim_end_matches('/'),
-            context.case_id.repository().get(),
-            context.case_id.issue().get(),
-            context.case_id.workflow().get(),
-        ),
+        workspace: workspace.clone(),
+        direct_workspace: workspace,
         execution: binding.execution,
         skills: binding.skills.clone(),
         provider: binding.provider.clone(),
@@ -782,6 +828,19 @@ fn dispatch(
         priority: binding.priority,
         board: policy.board.clone(),
     })
+}
+
+/// Immutable per-projection review workspace; never aliases a builder checkout.
+pub fn review_snapshot(source: &str, projection_key: &str, head: &str) -> Value {
+    let source_path = std::path::Path::new(source);
+    let root = source_path
+        .parent()
+        .expect("case workspace parent")
+        .join(".reviews")
+        .join(source_path.file_name().expect("case workspace name"))
+        .join(hex_digest(&Sha256::digest(projection_key.as_bytes())));
+    json!({"schema_version":1,"source":source,"root":root,"head_sha":head,
+        "projection_key":projection_key})
 }
 
 fn valid_role_policy(role: &RolePolicy) -> bool {

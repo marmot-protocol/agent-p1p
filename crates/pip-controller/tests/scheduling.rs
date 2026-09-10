@@ -463,6 +463,34 @@ fn review_effect_expands_policy_defined_instances_against_one_exact_head() {
 }
 
 #[test]
+fn isolated_reviews_bind_distinct_snapshots_without_changing_builder_workspace() {
+    let policy = policy().with_isolated_reviews().with_cargo_jobs(2).unwrap();
+    let reviews =
+        schedule_effect("reviews", Effect::DispatchReviewers, &context(), &policy).unwrap();
+    let mut roots = std::collections::BTreeSet::new();
+    for review in reviews {
+        assert_eq!(review.worker_body["cargo_jobs"], 2);
+        let snapshot = &review.worker_body["review_snapshot"];
+        assert_eq!(snapshot["head_sha"], "b".repeat(40));
+        assert!(snapshot["source"].as_str().unwrap().contains("repo-"));
+        let root = snapshot["root"].as_str().unwrap();
+        assert!(root.contains("/.reviews/"));
+        roots.insert(root.to_owned());
+        let expected = format!("{root}/source");
+        match review.execution() {
+            ExecutionKind::Hermes => assert_eq!(
+                review.hermes_task().unwrap().workspace,
+                format!("dir:{expected}")
+            ),
+            ExecutionKind::Direct => assert_eq!(review.direct_task().unwrap().workspace, expected),
+        }
+    }
+    assert_eq!(roots.len(), 3);
+    let builder = schedule_effect("builder", Effect::DispatchBuilder, &context(), &policy).unwrap();
+    assert!(builder[0].worker_body.get("review_snapshot").is_none());
+}
+
+#[test]
 fn remediation_is_dynamic_and_final_review_requires_exact_head() {
     let mut later = context();
     later.remediation_round = 7;

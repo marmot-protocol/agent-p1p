@@ -96,6 +96,24 @@ impl WorkspacePreparer for GitWorkspacePreparer {
         store: &Store,
         dispatches: &[pip_store::DispatchIntent],
     ) -> Result<(), WorkspaceError> {
+        for dispatch in dispatches {
+            let (body, key) = match dispatch.transport {
+                pip_store::DispatchTransport::Hermes => {
+                    let task: pip_hermes::TaskCreateSpec =
+                        serde_json::from_value(dispatch.desired.clone())
+                            .map_err(|e| WorkspaceError::MalformedRun(e.to_string()))?;
+                    (task.body, task.projection_key)
+                }
+                pip_store::DispatchTransport::Direct => {
+                    let task: pip_controller::DirectTaskSpec =
+                        serde_json::from_value(dispatch.desired.clone())
+                            .map_err(|e| WorkspaceError::MalformedRun(e.to_string()))?;
+                    (task.body, task.task_id)
+                }
+            };
+            crate::review_workspace::prepare(&body, &policy.workspace, &key)
+                .map_err(WorkspaceError::MalformedRun)?;
+        }
         if policy.hermes_scratch_root.is_some() {
             for dispatch in dispatches
                 .iter()

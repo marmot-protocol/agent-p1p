@@ -93,15 +93,19 @@ impl WorkspaceRetirement for GitWorkspaceRetirement {
         // Standalone case repositories have no registration in the private
         // cache. Keep legacy linked-worktree retirement for preserved history.
         if spec.path().join(".git").is_dir() {
-            return pip_executor::IsolatedWorkspace::new(
+            let outcome = pip_executor::IsolatedWorkspace::new(
                 ProcessGitRunner,
                 "git",
                 Duration::from_secs(60),
                 4 * 1024 * 1024,
             )?
-            .retire(spec);
+            .retire(spec)?;
+            crate::review_workspace::retire(spec.path()).map_err(AllocationError::Process)?;
+            return Ok(outcome);
         }
-        self.retirer.retire(spec)
+        let outcome = self.retirer.retire(spec)?;
+        crate::review_workspace::retire(spec.path()).map_err(AllocationError::Process)?;
+        Ok(outcome)
     }
 }
 
@@ -171,12 +175,37 @@ pub fn reconcile_workspace_lifecycle_once(
     policy: &RepositoryPolicy,
     now: u64,
 ) -> Result<WorkspaceLifecycleCycle, WorkspaceLifecycleError> {
-    reconcile_workspace_lifecycle_once_with(
+    reconcile_workspace_lifecycle_with_quiescence(
         store,
         policy,
         now,
         &SystemWorkspaceStorageProbe,
         &GitWorkspaceRetirement::new()?,
+        |case_key, task_ids| {
+            pip_hermes::HermesReader::new(
+                pip_hermes::ProcessRunner::default(),
+                "hermes",
+                Duration::from_secs(20),
+                4 * 1024 * 1024,
+            )
+            .and_then(|reader| reader.list_tasks(&policy.board))
+            .is_ok_and(|tasks| {
+                tasks.iter().all(|task| {
+                    if matches!(task.status.as_str(), "done" | "cancelled" | "archived") {
+                        return true;
+                    }
+                    if task_ids.contains(&task.id) {
+                        return false;
+                    }
+                    serde_json::from_str::<serde_json::Value>(&task.body).is_ok_and(|body| {
+                        body["case_key"]
+                            .as_str()
+                            .or_else(|| body["case"]["case_key"].as_str())
+                            .is_some_and(|key| key != case_key)
+                    })
+                })
+            })
+        },
     )
 }
 
@@ -186,6 +215,20 @@ pub fn reconcile_workspace_lifecycle_once_with<P: WorkspaceStorageProbe, R: Work
     now: u64,
     probe: &P,
     retirer: &R,
+) -> Result<WorkspaceLifecycleCycle, WorkspaceLifecycleError> {
+    reconcile_workspace_lifecycle_with_quiescence(store, policy, now, probe, retirer, |_, _| true)
+}
+
+pub fn reconcile_workspace_lifecycle_with_quiescence<
+    P: WorkspaceStorageProbe,
+    R: WorkspaceRetirement,
+>(
+    store: &mut Store,
+    policy: &RepositoryPolicy,
+    now: u64,
+    probe: &P,
+    retirer: &R,
+    mut native_quiescent: impl FnMut(&str, &[String]) -> bool,
 ) -> Result<WorkspaceLifecycleCycle, WorkspaceLifecycleError> {
     let initial = probe.inspect(Path::new(&policy.workspace), store.path())?;
     ensure_filesystem(policy, initial)?;
@@ -197,6 +240,21 @@ pub fn reconcile_workspace_lifecycle_once_with<P: WorkspaceStorageProbe, R: Work
     let mut retired_case_key = None;
     let mut retired_worktree_path = None;
     let snapshot = if let Some(candidate) = candidate {
+        if !native_quiescent(
+            &candidate.case_key,
+            &store.case_task_ids(&candidate.case_key)?,
+        ) {
+            return Ok(WorkspaceLifecycleCycle {
+                ready: initial.free_bytes >= policy.workspace_storage.minimum_free_bytes,
+                free_bytes: initial.free_bytes,
+                minimum_free_bytes: policy.workspace_storage.minimum_free_bytes,
+                retired_case_key: None,
+                retired_worktree_path: None,
+                cleanup_error: Some(
+                    "native work is active or quiescence could not be verified".into(),
+                ),
+            });
+        }
         let case_id = CaseId::new(
             RepositoryId::new(
                 NonZeroU64::new(candidate.repository_id)

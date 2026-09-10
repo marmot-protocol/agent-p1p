@@ -166,6 +166,7 @@ fn bindings(
         "{}/repo-{}-issue-{}-workflow-{}",
         policy.workspace, case.repository_id, case.issue_number, case.workflow_version
     );
+    let source = crate::review_workspace::source_for(body, &source, key)?;
     let expected = json!({"schema_version":version,"root":root,"source":source,
         "cargo_target":root.join("disposable/target"),"cargo_home":root.join("disposable/cargo-home"),
         "temporary":temporary,"results":root.join("results")});

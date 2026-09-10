@@ -56,6 +56,15 @@ pub fn reconcile_conversation_once<
         return Ok(json!({"result":"idle"}));
     };
     let key = message.input.key.clone();
+    let effective = message
+        .input
+        .case_key
+        .as_deref()
+        .map(|key| store.case(key))
+        .transpose()?
+        .flatten()
+        .map(|case| crate::scope::execution_policy(policy, store, &case));
+    let policy = effective.as_ref().unwrap_or(policy);
     let queue = HermesReader::new(
         runner.clone(),
         hermes,
@@ -63,14 +72,25 @@ pub fn reconcile_conversation_once<
         4 * 1024 * 1024,
     )?;
     let tasks = queue.list_tasks(&policy.board)?;
-    // Never interrupt a native job or a prepared/running direct attempt. The
-    // controller holds new dispatch while inbox feedback awaits this handoff.
-    if store.status(now)?.direct_attempts_running > 0
+    // Slotted replies wait only for their own case. Unbound questions are read-only.
+    let slotted = policy.execution_capacity.is_some();
+    let case_key = message.input.case_key.as_deref();
+    let direct_busy = if slotted {
+        case_key
+            .map(|key| store.running_direct_attempts_for_case(key))
+            .transpose()?
+            .unwrap_or(0)
+            > 0
+    } else {
+        store.status(now)?.direct_attempts_running > 0
+    };
+    if direct_busy
         || tasks.iter().any(|task| {
             Some(&task.id) != message.task_id.as_ref()
             && !matches!(task.status.as_str(), "done" | "cancelled" | "archived")
             // A create with an uncertain response must still be reconciled.
             && !(message.state == "CREATING" && task.body.contains(&key))
+            && (!slotted || native_conflicts(&task.body, case_key))
         })
     {
         return Ok(json!({"result":"waiting_for_workers","message_key":key}));
@@ -254,6 +274,19 @@ pub fn reconcile_conversation_once<
     };
     store.finish_conversation(&key, "PUBLISHED", Some(reply))?;
     Ok(json!({"result":"published","message_key":key,"reply_id":reply}))
+}
+
+fn native_conflicts(body: &str, case_key: Option<&str>) -> bool {
+    let Some(case_key) = case_key else {
+        return false;
+    };
+    let Ok(body) = serde_json::from_str::<Value>(body) else {
+        return true;
+    };
+    body["case_key"]
+        .as_str()
+        .or_else(|| body["case"]["case_key"].as_str())
+        .is_none_or(|key| key == case_key)
 }
 
 /// A frozen, case-scoped explanation input, never permission to retry work.

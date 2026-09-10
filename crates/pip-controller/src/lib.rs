@@ -13,5 +13,5 @@ pub use results::{
 
 pub use scheduling::{
     DirectTaskSpec, DispatchContext, DispatchError, ExecutionKind, RolePolicy, WorkflowDispatch,
-    WorkflowPolicy, schedule_claimed_dispatch, schedule_effect,
+    WorkflowPolicy, review_snapshot, schedule_claimed_dispatch, schedule_effect,
 };

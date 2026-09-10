@@ -675,16 +675,30 @@ where
         .into_iter()
         .filter(|case| case.repository_id == policy.repository.id)
         .collect::<Vec<_>>();
-    cases.sort_by(|left, right| left.case_key.cmp(&right.case_key));
+    cases.sort_by_key(|case| {
+        (
+            match case.state.as_str() {
+                "REMEDIATING" => 0,
+                "FINAL_REVIEW" => 1,
+                "REVIEWING" => 2,
+                "READY_TO_BUILD" => 3,
+                _ => 4,
+            },
+            case.case_key.clone(),
+        )
+    });
     let mut case_reports = Vec::with_capacity(cases.len());
     let mut work_cases = Vec::new();
-    let conversation_pending = policy.conversations_enabled
-        && !store
-            .conversations(policy.repository.id, 1)
-            .map_err(|error| CliError::Ledger(error.to_string()))?
-            .is_empty();
     for case in cases {
-        let scope = crate::RepositoryScope::case(&policy, &case.case_key);
+        let case_policy = crate::scope::execution_policy(&policy, &store, &case);
+        let conversation_pending = policy.conversations_enabled
+            && store
+                .has_pending_conversation(
+                    policy.repository.id,
+                    policy.execution_capacity.map(|_| case.case_key.as_str()),
+                )
+                .map_err(|error| CliError::Ledger(error.to_string()))?;
+        let scope = crate::RepositoryScope::case(&case_policy, &case.case_key);
         let takeover = crate::reconcile_takeover_once(&reader, scope, &mut store, now);
         let authorization = crate::reconcile_active_authorization(&reader, scope, &mut store, now);
         let bounds = crate::enforce_operational_bounds(&mut store, scope, now);
@@ -826,8 +840,21 @@ where
     ));
     // Intake runs independently: a message can arrive after the first inbox
     // snapshot. Never prepare a direct worker alongside a newly queued reply.
-    if !matches!(conversation["result"].as_str(), Some("idle" | "disabled")) {
+    if policy.execution_capacity.is_none()
+        && !matches!(conversation["result"].as_str(), Some("idle" | "disabled"))
+    {
         work_cases.clear();
+    } else if policy.conversations_enabled && policy.execution_capacity.is_some() {
+        let mut eligible = Vec::new();
+        for key in work_cases {
+            if !store
+                .has_pending_conversation(policy.repository.id, Some(&key))
+                .map_err(|error| CliError::Ledger(error.to_string()))?
+            {
+                eligible.push(key);
+            }
+        }
+        work_cases = eligible;
     }
     let direct_dispatch = (|| {
         let queue = crate::DirectQueue::new(required(&options, "--direct-queue")?)
@@ -1113,6 +1140,10 @@ fn direct_worker_cycle(arguments: &[String]) -> Result<Value, CliError> {
         .map_or_else(current_time, Ok)?;
     crate::workspace_lifecycle::ensure_direct_workspace_capacity(&policy)
         .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let mut worker_environment = sanitized_environment();
+    if let Some(capacity) = policy.execution_capacity {
+        worker_environment.insert("CARGO_BUILD_JOBS".into(), capacity.cargo_jobs.to_string());
+    }
     let runtime = crate::CursorDirectRuntime::new(
         BoundedProcessRunner,
         required(&options, "--cursor")?,
@@ -1120,14 +1151,23 @@ fn direct_worker_cycle(arguments: &[String]) -> Result<Value, CliError> {
         &policy.workspace,
         &policy.artifacts,
         required(&options, "--skills-root")?,
-        sanitized_environment(),
+        worker_environment,
         4 * 1024 * 1024,
     )
     .map_err(|error| CliError::Reconciliation(error.to_string()))?;
     let queue = crate::DirectQueue::new(required(&options, "--direct-queue")?)
         .map_err(|error| CliError::Reconciliation(error.to_string()))?;
-    let result = crate::execute_direct_queue_once(&runtime, &queue, now)
-        .map_err(|error| CliError::Reconciliation(error.to_string()))?;
+    let result = if let Some(capacity) = policy.execution_capacity {
+        json!(
+            crate::execute_direct_queue_pool(&runtime, &queue, &policy, capacity, now)
+                .map_err(|error| CliError::Reconciliation(error.to_string()))?
+        )
+    } else {
+        json!(
+            crate::execute_direct_queue_once(&runtime, &queue, now)
+                .map_err(|error| CliError::Reconciliation(error.to_string()))?
+        )
+    };
     Ok(json!({
         "ok": true,
         "repository": policy.repository.full_name(),

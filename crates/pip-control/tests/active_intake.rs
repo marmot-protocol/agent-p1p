@@ -19,6 +19,83 @@ struct FixtureSource {
     snapshots: RefCell<BTreeMap<u64, IntakeSnapshot>>,
 }
 
+#[test]
+fn simultaneous_intake_respects_the_shared_issue_capacity() {
+    struct ConcurrentSource<'a>(FixtureSource, &'a std::sync::Barrier);
+    impl IntakeSource for ConcurrentSource<'_> {
+        fn discover(
+            &self,
+            owner: &str,
+            repo: &str,
+            label: &str,
+        ) -> Result<Vec<IssueSnapshot>, GitHubError> {
+            self.0.discover(owner, repo, label)
+        }
+        fn intake(
+            &self,
+            owner: &str,
+            repo: &str,
+            issue: u64,
+        ) -> Result<IntakeSnapshot, GitHubError> {
+            let result = self.0.intake(owner, repo, issue);
+            self.1.wait();
+            result
+        }
+    }
+    for _ in 0..5 {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("ledger.db");
+        let mut seed = Store::open(&path).unwrap();
+        let policy = active_policy(1, 1);
+        reconcile_intake(&source(&[]), &policy, &mut seed, 100, false).unwrap();
+        let stores = (0..4)
+            .map(|_| Store::open(&path).unwrap())
+            .collect::<Vec<_>>();
+        let barrier = std::sync::Barrier::new(4);
+        std::thread::scope(|scope| {
+            let handles = stores
+                .into_iter()
+                .enumerate()
+                .map(|(index, mut store)| {
+                    let policy = &policy;
+                    let barrier = &barrier;
+                    scope.spawn(move || {
+                        reconcile_intake(
+                            &ConcurrentSource(source(&[42 + index as u64]), barrier),
+                            policy,
+                            &mut store,
+                            101,
+                            false,
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            for handle in handles {
+                handle.join().unwrap().unwrap();
+            }
+        });
+        assert_eq!(seed.status(102).unwrap().cases.len(), 1);
+    }
+}
+
+#[test]
+fn planning_lookahead_is_bounded_separately_from_total_issues() {
+    let directory = tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    let mut raw = serde_json::to_value(active_policy(8, 8)).unwrap();
+    raw["execution_capacity"] = serde_json::json!({"native_sessions":2,"builders":1,
+        "direct_reviewers":1,"ready_plans":2,"cargo_jobs":2});
+    let policy = load_repository_policy(&serde_json::to_vec(&raw).unwrap()).unwrap();
+    let report =
+        reconcile_intake(&source(&[42, 43, 44, 45]), &policy, &mut store, 100, false).unwrap();
+    assert_eq!(store.status(100).unwrap().cases.len(), 3); // one planner + two waiting plans
+    assert!(
+        report.candidates[3]
+            .blockers
+            .contains(&"PLANNING_LOOKAHEAD_FULL".to_owned())
+    );
+}
+
 impl IntakeSource for FixtureSource {
     fn discover(
         &self,

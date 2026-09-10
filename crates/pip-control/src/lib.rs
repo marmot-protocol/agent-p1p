@@ -26,6 +26,7 @@ mod publication_retry;
 mod publication_text;
 mod release;
 mod results;
+mod review_workspace;
 mod reviews;
 mod runtime;
 mod scope;
@@ -50,8 +51,8 @@ pub use ci::{CiCycle, CiCycleError, PullRequestSource, reconcile_ci_once};
 pub use cli::{CliError, run_cli, run_git_askpass};
 pub use direct_queue::{
     DirectQueue, DirectQueueCycle, DirectQueueError, DirectQueueSchedule,
-    collect_direct_queue_once, execute_direct_queue_once, reconcile_direct_queue_once,
-    schedule_direct_queue_once,
+    collect_direct_queue_once, execute_direct_queue_once, execute_direct_queue_pool,
+    reconcile_direct_queue_once, schedule_direct_queue_once,
 };
 pub use direct_worker::{
     CursorDirectRuntime, DirectWorkerRuntime, DirectWorkerRuntimeError,
@@ -85,8 +86,9 @@ pub use intake::{
 };
 pub use plans::{PlanPublicationCycle, PlanPublicationError, PlanWriter, publish_plan_once};
 pub use policy::{
-    GitHubConfiguration, IntakeConfiguration, MergeConfiguration, PolicyError, RepositoryIdentity,
-    RepositoryPolicy, RoleConfiguration, WorkspaceStorageConfiguration, load_repository_policy,
+    ExecutionCapacity, GitHubConfiguration, IntakeConfiguration, MergeConfiguration, PolicyError,
+    RepositoryIdentity, RepositoryPolicy, RoleConfiguration, WorkspaceStorageConfiguration,
+    load_repository_policy,
 };
 pub use publication_retry::{PublicationRetryRequest, authorize_publication_retry};
 pub use release::{
@@ -118,4 +120,5 @@ pub use workspace_lifecycle::{
     GitWorkspaceRetirement, SystemWorkspaceStorageProbe, WorkspaceLifecycleCycle,
     WorkspaceLifecycleError, WorkspaceRetirement, WorkspaceStorageProbe, WorkspaceStorageSnapshot,
     reconcile_workspace_lifecycle_once, reconcile_workspace_lifecycle_once_with,
+    reconcile_workspace_lifecycle_with_quiescence,
 };

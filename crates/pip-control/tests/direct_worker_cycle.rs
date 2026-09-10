@@ -778,6 +778,166 @@ fn queue(root: &std::path::Path) -> DirectQueue {
 }
 
 #[test]
+fn bounded_pool_overlaps_builder_and_review_but_never_duplicates_execution() {
+    use std::sync::{Condvar, Mutex};
+    struct Overlap {
+        arrivals: Mutex<usize>,
+        wake: Condvar,
+    }
+    impl DirectWorkerRuntime for Overlap {
+        fn execute(
+            &self,
+            _: &DirectTaskSpec,
+            _: u64,
+        ) -> Result<WorkerResult, DirectWorkerRuntimeError> {
+            let mut count = self.arrivals.lock().unwrap();
+            *count += 1;
+            self.wake.notify_all();
+            let (count, wait) = self
+                .wake
+                .wait_timeout_while(count, std::time::Duration::from_secs(3), |n| *n < 2)
+                .unwrap();
+            assert!(!wait.timed_out(), "builder and reviewer did not overlap");
+            assert!(*count <= 2);
+            Err(DirectWorkerRuntimeError::Failed("test completed".into()))
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let queue = queue(dir.path());
+    // Use real prepared envelopes, retaining the transport boundary in this test.
+    for (index, review) in [(1, false), (2, true)] {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut store = if review {
+            queued_shadow_review(tmp.path())
+        } else {
+            queued_builder(tmp.path())
+        };
+        let single = queue_for_fixture(tmp.path());
+        pip_control::schedule_direct_queue_once(
+            &mut store,
+            &active_policy(),
+            &[case_key().into()],
+            &single,
+            "controller",
+            100,
+            30,
+        )
+        .unwrap();
+        let mut envelope: Value = serde_json::from_slice(
+            &std::fs::read(tmp.path().join("direct-queue/inbox/attempt-1.json")).unwrap(),
+        )
+        .unwrap();
+        envelope["attempt_id"] = json!(index);
+        if review {
+            envelope["claimed"]["case_key"] = json!("peer");
+            envelope["task"]["body"]["case_key"] = json!("peer");
+            envelope["task"]["workspace"] = json!("/isolated-review");
+        }
+        std::fs::write(
+            dir.path()
+                .join(format!("direct-queue/inbox/attempt-{index}.json")),
+            serde_json::to_vec(&envelope).unwrap(),
+        )
+        .unwrap();
+    }
+    let runtime = Overlap {
+        arrivals: Mutex::new(0),
+        wake: Condvar::new(),
+    };
+    let capacity = pip_control::ExecutionCapacity {
+        native_sessions: 2,
+        builders: 1,
+        direct_reviewers: 1,
+        ready_plans: 2,
+        cargo_jobs: 2,
+    };
+    let policy = active_policy();
+    let lock = std::fs::File::open(dir.path().join("direct-queue/results")).unwrap();
+    lock.lock().unwrap();
+    assert!(
+        pip_control::execute_direct_queue_pool(&runtime, &queue, &policy, capacity, 101)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(*runtime.arrivals.lock().unwrap(), 0);
+    drop(lock);
+    // A concurrent controller has not published this handoff yet.
+    std::fs::write(
+        dir.path().join("direct-queue/inbox/attempt-3.json.new"),
+        b"{",
+    )
+    .unwrap();
+    let report =
+        pip_control::execute_direct_queue_pool(&runtime, &queue, &policy, capacity, 101).unwrap();
+    assert_eq!(report.len(), 2);
+    assert!(
+        pip_control::execute_direct_queue_pool(&runtime, &queue, &policy, capacity, 101)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(*runtime.arrivals.lock().unwrap(), 2);
+}
+
+fn queue_for_fixture(root: &std::path::Path) -> DirectQueue {
+    queue(root)
+}
+
+#[test]
+fn occupied_review_slot_does_not_block_an_independent_builder_slot() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = queued_builder(dir.path());
+    let queue = queue(dir.path());
+    let peer = tempfile::tempdir().unwrap();
+    let mut peer_store = queued_shadow_review(peer.path());
+    let peer_queue = queue_for_fixture(peer.path());
+    pip_control::schedule_direct_queue_once(
+        &mut peer_store,
+        &active_policy(),
+        &[case_key().into()],
+        &peer_queue,
+        "controller",
+        100,
+        30,
+    )
+    .unwrap();
+    let mut input: Value = serde_json::from_slice(
+        &std::fs::read(peer.path().join("direct-queue/inbox/attempt-1.json")).unwrap(),
+    )
+    .unwrap();
+    input["attempt_id"] = json!(99);
+    input["claimed"]["case_key"] = json!("peer");
+    input["task"]["workspace"] = json!("/peer-review");
+    std::fs::write(
+        dir.path().join("direct-queue/inbox/attempt-99.json"),
+        serde_json::to_vec(&input).unwrap(),
+    )
+    .unwrap();
+    let mut policy = active_policy();
+    policy.execution_capacity = Some(pip_control::ExecutionCapacity {
+        native_sessions: 2,
+        builders: 1,
+        direct_reviewers: 1,
+        ready_plans: 2,
+        cargo_jobs: 2,
+    });
+    let report = pip_control::schedule_direct_queue_once(
+        &mut store,
+        &policy,
+        &[case_key().into()],
+        &queue,
+        "controller",
+        101,
+        30,
+    )
+    .unwrap();
+    assert!(matches!(
+        report.prepared,
+        Some(DirectQueueCycle::Prepared { attempt_id: 1, .. })
+    ));
+    assert_eq!(store.status(102).unwrap().direct_attempts_failed, 0);
+}
+
+#[test]
 fn unavailable_or_occupied_queue_never_leases_new_work() {
     for handoff_exists in [false, true] {
         let directory = tempfile::tempdir().unwrap();

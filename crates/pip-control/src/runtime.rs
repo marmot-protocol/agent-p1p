@@ -95,6 +95,7 @@ pub fn bootstrap_hermes_runtime_with<R: CommandRunner + Clone>(
         board: policy.board.clone(),
         board_name: format!("Pip - {repository}"),
         board_description: format!("Pip controlled shadow workflow for {repository}"),
+        max_native_sessions: policy.execution_capacity.map_or(1, |c| c.native_sessions),
         profiles,
     })
     .map_err(Into::into)

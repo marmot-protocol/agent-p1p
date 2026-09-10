@@ -27,6 +27,7 @@ pub struct ProfileBootstrapSpec {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeBootstrapSpec {
+    pub max_native_sessions: u32,
     pub root: PathBuf,
     pub skills_root: PathBuf,
     pub auth_source: PathBuf,
@@ -316,6 +317,7 @@ impl<R: CommandRunner + Clone> HermesBootstrap<R> {
 }
 
 struct PreparedSpec {
+    max_native_sessions: u32,
     root: PathBuf,
     skills_root: PathBuf,
     auth_source: PathBuf,
@@ -327,7 +329,8 @@ struct PreparedSpec {
 
 impl PreparedSpec {
     fn new(spec: &RuntimeBootstrapSpec) -> Result<Self, BootstrapError> {
-        if !valid_id(&spec.board)
+        if !(1..=8).contains(&spec.max_native_sessions)
+            || !valid_id(&spec.board)
             || !valid_text(&spec.board_name, 256)
             || !valid_text(&spec.board_description, 1024)
             || spec.profiles.is_empty()
@@ -358,6 +361,7 @@ impl PreparedSpec {
         }
         Ok(Self {
             root,
+            max_native_sessions: spec.max_native_sessions,
             skills_root,
             auth_source,
             board: spec.board.clone(),
@@ -424,7 +428,11 @@ impl PreparedSpec {
 
     fn reconcile_root(&self) -> Result<(), BootstrapError> {
         write_marker(&self.root, ROOT_MARKER, &root_marker())?;
-        write_managed(&self.root.join("config.yaml"), &root_config()?, 0o600)?;
+        write_managed(
+            &self.root.join("config.yaml"),
+            &root_config(self.max_native_sessions)?,
+            0o600,
+        )?;
         ensure_directory(&self.root.join("home"), 0o700)
     }
 
@@ -499,9 +507,9 @@ fn profile_marker(profile: &ProfileBootstrapSpec) -> OwnershipMarker {
     }
 }
 
-fn root_config() -> Result<Vec<u8>, BootstrapError> {
+fn root_config(sessions: u32) -> Result<Vec<u8>, BootstrapError> {
     encoded(&json!({
-        "max_concurrent_sessions": 1,
+        "max_concurrent_sessions": sessions,
         "platform_toolsets": {"cli": []},
         "agent": {"disabled_toolsets": ["delegation", "memory", "messaging", "web"]},
         "kanban": {
@@ -510,7 +518,7 @@ fn root_config() -> Result<Vec<u8>, BootstrapError> {
             "dispatch_in_gateway": true,
             "dispatch_interval_seconds": 15,
             "failure_limit": 1,
-            "max_in_progress": 1,
+            "max_in_progress": sessions,
             "max_in_progress_per_profile": 1,
             "review_dispatch": false
         }

@@ -1,6 +1,67 @@
 use pip_control::{PolicyError, load_repository_policy};
 
 #[test]
+fn capacity_rollout_preserves_case_authority_but_never_substitutes_models_or_scope() {
+    let accepted = load_repository_policy(include_bytes!(
+        "../../../config/target/repositories/mdk.json"
+    ))
+    .unwrap();
+    let mut current = accepted.clone();
+    current.revision += 1;
+    current.intake.repository_active_limit = 2;
+    current.intake.global_active_limit = 2;
+    current.execution_capacity = Some(pip_control::ExecutionCapacity {
+        native_sessions: 2,
+        builders: 1,
+        direct_reviewers: 1,
+        ready_plans: 2,
+        cargo_jobs: 2,
+    });
+    let effective = current.execution_policy_for(&accepted).unwrap();
+    assert_eq!(effective.revision, accepted.revision);
+    assert_eq!(effective.execution_capacity, current.execution_capacity);
+    assert_eq!(accepted.execution_capacity, None);
+    for path in ["model", "actor", "label", "scope", "budget", "workspace"] {
+        let mut changed = current.clone();
+        match path {
+            "model" => changed.roles[0].model = "different-model".into(),
+            "actor" => changed.intake.trusted_actor_ids.push(123),
+            "label" => changed.intake.label = "different-label".into(),
+            "scope" => changed.intake.excluded_issue_numbers.push(123),
+            "budget" => changed.max_remediation_rounds += 1,
+            _ => changed.workspace = "/different-workspace".into(),
+        }
+        assert!(changed.execution_policy_for(&accepted).is_none(), "{path}");
+    }
+}
+
+#[test]
+fn execution_capacity_is_explicit_bounded_and_independent_of_issue_admission() {
+    let mut raw: serde_json::Value = serde_json::from_slice(include_bytes!(
+        "../../../config/target/repositories/mdk.json"
+    ))
+    .unwrap();
+    raw["execution_capacity"] = serde_json::json!({
+        "native_sessions":2,"builders":1,"direct_reviewers":1,"ready_plans":2,"cargo_jobs":2
+    });
+    assert!(load_repository_policy(&serde_json::to_vec(&raw).unwrap()).is_ok());
+    for field in [
+        "native_sessions",
+        "builders",
+        "direct_reviewers",
+        "ready_plans",
+        "cargo_jobs",
+    ] {
+        let original = raw["execution_capacity"][field].clone();
+        for invalid in [0, 1000] {
+            raw["execution_capacity"][field] = serde_json::json!(invalid);
+            assert!(load_repository_policy(&serde_json::to_vec(&raw).unwrap()).is_err());
+        }
+        raw["execution_capacity"][field] = original;
+    }
+}
+
+#[test]
 fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
     let bytes = include_bytes!("../../../config/target/repositories/mdk.json");
     let policy = load_repository_policy(bytes).unwrap();

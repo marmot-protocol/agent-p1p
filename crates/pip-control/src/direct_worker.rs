@@ -126,6 +126,23 @@ impl<R: ProcessRunner + Clone> CursorDirectRuntime<R> {
             ));
         }
         let binding = task_binding(task)?;
+        let mut environment = self.environment.clone();
+        if let Some(target) =
+            crate::review_workspace::direct_target(&task.body, &worktree, &task.task_id)
+                .map_err(runtime_error)?
+        {
+            environment.insert(
+                "CARGO_TARGET_DIR".into(),
+                target.to_string_lossy().into_owned(),
+            );
+        }
+        if let Some(jobs) = task.body.get("cargo_jobs") {
+            let jobs = jobs
+                .as_u64()
+                .filter(|n| (1..=8).contains(n))
+                .ok_or_else(|| runtime_error("invalid Cargo job budget"))?;
+            environment.insert("CARGO_BUILD_JOBS".into(), jobs.to_string());
+        }
         let workflow_skill = read_skill(
             &self.skills_root,
             Path::new("shared/workflow-contract/SKILL.md"),
@@ -149,7 +166,7 @@ impl<R: ProcessRunner + Clone> CursorDirectRuntime<R> {
             self.runner.clone(),
             &self.cursor_program,
             worktree.clone(),
-            self.environment.clone(),
+            environment.clone(),
             Duration::from_secs(30).min(timeout),
             self.max_output_bytes.min(1_048_576),
         )
@@ -160,7 +177,7 @@ impl<R: ProcessRunner + Clone> CursorDirectRuntime<R> {
             self.runner.clone(),
             &self.cursor_program,
             &self.git_program,
-            self.environment.clone(),
+            environment,
             timeout,
             self.max_output_bytes,
         )
@@ -256,6 +273,9 @@ pub(crate) fn validate_job(
         "{}:{worker_id}:round:{round}:revision:{}:worker",
         case.case_key, case.state_revision
     );
+    let expected_workspace =
+        crate::review_workspace::source_for(&task.body, &expected_workspace, &expected_task_id)
+            .map_err(|_| DirectWorkerError::InvalidJob)?;
     let requested_model = format!("{}/{}", configured.provider, configured.model);
     let invalid_model = matches!(
         task.model.to_ascii_lowercase().as_str(),

@@ -76,6 +76,37 @@ fn terminal_case(policy_revision: u64) -> NewCase {
 }
 
 #[test]
+fn busy_native_review_defers_retirement_without_blocking_other_work() {
+    let directory = tempfile::tempdir().unwrap();
+    let policy = policy(&directory, 500);
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    store.create_case(&terminal_case(policy.revision)).unwrap();
+    let probe = SequenceProbe {
+        snapshots: RefCell::new(vec![WorkspaceStorageSnapshot {
+            free_bytes: 1000,
+            distinct_filesystem: true,
+        }]),
+    };
+    let retirer = RecordingRetirer::default();
+    let cycle = pip_control::reconcile_workspace_lifecycle_with_quiescence(
+        &mut store,
+        &policy,
+        300,
+        &probe,
+        &retirer,
+        |key, _| {
+            assert_eq!(key, "repo:1055628515#1240@2");
+            false
+        },
+    )
+    .unwrap();
+    assert!(cycle.ready);
+    assert!(cycle.retired_case_key.is_none());
+    assert!(retirer.paths.borrow().is_empty());
+    assert_eq!(store.status(300).unwrap().workspace_retirements, 0);
+}
+
+#[test]
 fn lifecycle_retires_one_retained_terminal_worktree_and_rechecks_capacity() {
     let directory = tempfile::tempdir().unwrap();
     let policy = policy(&directory, 500);

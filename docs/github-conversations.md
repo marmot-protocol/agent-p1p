@@ -46,6 +46,12 @@ Feedback replanning consumes the existing remediation budget; it cannot reset
 that budget. At most 100 conversations can be pending; overflow stays in the
 webhook spool for retry rather than being acknowledged and lost.
 
+With explicit `execution_capacity`, that hold is case-scoped: feedback waits for
+its bound case's workers and holds that case's next dispatch/readiness, without
+pausing unrelated issues. An unbound read-only question need not wait for a build.
+Replies still share the dedicated Hermes session budget and one conversation
+profile slot. Unknown worker identity is not assumed to belong to another case.
+
 Changed/deleted comments or revoked actor trust suppress stale replies. A missing
 task after uncertain creation, invalid result, or changed plan/head is reported
 by the controller for operator attention; it must not silently start another

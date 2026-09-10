@@ -66,6 +66,7 @@ pub enum ActiveIntakeError {
     Serialization(String),
     InvalidIdentity,
     InvalidWebhook(&'static str),
+    Coordination(String),
 }
 
 impl fmt::Display for ActiveIntakeError {
@@ -79,6 +80,9 @@ impl fmt::Display for ActiveIntakeError {
             Self::Serialization(error) => write!(formatter, "intake serialization failed: {error}"),
             Self::InvalidIdentity => formatter.write_str("intake evidence has an invalid identity"),
             Self::InvalidWebhook(message) => write!(formatter, "invalid webhook: {message}"),
+            Self::Coordination(message) => {
+                write!(formatter, "intake coordination failed: {message}")
+            }
         }
     }
 }
@@ -323,6 +327,21 @@ fn reconcile_validated_evidence(
     // authority. Keep all workflow/actor/model fields immutable while allowing
     // this separate inbox to be enabled without rebinding an active case.
     // Its absent representation also preserves pre-conversation policy hashes.
+    // Poll and webhook intake are separate processes. Keep capacity observation
+    // and admission together; SQLite transactions alone cover only each write.
+    // Evidence has already been fetched before acquiring this process lock.
+    // Lock the existing ledger directory, not the SQLite inode (some SQLite
+    // platforms use flock themselves). No lock file or second state store.
+    let admission_lock = std::fs::File::open(
+        store
+            .path()
+            .parent()
+            .ok_or(ActiveIntakeError::InvalidIdentity)?,
+    )
+    .map_err(|e| ActiveIntakeError::Coordination(e.to_string()))?;
+    admission_lock
+        .lock()
+        .map_err(|e| ActiveIntakeError::Coordination(e.to_string()))?;
     let mut case_policy = policy.clone();
     case_policy.conversations_enabled = false;
     let policy_value = serde_json::to_value(&case_policy)
@@ -404,6 +423,26 @@ fn reconcile_validated_evidence(
                 case_key: None,
             }),
             IntakeDecision::Eligible => {
+                if let Some(capacity) = policy.execution_capacity
+                    && status
+                        .cases
+                        .iter()
+                        .filter(|case| {
+                            case.repository_id == policy.repository.id
+                                && matches!(case.state.as_str(), "PLANNING" | "READY_TO_BUILD")
+                        })
+                        .count()
+                        > capacity.ready_plans as usize
+                {
+                    candidates.push(IntakeCandidateResult {
+                        issue_number: issue.number,
+                        issue_id: issue.id,
+                        decision: "INELIGIBLE".into(),
+                        blockers: vec!["PLANNING_LOOKAHEAD_FULL".into()],
+                        case_key: None,
+                    });
+                    continue;
+                }
                 if reauthorize && !quiescent(&store.case_task_ids(&case_key)?) {
                     candidates.push(IntakeCandidateResult {
                         issue_number: issue.number,

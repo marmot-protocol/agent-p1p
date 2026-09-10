@@ -88,6 +88,51 @@ input, blocked or abandoned. Neither role guesses missing product intent.
 
 ## Jobs and evidence
 
+### Stage capacity
+
+Issue admission and running-worker capacity are separate limits. An issue waiting
+for CI or review does not reserve a builder. Optional policy `execution_capacity`
+enables bounded stage slots; its absence retains the serial execution default:
+
+```json
+{"native_sessions":2,"builders":1,"direct_reviewers":1,"ready_plans":2,"cargo_jobs":2}
+```
+
+`native_sessions` caps the dedicated Hermes runtime, while Hermes's existing
+one-task-per-profile limit keeps planning, general review and final review from
+duplicating their own lane. `builders` and `direct_reviewers` are independent
+limits in the existing Cursor queue adapter. Required work has priority over
+comparison reviews; remediation has priority over new builds. These are not
+additional workflow databases or agent orchestrators. Limits are integers 1–8.
+
+`ready_plans` bounds planning lookahead: at most that many waiting plans plus one
+planning case can be admitted in `PLANNING`/`READY_TO_BUILD`. Total repository and
+global active-issue limits still bound work in progress, including CI waits.
+`cargo_jobs` is the per-task Cargo budget; host CPU/memory limits are a separate
+operational safeguard and must be measured under real workloads.
+
+Each newly dispatched review/final review under this policy gets an independent
+detached exact-head Git copy, keyed by its immutable projection. Builders keep
+their own case checkouts. Review sources are read-only to the direct worker and
+read-only-mounted in Hermes; build output stays on workspace storage. A late
+comparison therefore cannot observe a builder changing the next revision.
+Copies retire with the original terminal-case storage lifecycle, after native
+and direct work is quiescent; accepted results remain in the ledger/artifacts.
+Frozen legacy jobs keep their old paths: drain those jobs before first activation.
+
+A capacity-only rollout can run existing cases under their original accepted
+policy revision while using the new slot/admission counts. Compatibility is an
+exact comparison of every other policy field (apart from the existing conversation
+switch). Models, actors, labels, exclusions, retry budgets, paths and merge policy
+must match. Any other change retains the revision-mismatch fence. This does not
+rewrite accepted policy rows, case history or frozen jobs.
+
+The first live trial should admit two issues with the limits above, retaining
+the current model assignments and human-only merge policy. Raising limits is an
+explicit policy/deployment change, not an automatic response to a backlog. Verify
+actual overlapping execution, exact-head reviews, resource use, restart behavior
+and cleanup before raising them further. Local tests are not live trial proof.
+
 ### GitHub conversation lane
 
 Opt-in mentions and human feedback use the existing webhook/queue/publication

@@ -100,6 +100,19 @@ impl Store {
             .collect()
     }
 
+    pub fn has_pending_conversation(
+        &self,
+        repository_id: u64,
+        case_key: Option<&str>,
+    ) -> Result<bool> {
+        Ok(self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM conversations WHERE repository_id=?1
+             AND (?2 IS NULL OR case_key=?2) AND state NOT IN ('PUBLISHED','IGNORED','FAILED'))",
+            params![sql_u64(repository_id)?, case_key],
+            |row| row.get(0),
+        )?)
+    }
+
     pub fn conversation(&self, key: &str) -> Result<Option<Conversation>> {
         let raw = self.connection.query_row("SELECT repository_id,thread_number,actor_id,case_key,received_at,payload_json,payload_sha256,state,spec_json,task_id,answer_json,reply_body FROM conversations WHERE message_key=?1", [key], |row| {
             Ok((row.get::<_,i64>(0)?,row.get::<_,i64>(1)?,row.get::<_,i64>(2)?,row.get::<_,Option<String>>(3)?,row.get::<_,i64>(4)?,row.get::<_,String>(5)?,row.get::<_,String>(6)?,row.get::<_,String>(7)?,row.get::<_,Option<String>>(8)?,row.get::<_,Option<String>>(9)?,row.get::<_,Option<String>>(10)?,row.get::<_,Option<String>>(11)?))

@@ -421,6 +421,15 @@ fn builder_runs_once_in_fresh_exact_model_mode_and_retains_complete_artifacts() 
 
 #[test]
 fn reviewer_can_run_checks_noninteractively_but_worktree_mutation_is_rejected() {
+    review_mutation_guard(WorkerRole::ReviewerSecperf, 3);
+}
+
+#[test]
+fn direct_general_review_has_the_same_exact_head_mutation_guard() {
+    review_mutation_guard(WorkerRole::ReviewerGeneral, 2);
+}
+
+fn review_mutation_guard(role: WorkerRole, index: usize) {
     let tmp = tempfile::tempdir().unwrap();
     let worktree = tmp.path().join("worktree");
     let artifacts = tmp.path().join("artifacts");
@@ -428,18 +437,14 @@ fn reviewer_can_run_checks_noninteractively_but_worktree_mutation_is_rejected() 
     let runner = FakeRunner::default();
     runner.push(b"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n".to_vec());
     runner.push(Vec::new());
-    runner.push(envelope(&results()[3]));
+    runner.push(envelope(&results()[index]));
     runner.push(b"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n".to_vec());
     runner.push(b" M src/lib.rs\n".to_vec());
 
     assert!(matches!(
         executor(runner.clone()).execute(
             &health("claude-opus-4-8-thinking-high"),
-            &task(
-                WorkerRole::ReviewerSecperf,
-                "claude-opus-4-8-thinking-high",
-                3,
-            ),
+            &task(role, "claude-opus-4-8-thinking-high", index,),
             &worktree,
             &artifacts,
         ),

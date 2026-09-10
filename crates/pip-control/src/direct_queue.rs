@@ -269,7 +269,7 @@ pub fn schedule_direct_queue_once(
         prepared: None,
         errors: Default::default(),
     };
-    if !queue_files(&queue.inbox)?.is_empty() {
+    if policy.execution_capacity.is_none() && !queue_files(&queue.inbox)?.is_empty() {
         return Ok(report);
     }
     for effect in ["RUN_DIRECT_WORKER", "RUN_DIRECT_OBSERVER"] {
@@ -310,11 +310,26 @@ fn prepare_direct_queue_once(
     effect: &str,
 ) -> Result<DirectQueueCycle, DirectQueueError> {
     let policy = scope.policy;
-    // This queue has one serial worker. Do not start another job's lease while
-    // it can only wait, or replace an uncertain handoff after its lease expires.
-    // Existing multi-job queues drain normally through result reconciliation.
-    if !queue_files(&queue.inbox)?.is_empty() {
+    // Serialize capacity checks and handoff creation across controller processes.
+    let lock = std::fs::File::open(&queue.inbox).map_err(filesystem)?;
+    match lock.try_lock() {
+        Ok(()) => (),
+        Err(std::fs::TryLockError::WouldBlock) => return Ok(DirectQueueCycle::Idle),
+        Err(std::fs::TryLockError::Error(error)) => return Err(filesystem(error)),
+    }
+    let paths = queue_files(&queue.inbox)?;
+    if policy.execution_capacity.is_none() && !paths.is_empty() {
         return Ok(DirectQueueCycle::Idle);
+    }
+    let occupied = paths
+        .iter()
+        .map(|path| read_envelope::<WorkEnvelope>(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    for (path, work) in paths.iter().zip(&occupied) {
+        if work.schema_version != 1 || work.attempt_id == 0 || *path != queue.input(work.attempt_id)
+        {
+            return Err(DirectQueueError::InvalidEnvelope);
+        }
     }
     // Comparisons use spare queue capacity, never priority over required work.
     let claimed = scope.claim(store, owner, now, lease_seconds, &[effect])?;
@@ -340,6 +355,18 @@ fn prepare_direct_queue_once(
             return Err(error);
         }
     };
+    if let Some(capacity) = policy.execution_capacity {
+        let proposed = WorkEnvelope {
+            schema_version: 1,
+            attempt_id: 0,
+            claimed: claimed.clone(),
+            task: task.clone(),
+        };
+        if !slot_available(&proposed, &occupied.iter().collect::<Vec<_>>(), capacity) {
+            store.release_effect(&claimed.effect_id, owner)?;
+            return Ok(DirectQueueCycle::Idle);
+        }
+    }
     let attempt_id = store.begin_direct_attempt(&claimed, &task.task_id, now)?;
     let envelope = WorkEnvelope {
         schema_version: 1,
@@ -378,43 +405,161 @@ pub fn execute_direct_queue_once<R: DirectWorkerRuntime>(
         {
             return Err(DirectQueueError::InvalidEnvelope);
         }
-        let result_path = queue.result(work.attempt_id);
-        if result_path.exists() {
-            continue;
+        if !queue.result(work.attempt_id).exists() {
+            return execute_work(runtime, queue, &work, now);
         }
-        let result = if now > work.claimed.lease_until {
-            ResultEnvelope::Unavailable {
-                schema_version: 1,
-                attempt_id: work.attempt_id,
-                error: "controller lease expired before direct execution".into(),
-            }
-        } else {
-            match runtime.execute(&work.task, work.attempt_id) {
-                Ok(result) => ResultEnvelope::Complete {
-                    schema_version: 1,
-                    attempt_id: work.attempt_id,
-                    result: Box::new(result),
-                },
-                Err(DirectWorkerRuntimeError::Unavailable(error)) => ResultEnvelope::Unavailable {
-                    schema_version: 1,
-                    attempt_id: work.attempt_id,
-                    error: bounded_error(&error),
-                },
-                Err(error) => ResultEnvelope::Failed {
-                    schema_version: 1,
-                    attempt_id: work.attempt_id,
-                    error: bounded_error(&error.to_string()),
-                },
-            }
-        };
-        let succeeded = matches!(result, ResultEnvelope::Complete { .. });
-        write_new(&result_path, &result, 0o640)?;
-        return Ok(DirectQueueCycle::Executed {
-            attempt_id: work.attempt_id,
-            succeeded,
-        });
     }
     Ok(DirectQueueCycle::Idle)
+}
+
+fn execute_work<R: DirectWorkerRuntime>(
+    runtime: &R,
+    queue: &DirectQueue,
+    work: &WorkEnvelope,
+    now: u64,
+) -> Result<DirectQueueCycle, DirectQueueError> {
+    let result = if now > work.claimed.lease_until {
+        ResultEnvelope::Unavailable {
+            schema_version: 1,
+            attempt_id: work.attempt_id,
+            error: "controller lease expired before direct execution".into(),
+        }
+    } else {
+        match runtime.execute(&work.task, work.attempt_id) {
+            Ok(result) => ResultEnvelope::Complete {
+                schema_version: 1,
+                attempt_id: work.attempt_id,
+                result: Box::new(result),
+            },
+            Err(DirectWorkerRuntimeError::Unavailable(error)) => ResultEnvelope::Unavailable {
+                schema_version: 1,
+                attempt_id: work.attempt_id,
+                error: bounded_error(&error),
+            },
+            Err(error) => ResultEnvelope::Failed {
+                schema_version: 1,
+                attempt_id: work.attempt_id,
+                error: bounded_error(&error.to_string()),
+            },
+        }
+    };
+    let succeeded = matches!(result, ResultEnvelope::Complete { .. });
+    write_new(&queue.result(work.attempt_id), &result, 0o640)?;
+    Ok(DirectQueueCycle::Executed {
+        attempt_id: work.attempt_id,
+        succeeded,
+    })
+}
+
+/// One service owns the drainer; threads occupy separate builder/reviewer slots.
+/// Finished slots can accept newly prepared work while another job is still running.
+pub fn execute_direct_queue_pool<R: DirectWorkerRuntime + Sync>(
+    runtime: &R,
+    queue: &DirectQueue,
+    policy: &crate::RepositoryPolicy,
+    capacity: crate::ExecutionCapacity,
+    now: u64,
+) -> Result<Vec<DirectQueueCycle>, DirectQueueError> {
+    if !capacity.valid() {
+        return Err(DirectQueueError::InvalidQueue);
+    }
+    let lock = std::fs::File::open(&queue.results).map_err(filesystem)?;
+    match lock.try_lock() {
+        Ok(()) => (),
+        Err(std::fs::TryLockError::WouldBlock) => return Ok(vec![]),
+        Err(std::fs::TryLockError::Error(error)) => return Err(filesystem(error)),
+    }
+    let started = std::time::Instant::now();
+    std::thread::scope(|scope| {
+        let mut active: Vec<(
+            WorkEnvelope,
+            std::thread::ScopedJoinHandle<'_, Result<DirectQueueCycle, DirectQueueError>>,
+        )> = Vec::new();
+        let mut finished = Vec::new();
+        loop {
+            let mut index = 0;
+            while index < active.len() {
+                if active[index].1.is_finished() {
+                    let (_, thread) = active.remove(index);
+                    finished.push(
+                        thread
+                            .join()
+                            .map_err(|_| DirectQueueError::InvalidQueue)??,
+                    );
+                } else {
+                    index += 1;
+                }
+            }
+            for path in queue_paths(&queue.inbox)? {
+                if path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .and_then(|name| name.strip_prefix("attempt-"))
+                    .and_then(|name| name.strip_suffix(".json.new"))
+                    .is_some_and(|id| id.parse::<u64>().is_ok_and(|id| id > 0))
+                {
+                    continue; // An atomic handoff is still being written, not published.
+                }
+                let work: WorkEnvelope = match read_envelope(&path) {
+                    Ok(work) => work,
+                    Err(_) if matches!(fs::symlink_metadata(&path), Err(error) if error.kind() == std::io::ErrorKind::NotFound) =>
+                    {
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
+                if work.schema_version != 1
+                    || work.attempt_id == 0
+                    || path != queue.input(work.attempt_id)
+                {
+                    return Err(DirectQueueError::InvalidEnvelope);
+                }
+                if work.task.body["repository_id"].as_u64() != Some(policy.repository.id)
+                    || queue.result(work.attempt_id).exists()
+                    || active
+                        .iter()
+                        .any(|(other, _)| other.attempt_id == work.attempt_id)
+                {
+                    continue;
+                }
+                let jobs = active.iter().map(|(job, _)| job).collect::<Vec<_>>();
+                if !slot_available(&work, &jobs, capacity) {
+                    continue;
+                }
+                let input = work.clone();
+                let observed = now.saturating_add(started.elapsed().as_secs());
+                let thread = scope.spawn(move || execute_work(runtime, queue, &input, observed));
+                active.push((work, thread));
+            }
+            if active.is_empty() {
+                return Ok(finished);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    })
+}
+
+fn slot_available(
+    work: &WorkEnvelope,
+    jobs: &[&WorkEnvelope],
+    capacity: crate::ExecutionCapacity,
+) -> bool {
+    let builder = work.task.role == pip_contracts::WorkerRole::Builder;
+    let limit = if builder {
+        capacity.builders
+    } else {
+        capacity.direct_reviewers
+    };
+    let occupied = jobs
+        .iter()
+        .filter(|job| (job.task.role == pip_contracts::WorkerRole::Builder) == builder)
+        .count();
+    occupied < limit as usize
+        && !jobs.iter().any(|job| {
+            job.task.workspace == work.task.workspace
+                || (job.claimed.case_key == work.claimed.case_key
+                    && (builder || job.task.role == pip_contracts::WorkerRole::Builder))
+        })
 }
 
 fn ingest_result<'a>(

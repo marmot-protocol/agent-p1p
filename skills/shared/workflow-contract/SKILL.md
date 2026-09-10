@@ -1,7 +1,7 @@
 ---
 name: workflow-contract
 description: Use for every Pip case task. Enforce shared invariants.
-version: 0.15.0
+version: 0.16.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -46,6 +46,19 @@ and no-merge restrictions still apply. Their context is the frozen task body.
 16. Return contract version 2 with exactly these common fields plus the role fields: `contract_version`, `workflow_version`, `case` (`repository_id`, `issue_number`, `workflow_version`), `task_id`, `role`, `requested_model`, `actual_model`, `skills_repository_commit`, integer `started_at_unix`, integer `completed_at_unix`, and object `evidence`. Review results also copy the exact `reviewer_id`; the controller-owned `review_mode` binding is not an output choice. Put supplemental artifact paths or diagnostics inside `evidence`. The full field guide is `references/worker-result-contracts.md` in the loaded `workflow-contract` skill directory (not the target repository).
 
 ## Hermes storage
+
+When `cargo_jobs` is present, set `CARGO_BUILD_JOBS` to that integer on every
+Cargo command. Do not increase it or launch parallel test/build commands within
+the task; other pipeline slots share this host. This is a per-task budget, not
+a claim that the entire host is available to this worker.
+
+Review tasks with `review_snapshot` have a private, detached, read-only copy of
+the exact `expected_head_sha`. Stay in the assigned checkout; never use the
+builder's mutable checkout named by the snapshot's `source` provenance field.
+Do not fetch, switch branches, modify source or Git metadata, or change its
+permissions. Direct reviewers inherit `CARGO_TARGET_DIR` pointing to their own
+sibling `build/target` on workspace storage. Preserve it. Native reviewers use
+their `storage` paths below. Report a missing or incorrect snapshot as blocked.
 
 For Hermes tasks carrying `storage` schema 1, 2 or 3, `source` is the controller-owned
 read-only checkout, and the current directory remains that checkout. Use the

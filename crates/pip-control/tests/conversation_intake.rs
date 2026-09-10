@@ -91,6 +91,15 @@ fn conversation_replan_recommendation_cannot_restart_escalated_work() {
 }
 
 fn conversation_roundtrip(follow_up: bool, state: Option<&str>) {
+    conversation_roundtrip_with_peer(follow_up, state, false);
+}
+
+#[test]
+fn slotted_conversation_can_answer_while_an_unrelated_native_worker_runs() {
+    conversation_roundtrip_with_peer(false, None, true);
+}
+
+fn conversation_roundtrip_with_peer(follow_up: bool, state: Option<&str>, peer: bool) {
     let dir = tempfile::tempdir().unwrap();
     let mut path = dir.path().join("ledger.db");
     let mut store = Store::open(&path).unwrap();
@@ -162,6 +171,22 @@ fn conversation_roundtrip(follow_up: bool, state: Option<&str>) {
             .unwrap();
     }
     let writer = Replies::default();
+    if peer {
+        policy.execution_capacity = Some(pip_control::ExecutionCapacity {
+            native_sessions: 2,
+            builders: 1,
+            direct_reviewers: 1,
+            ready_plans: 2,
+            cargo_jobs: 2,
+        });
+        queue.0.borrow_mut().push(serde_json::from_value(json!({
+            "id":"unrelated-worker","title":"Review another case","status":"in_progress",
+            "assignee":"reviewer-general","created_by":"pip-controller",
+            "body":json!({"case_key":"unrelated"}).to_string(),"workspace_kind":"scratch",
+            "workspace_path":null,"skills":["reviewer-general","workflow-contract"],
+            "provider_override":"openai-codex","model_override":"gpt-6-astra","max_retries":1,"priority":10
+        })).unwrap());
+    }
     let run = |store: &mut Store| {
         pip_control::reconcile_conversation_once(
             &AuthorizedSource(&source, follow_up),
@@ -174,6 +199,9 @@ fn conversation_roundtrip(follow_up: bool, state: Option<&str>) {
         )
     };
     assert_eq!(run(&mut store).unwrap()["result"], "queued");
+    if peer {
+        queue.0.borrow_mut().remove(0);
+    }
     assert_eq!(queue.0.borrow().len(), 1);
     let body: serde_json::Value = serde_json::from_str(&queue.0.borrow()[0].body).unwrap();
     let snapshot = &body["pipeline_status"];
