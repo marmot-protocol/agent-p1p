@@ -47,6 +47,7 @@ pub enum Event {
     BuilderDispatched,
     BuilderRetryAuthorized,
     ReviewRetryAuthorized,
+    InfrastructureRecoveryAuthorized,
     PublicationRetryAuthorized,
     BuildRecorded,
     ReviewReady,
@@ -75,7 +76,7 @@ pub enum Event {
 }
 
 impl Event {
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 43] = [
         Self::PlanRecorded,
         Self::Proceed,
         Self::WaitingForIssueCreator,
@@ -93,6 +94,7 @@ impl Event {
         Self::BuilderDispatched,
         Self::BuilderRetryAuthorized,
         Self::ReviewRetryAuthorized,
+        Self::InfrastructureRecoveryAuthorized,
         Self::PublicationRetryAuthorized,
         Self::BuildRecorded,
         Self::ReviewReady,
@@ -205,6 +207,7 @@ string_enum!(Event, "event", {
     "BUILDER_DISPATCHED" => BuilderDispatched,
     "BUILDER_RETRY_AUTHORIZED" => BuilderRetryAuthorized,
     "REVIEW_RETRY_AUTHORIZED" => ReviewRetryAuthorized,
+    "INFRASTRUCTURE_RECOVERY_AUTHORIZED" => InfrastructureRecoveryAuthorized,
     "PUBLICATION_RETRY_AUTHORIZED" => PublicationRetryAuthorized,
     "BUILD_RECORDED" => BuildRecorded,
     "REVIEW_READY" => ReviewReady,
@@ -394,6 +397,11 @@ pub fn transition(
         }
         (State::Escalated, Ev::ReviewRetryAuthorized) => {
             decision(State::WaitingCi, &[Fx::ObserveCi])
+        }
+        (State::Escalated, Ev::InfrastructureRecoveryAuthorized)
+            if context.remediation_round < context.max_remediation_rounds =>
+        {
+            decision(State::Remediating, &[Fx::DispatchBuilder])
         }
         (
             State::WaitingCi | State::Reviewing | State::FinalReview,

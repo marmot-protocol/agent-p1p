@@ -98,6 +98,7 @@ pub fn run_cli(arguments: impl IntoIterator<Item = String>) -> Result<Value, Cli
         "authorize-builder-retry" => authorize_retry(&arguments[1..], false),
         "authorize-review-retry" => authorize_retry(&arguments[1..], true),
         "authorize-publication-retry" => authorize_publication_retry(&arguments[1..]),
+        "authorize-infrastructure-recovery" => authorize_infrastructure_recovery(&arguments[1..]),
         "install-release" => install(&arguments[1..]),
         _ => Err(CliError::InvalidArgument(command.into())),
     }
@@ -162,6 +163,14 @@ fn authorize_retry(arguments: &[String], review: bool) -> Result<Value, CliError
 }
 
 fn authorize_publication_retry(arguments: &[String]) -> Result<Value, CliError> {
+    authorize_head_recovery(arguments, false)
+}
+
+fn authorize_infrastructure_recovery(arguments: &[String]) -> Result<Value, CliError> {
+    authorize_head_recovery(arguments, true)
+}
+
+fn authorize_head_recovery(arguments: &[String], infrastructure: bool) -> Result<Value, CliError> {
     let options = options(
         arguments,
         &[
@@ -186,12 +195,17 @@ fn authorize_publication_retry(arguments: &[String]) -> Result<Value, CliError> 
         request_id: required(&options, "--request-id")?.into(),
         reason: required(&options, "--reason")?.into(),
     };
-    let result =
-        crate::authorize_publication_retry(&mut store, &policy, &request, current_time()?, 0)
-            .map_err(CliError::Reconciliation)?;
+    let authorize = if infrastructure {
+        crate::authorize_infrastructure_recovery
+    } else {
+        crate::authorize_publication_retry
+    };
+    let result = authorize(&mut store, &policy, &request, current_time()?, 0)
+        .map_err(CliError::Reconciliation)?;
     Ok(
         json!({"ok":true,"result":format!("{result:?}"),"case_key":request.case_key,"request_id":request.request_id,
-        "additional_attempts":0,"runtime_activated":false,"history_preserved":true}),
+        "additional_attempts":0,"runtime_activated":false,"history_preserved":true,
+        "recovery_deadline":if infrastructure {store.infrastructure_recovery_deadline(&request.case_key).map_err(|e|CliError::Ledger(e.to_string()))?} else {None}}),
     )
 }
 

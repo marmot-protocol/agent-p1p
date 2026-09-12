@@ -480,6 +480,11 @@ fn evidence_focus(context: &DispatchContext, binding: &RolePolicy) -> Value {
             && row["payload"]["plan_version"].as_u64()
                 == context.plan_version.map(|version| u64::from(version.get()))
     });
+    if binding.role == WorkerRole::Builder {
+        latest("events", &|row| {
+            row["event_type"] == "INFRASTRUCTURE_RECOVERY_AUTHORIZED"
+        });
+    }
     if binding.role != WorkerRole::Planner {
         let head = context.head_sha.map(|sha| sha.to_string());
         latest("runs", &|row| {

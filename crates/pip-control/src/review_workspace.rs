@@ -170,37 +170,58 @@ fn materialize(snapshot: &Value) -> Result<(), String> {
         verify(&root.join("source"), head, owner)?;
         return Ok(());
     }
+    with_staging(parent, |staging| {
+        let checkout = staging.join("source");
+        fs::create_dir(&checkout).map_err(error)?;
+        git(&checkout, &["init", "--quiet", "--template="])?;
+        let reference = format!("+{head}:refs/pip/review-head");
+        git(
+            &checkout,
+            &[
+                "fetch",
+                "--no-tags",
+                "--no-write-fetch-head",
+                "--",
+                source.to_str().ok_or("invalid source")?,
+                &reference,
+            ],
+        )?;
+        git(&checkout, &["checkout", "--quiet", "--detach", head])?;
+        protect(&checkout, false)?;
+        verify(&checkout, head, owner)?;
+        let build = staging.join("build");
+        fs::create_dir(&build).map_err(error)?;
+        // Both service identities use pip-control as their shared group. Do not
+        // request setgid: the controller deliberately has RestrictSUIDSGID=yes.
+        fs::set_permissions(&build, fs::Permissions::from_mode(0o770)).map_err(error)?;
+        let marker = staging.join("ownership.json");
+        fs::write(&marker, serde_json::to_vec(snapshot).map_err(error)?).map_err(error)?;
+        fs::set_permissions(marker, fs::Permissions::from_mode(0o600)).map_err(error)?;
+        fs::set_permissions(staging, fs::Permissions::from_mode(0o755)).map_err(error)?;
+        fs::rename(staging, root).map_err(error)?;
+        Ok(())
+    })
+}
+
+fn with_staging(
+    parent: &Path,
+    action: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<(), String> {
     let staging = tempfile::Builder::new()
         .prefix(".preparing-")
         .tempdir_in(parent)
         .map_err(error)?;
-    let checkout = staging.path().join("source");
-    fs::create_dir(&checkout).map_err(error)?;
-    git(&checkout, &["init", "--quiet", "--template="])?;
-    let reference = format!("+{head}:refs/pip/review-head");
-    git(
-        &checkout,
-        &[
-            "fetch",
-            "--no-tags",
-            "--no-write-fetch-head",
-            "--",
-            source.to_str().ok_or("invalid source")?,
-            &reference,
-        ],
-    )?;
-    git(&checkout, &["checkout", "--quiet", "--detach", head])?;
-    protect(&checkout, false)?;
-    verify(&checkout, head, owner)?;
-    let build = staging.path().join("build");
-    fs::create_dir(&build).map_err(error)?;
-    fs::set_permissions(&build, fs::Permissions::from_mode(0o2770)).map_err(error)?;
-    let marker = staging.path().join("ownership.json");
-    fs::write(&marker, serde_json::to_vec(snapshot).map_err(error)?).map_err(error)?;
-    fs::set_permissions(marker, fs::Permissions::from_mode(0o600)).map_err(error)?;
-    fs::set_permissions(staging.path(), fs::Permissions::from_mode(0o755)).map_err(error)?;
-    fs::rename(staging.path(), root).map_err(error)?;
-    Ok(())
+    let result = action(staging.path());
+    // Published snapshots have been atomically renamed out of staging. On
+    // failure, TempDir alone cannot remove a read-only tree as this UID.
+    if staging.path().try_exists().map_err(error)? {
+        protect(staging.path(), true)
+            .map_err(|cleanup| format!("{result:?}; staging cleanup: {cleanup}"))?;
+        staging
+            .close()
+            .map_err(|cleanup| format!("{result:?}; staging cleanup: {cleanup}"))?;
+    }
+    result
 }
 
 fn verify(path: &Path, head: &str, owner: u32) -> Result<(), String> {
@@ -297,6 +318,34 @@ mod tests {
     use super::*;
     use std::process::Command;
 
+    #[test]
+    fn failed_read_only_snapshot_is_removed_without_following_symlinks() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("snapshots");
+        fs::create_dir(&parent).unwrap();
+        let outside = temp.path().join("outside");
+        fs::write(&outside, "keep").unwrap();
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o640)).unwrap();
+        for _ in 0..3 {
+            let result = with_staging(&parent, |staging| {
+                let source = staging.join("source");
+                fs::create_dir(&source).unwrap();
+                fs::write(source.join("file"), "retained only until failure").unwrap();
+                std::os::unix::fs::symlink(&outside, source.join("link")).unwrap();
+                protect(&source, false).unwrap();
+                Err("injected failure after protecting source".into())
+            });
+            assert!(result.unwrap_err().contains("injected failure"));
+            assert_eq!(
+                fs::read_dir(&parent).unwrap().count(),
+                0,
+                "failed attempts must not accumulate read-only snapshots"
+            );
+            assert_eq!(fs::metadata(&outside).unwrap().mode() & 0o777, 0o640);
+            assert_eq!(fs::read_to_string(&outside).unwrap(), "keep");
+        }
+    }
+
     fn git_at(path: &std::path::Path, args: &[&str]) -> String {
         let out = Command::new("git")
             .args(args)
@@ -339,6 +388,11 @@ mod tests {
         materialize(&second).unwrap();
         let root = std::path::Path::new(first["root"].as_str().unwrap());
         let checkout = root.join("source");
+        assert_eq!(
+            std::fs::metadata(root.join("build")).unwrap().mode() & 0o7777,
+            0o770,
+            "controller sandbox forbids setgid; its primary group already owns build output"
+        );
         for parent in [
             root.parent().unwrap(),
             root.parent().unwrap().parent().unwrap(),

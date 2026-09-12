@@ -1,5 +1,28 @@
 # Offline work and publication recovery
 
+## Recover review infrastructure after an expired deadline
+
+`authorize-infrastructure-recovery` is an exceptional root-only operation after
+repairing a controller infrastructure defect. It uses the same inert-policy,
+stopped/disabled execution-unit and drained-queue checks as the commands below.
+Supply `--policy`, `--database`, `--direct-queue`, `--case`, `--expected-revision`,
+`--expected-head`, `--request-id`, and a bounded human `--reason` explaining the
+repair and required reconciliation. Reuse the request ID after an uncertain response.
+
+Only an elapsed-time escalation directly from `REVIEWING`, with retained plan,
+build, PR and exact head, is eligible. The command appends
+`INFRASTRUCTURE_RECOVERY_AUTHORIZED` and grants one new time window equal to the
+accepted policy's case-duration limit, measured from the real operator clock.
+It preserves original authorization time, accepted policy, all failures/results,
+and the provider-failure limit. It consumes a normal remediation round and queues
+the builder to reconcile retained work with current upstream before fresh CI,
+independent reviews and final preflight. It does not activate runtime or authorize
+merge. Other escalation causes and exhausted remediation/failure budgets remain held.
+
+Do not downgrade a recovered ledger to a binary that does not understand this
+event and deadline. Keep a compatible release or remain paused; equal database
+schema versions alone are not runtime compatibility proof.
+
 Use this only after diagnosing and repairing a failed builder execution.
 It is not a general retry switch or a substitute for repairing provider errors.
 

@@ -30,6 +30,8 @@ runuser -u builder -- bash -lc '
   printf "ERERERERERERERERERERERERERERERERERERERERERE=" >/work/keys/signing.key
   chmod 0600 /work/keys/signing.key
   cargo build --locked -p pip-control
+  cargo test --locked -p pip-control --lib --no-run --message-format=json |
+    jq -r '\''select(.profile.test == true and .target.name == "pip_control") | .executable // empty'\'' > /work/review-test-binary
   target/debug/pip-control derive-public-key --signing-key /work/keys/signing.key \
     | jq -r .public_key >/work/keys/public.key
   for version in 0.1.0 0.1.1 0.1.2; do
@@ -128,6 +130,14 @@ test "$(stat -c '%U:%G:%a' /var/lib/pip/ledger.db)" = pip-control:pip-control:60
 test "$(stat -c '%U:%G:%a' /var/lib/pip)" = pip-control:pip-control:710
 test "$(stat -c '%U:%G:%a' /var/lib/pip/worktrees)" = pip-control:pip-control:770
 test "$(stat -c '%U:%G:%a' /var/lib/pip/worktrees/hermes-scratch)" = pip-control:pip-control:700
+read -r review_test </work/review-test-binary
+test -x "$review_test"
+systemd-run --quiet --wait --pipe --collect --unit=pip-review-storage-regression \
+  --property=User=pip-control --property=Group=pip-control \
+  --property=UMask=0077 --property=RestrictSUIDSGID=yes \
+  --property=NoNewPrivileges=yes --property=PrivateTmp=yes \
+  --property=ProtectSystem=strict \
+  "$review_test" review_workspace::tests --test-threads=1
 test "$(getent passwd pip-ingress | cut -d: -f6-7)" = /nonexistent:/usr/sbin/nologin
 test "$(id -Gn pip-ingress)" = pip-ingress
 test "$(stat -c '%U:%G:%a' /var/spool/pip-webhooks)" = root:root:711

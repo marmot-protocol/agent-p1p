@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 
 mod builder_retry;
 mod conversations;
+mod infrastructure_recovery;
 pub use conversations::{Conversation, ConversationInput};
 mod case_activity;
 pub use case_activity::CaseActivity;
@@ -1212,6 +1213,9 @@ impl Store {
                 "BUILDER_RETRY_AUTHORIZED" | "REVIEW_RETRY_AUTHORIZED"
             ) {
                 builder_retry::validate_retry(&transaction, &current, input)?;
+            }
+            if input.event.event_type == "INFRASTRUCTURE_RECOVERY_AUTHORIZED" {
+                infrastructure_recovery::validate(&transaction, &current, input)?;
             }
             let policy_revision = if input.event.event_type == "ISSUE_REAUTHORIZED" {
                 reauthorization::validate(&transaction, &current, input)?

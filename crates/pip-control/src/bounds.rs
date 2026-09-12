@@ -94,7 +94,12 @@ pub fn enforce_operational_bounds<'a>(
             .ok_or(OperationalBoundsError::InvalidCase)?;
         let elapsed = now.saturating_sub(created_at);
         let elapsed_limit = policy.max_case_elapsed_seconds;
-        if elapsed >= elapsed_limit {
+        let deadline = created_at.saturating_add(elapsed_limit).max(
+            store
+                .infrastructure_recovery_deadline(&case.case_key)?
+                .unwrap_or(0),
+        );
+        if now >= deadline {
             return escalate(
                 store,
                 policy,
