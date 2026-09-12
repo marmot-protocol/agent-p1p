@@ -65,6 +65,12 @@ fn terminal_states_reject_work_and_only_allow_merge_classification_correction() 
         CaseState::TakenOver,
     ] {
         for event in Event::ALL {
+            if state == CaseState::TakenOver && event == Event::FollowUpRecoveryAuthorized {
+                let result = transition(state, event, TransitionContext::default()).unwrap();
+                assert_eq!(result.next_state, CaseState::Planning);
+                assert_eq!(result.effects, [Effect::DispatchPlanner]);
+                continue;
+            }
             if state == CaseState::TakenOver && event == Event::HumanMerged {
                 let result = transition(state, event, TransitionContext::default()).unwrap();
                 assert_eq!(result.next_state, CaseState::Completed);

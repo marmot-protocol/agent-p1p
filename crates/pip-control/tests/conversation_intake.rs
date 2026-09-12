@@ -46,7 +46,11 @@ impl CommandRunner for Queue {
     }
 }
 #[derive(Default)]
-struct Replies(RefCell<Vec<String>>, std::cell::Cell<bool>);
+struct Replies(
+    RefCell<Vec<String>>,
+    std::cell::Cell<bool>,
+    std::cell::Cell<u32>,
+);
 impl pip_control::DispositionWriter for Replies {
     fn ensure_comment(
         &self,
@@ -68,6 +72,25 @@ impl pip_control::DispositionWriter for Replies {
     ) -> Result<pip_github::MutationResult, GitHubError> {
         panic!("conversation cannot mark a PR ready")
     }
+    fn mark_draft(
+        &self,
+        spec: &pip_github::PullRequestReadySpec,
+    ) -> Result<pip_github::MutationResult, GitHubError> {
+        assert_eq!(spec.pull_request_number, 77);
+        assert_eq!(spec.expected_head_sha, "b".repeat(40));
+        assert_eq!(spec.expected_actor_id, 88);
+        let count = self.2.get();
+        self.2.set(count + 1);
+        if count == 0 {
+            return Err(GitHubError::Transport("uncertain draft response".into()));
+        }
+        Ok(pip_github::MutationResult::Existing(77))
+    }
+}
+
+#[test]
+fn ready_follow_up_withdraws_readiness_before_replanning_and_retries_safely() {
+    conversation_roundtrip(true, Some("SHADOW_READY"));
 }
 
 #[test]
@@ -156,6 +179,32 @@ fn conversation_roundtrip_with_peer(follow_up: bool, state: Option<&str>, peer: 
                 effects: vec![],
             })
             .unwrap();
+        if state == "SHADOW_READY" {
+            store
+                .apply_transition(
+                    &pip_store::TransitionInput {
+                        case_key: case_key.clone(),
+                        expected_revision: 1,
+                        next_state: state.into(),
+                        remediation_round: 0,
+                        plan_version: 1,
+                        pr_number: Some(77),
+                        head_sha: Some("b".repeat(40)),
+                        observed_at: 91,
+                        event: pip_store::EventInput {
+                            event_id: "ready".into(),
+                            event_type: "FINAL_READY".into(),
+                            payload: json!({}),
+                        },
+                        run: None,
+                        evidence: vec![],
+                        findings: vec![],
+                        effects: vec![],
+                    },
+                    None,
+                )
+                .unwrap();
+        }
         // Bind a distinct immutable input, rather than modifying the first one.
         store.finish_conversation(key, "IGNORED", None).unwrap();
         store
@@ -209,12 +258,14 @@ fn conversation_roundtrip_with_peer(follow_up: bool, state: Option<&str>, peer: 
     assert_eq!(snapshot["source"], "rust_ledger");
     if let Some(state) = state {
         assert_eq!(snapshot["case"]["state"], state);
-        assert_eq!(
-            snapshot["recent_events"][0]["details"]["blockers"][0],
-            "CHECK_RUN_FAILURE: Required CI"
-        );
-        assert_eq!(snapshot["recent_events"][0]["observed_at"], 90);
-        assert!(!snapshot.to_string().contains("private_debug"));
+        if state != "SHADOW_READY" {
+            assert_eq!(
+                snapshot["recent_events"][0]["details"]["blockers"][0],
+                "CHECK_RUN_FAILURE: Required CI"
+            );
+            assert_eq!(snapshot["recent_events"][0]["observed_at"], 90);
+            assert!(!snapshot.to_string().contains("private_debug"));
+        }
         assert_eq!(snapshot["operator_recovery_required"], state == "ESCALATED");
     } else {
         assert_eq!(snapshot["tracking"], "NO_BOUND_CASE");
@@ -237,20 +288,31 @@ fn conversation_roundtrip_with_peer(follow_up: bool, state: Option<&str>, peer: 
         Some("/runtime/kanban/boards/pip-mdk/workspaces/task-conversation".into());
     drop(store);
     let mut store = Store::open(&path).unwrap();
+    if state == Some("SHADOW_READY") {
+        assert!(run(&mut store).is_err());
+        assert_eq!(store.status(102).unwrap().cases[0].state, "SHADOW_READY");
+        assert_eq!(store.status(102).unwrap().cases[0].state_revision, 2);
+        assert!(writer.0.borrow().is_empty());
+    }
     writer.1.set(true);
     assert!(run(&mut store).is_err());
     assert_eq!(run(&mut store).unwrap()["result"], "published");
     assert_eq!(run(&mut store).unwrap()["result"], "idle");
     assert_eq!(writer.0.borrow().len(), 1);
     assert!(writer.0.borrow()[0].contains("Here is the explanation."));
-    if follow_up && state == Some("WAITING_HUMAN") {
+    if follow_up && matches!(state, Some("WAITING_HUMAN" | "SHADOW_READY")) {
         let case = &store.status(102).unwrap().cases[0];
         assert_eq!(case.state, "PLANNING");
-        assert_eq!(case.state_revision, 2);
+        let revisions = if state == Some("SHADOW_READY") { 3 } else { 2 };
+        assert_eq!(case.state_revision, revisions);
         assert_eq!(case.remediation_round, 1);
         let history = store.immutable_history_for_case(&case.case_key).unwrap();
-        assert_eq!(history.events.len(), 2);
+        assert_eq!(history.events.len(), revisions as usize);
         assert_eq!(history.evidence[0].kind, "HUMAN_DISCUSSION");
+        assert_eq!(
+            writer.2.get(),
+            if state == Some("SHADOW_READY") { 2 } else { 0 }
+        );
     } else if let Some(state) = state {
         let cases = store.status(102).unwrap().cases;
         assert_eq!(cases.len(), 1);

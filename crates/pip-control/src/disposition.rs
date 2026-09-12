@@ -20,6 +20,9 @@ const COMMENT_EFFECTS: [&str; 3] = ["HOLD_FOR_HUMAN", "NOTIFY_SHADOW_READY", "ES
 pub trait DispositionWriter {
     fn ensure_comment(&self, spec: &CommentSpec) -> Result<MutationResult, GitHubError>;
     fn mark_ready(&self, spec: &PullRequestReadySpec) -> Result<MutationResult, GitHubError>;
+    fn mark_draft(&self, _spec: &PullRequestReadySpec) -> Result<MutationResult, GitHubError> {
+        Err(GitHubError::InvalidMutation)
+    }
 }
 
 impl<T: MutationTransport> DispositionWriter for GitHubWriter<T> {
@@ -28,6 +31,9 @@ impl<T: MutationTransport> DispositionWriter for GitHubWriter<T> {
     }
     fn mark_ready(&self, spec: &PullRequestReadySpec) -> Result<MutationResult, GitHubError> {
         self.mark_pull_request_ready(spec)
+    }
+    fn mark_draft(&self, spec: &PullRequestReadySpec) -> Result<MutationResult, GitHubError> {
+        self.mark_pull_request_draft(spec)
     }
 }
 

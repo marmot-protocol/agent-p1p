@@ -187,6 +187,67 @@ fn owned_exact_head_draft_is_marked_ready_through_graphql_once() {
     );
 }
 
+#[test]
+fn owned_ready_pr_returns_to_draft_with_exact_head_checks_and_idempotency() {
+    for fault in [
+        "none",
+        "already-draft",
+        "head",
+        "actor",
+        "response",
+        "after-head",
+    ] {
+        let transport = FakeTransport::default();
+        let mut ready = serde_json::json!({
+            "id":9001,"node_id":"PR_test","number":77,"state":"open","draft":false,
+            "title":"Title","body":"Body","html_url":"url","user":{"id":1001},
+            "head":{"ref":"pip/repo-984321/issue-1240/workflow-1","sha":"b".repeat(40),"repo":{"id":984321}},
+            "base":{"ref":"main"}
+        });
+        let mut draft = ready.clone();
+        draft["draft"] = serde_json::json!(true);
+        match fault {
+            "already-draft" => ready = draft.clone(),
+            "head" => ready["head"]["sha"] = serde_json::json!("c".repeat(40)),
+            "actor" => ready["user"]["id"] = serde_json::json!(999),
+            "after-head" => draft["head"]["sha"] = serde_json::json!("c".repeat(40)),
+            _ => {}
+        }
+        transport.push(200, &ready.to_string());
+        transport.push(200, &serde_json::json!({"data":{"convertPullRequestToDraft":{"pullRequest":{"id":"PR_test","isDraft":fault != "response"}}}}).to_string());
+        transport.push(200, &draft.to_string());
+        let result = writer(transport.clone()).mark_pull_request_draft(&PullRequestReadySpec {
+            owner: "marmot-protocol".into(),
+            repository: "mdk".into(),
+            repository_id: 984321,
+            pull_request_number: 77,
+            expected_actor_id: 1001,
+            expected_head_branch: "pip/repo-984321/issue-1240/workflow-1".into(),
+            expected_head_sha: "b".repeat(40),
+            expected_base_branch: "main".into(),
+            client_mutation_id: "feedback:draft".into(),
+        });
+        match fault {
+            "none" => {
+                assert_eq!(result.unwrap(), MutationResult::Updated(77));
+                let requests = transport.requests.borrow();
+                let body: serde_json::Value = serde_json::from_slice(&requests[1].body).unwrap();
+                assert!(
+                    body["query"]
+                        .as_str()
+                        .unwrap()
+                        .contains("convertPullRequestToDraft")
+                );
+            }
+            "already-draft" => {
+                assert_eq!(result.unwrap(), MutationResult::Existing(77));
+                assert_eq!(transport.requests.borrow().len(), 1);
+            }
+            _ => assert!(result.is_err(), "{fault}"),
+        }
+    }
+}
+
 fn pull_request() -> PullRequestSpec {
     PullRequestSpec {
         owner: "marmot-protocol".into(),

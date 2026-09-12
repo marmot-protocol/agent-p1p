@@ -255,7 +255,7 @@ pub fn reconcile_conversation_once<
     // Follow-up is deliberately handled before reply publication, with a
     // deterministic ledger event; a publication retry cannot repeat a replan.
     if message.reply_body.is_none() && answer.follow_up == "REPLAN" {
-        let disposition = handoff(source, policy, store, &message, &spec, now)?;
+        let disposition = handoff(source, writer, policy, store, &message, &spec, now)?;
         answer.reply.push_str("\n\n");
         answer.reply.push_str(disposition);
     }
@@ -369,8 +369,9 @@ fn pipeline_status(
     Ok(status)
 }
 
-fn handoff<S: IntakeSource>(
+fn handoff<S: IntakeSource, W: DispositionWriter>(
     source: &S,
+    writer: &W,
     policy: &RepositoryPolicy,
     store: &mut Store,
     message: &pip_store::Conversation,
@@ -435,6 +436,33 @@ fn handoff<S: IntakeSource>(
         );
     }
     let bounded = case.remediation_round >= policy.max_remediation_rounds;
+    // Withdraw Pip's completed disposition before accepting follow-up work.
+    // On an uncertain GitHub response the case stays ready; the exact-head
+    // mutation is idempotent. Never reinterpret a non-draft active PR here.
+    if state == CaseState::ShadowReady && !bounded {
+        let pr = case.pr_number.ok_or("ready case has no PR")?;
+        let result = writer.mark_draft(&pip_github::PullRequestReadySpec {
+            owner: policy.repository.owner.clone(),
+            repository: policy.repository.name.clone(),
+            repository_id: policy.repository.id,
+            pull_request_number: pr,
+            expected_actor_id: policy
+                .github
+                .automation_actor_id
+                .ok_or("missing automation actor")?,
+            expected_head_branch: format!(
+                "{}repo-{}/issue-{}/workflow-{}",
+                policy.branch_prefix, case.repository_id, case.issue_number, case.workflow_version
+            ),
+            expected_head_sha: case.head_sha.clone().ok_or("ready case has no head")?,
+            expected_base_branch: policy.repository.default_branch.clone(),
+            client_mutation_id: format!("{event_id}:draft"),
+        })?;
+        if !matches!(result, MutationResult::Existing(id) | MutationResult::Updated(id) if id == pr)
+        {
+            return Err("unexpected draft mutation result".into());
+        }
+    }
     let case_id = CaseId::new(
         RepositoryId::new(NonZeroU64::new(case.repository_id).ok_or("invalid repository")?),
         IssueNumber::new(NonZeroU64::new(case.issue_number).ok_or("invalid issue")?),

@@ -1,5 +1,31 @@
 # Offline work and publication recovery
 
+## Recover a false takeover after ready-for-review feedback
+
+Normal follow-up feedback on a `SHADOW_READY` PR now returns the exact owned PR
+to draft before recording `HUMAN_FEEDBACK_RECEIVED`. A failed or uncertain GitHub
+response leaves the workflow ready and retries idempotently. Other active states
+do not gain an exemption from human takeover detection.
+
+For the former bug only, `authorize-follow-up-recovery` accepts the same offline
+root-only arguments as `authorize-infrastructure-recovery` below. First verify
+the live PR is still open, owned, at the recorded head, and that the most recent
+ready-for-review action was Pip's, not a subsequent human action. Return that
+exact PR to draft before recovery. Do not reopen a merged, changed or genuinely
+handed-over PR.
+
+The ledger requires the consecutive recorded sequence `READY` to `SHADOW_READY`,
+unbounded `HUMAN_FEEDBACK_RECEIVED` to `PLANNING`, and `HUMAN_TOOK_OVER` solely for
+`PR_LEFT_DRAFT_STATE`, plus Pip's successful readiness publication receipt on
+that same PR/head. It appends `FOLLOW_UP_RECOVERY_AUTHORIZED` and queues planning
+once. Original feedback, plan, PR/head, takeover, elapsed-time deadline and
+already spent remediation/failure budgets are preserved. The operator must
+inspect the retained history and restore the accepted active policy separately.
+
+Do not downgrade a recovered ledger to a binary that cannot interpret
+`FOLLOW_UP_RECOVERY_AUTHORIZED`; equal schema versions do not imply compatible
+workflow behavior.
+
 ## Recover review infrastructure after an expired deadline
 
 `authorize-infrastructure-recovery` is an exceptional root-only operation after

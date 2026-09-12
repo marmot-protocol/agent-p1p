@@ -99,6 +99,7 @@ pub fn run_cli(arguments: impl IntoIterator<Item = String>) -> Result<Value, Cli
         "authorize-review-retry" => authorize_retry(&arguments[1..], true),
         "authorize-publication-retry" => authorize_publication_retry(&arguments[1..]),
         "authorize-infrastructure-recovery" => authorize_infrastructure_recovery(&arguments[1..]),
+        "authorize-follow-up-recovery" => authorize_head_recovery(&arguments[1..], "follow-up"),
         "install-release" => install(&arguments[1..]),
         _ => Err(CliError::InvalidArgument(command.into())),
     }
@@ -163,14 +164,15 @@ fn authorize_retry(arguments: &[String], review: bool) -> Result<Value, CliError
 }
 
 fn authorize_publication_retry(arguments: &[String]) -> Result<Value, CliError> {
-    authorize_head_recovery(arguments, false)
+    authorize_head_recovery(arguments, "publication")
 }
 
 fn authorize_infrastructure_recovery(arguments: &[String]) -> Result<Value, CliError> {
-    authorize_head_recovery(arguments, true)
+    authorize_head_recovery(arguments, "infrastructure")
 }
 
-fn authorize_head_recovery(arguments: &[String], infrastructure: bool) -> Result<Value, CliError> {
+fn authorize_head_recovery(arguments: &[String], kind: &str) -> Result<Value, CliError> {
+    let infrastructure = kind == "infrastructure";
     let options = options(
         arguments,
         &[
@@ -195,7 +197,9 @@ fn authorize_head_recovery(arguments: &[String], infrastructure: bool) -> Result
         request_id: required(&options, "--request-id")?.into(),
         reason: required(&options, "--reason")?.into(),
     };
-    let authorize = if infrastructure {
+    let authorize = if kind == "follow-up" {
+        crate::authorize_follow_up_recovery
+    } else if infrastructure {
         crate::authorize_infrastructure_recovery
     } else {
         crate::authorize_publication_retry

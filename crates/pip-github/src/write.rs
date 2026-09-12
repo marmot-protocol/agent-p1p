@@ -220,6 +220,7 @@ struct ReadyGraphQlResponse {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ReadyGraphQlData {
+    #[serde(alias = "convertPullRequestToDraft")]
     mark_pull_request_ready_for_review: ReadyGraphQlPayload,
 }
 
@@ -422,6 +423,21 @@ impl<T: MutationTransport> GitHubWriter<T> {
         &self,
         spec: &PullRequestReadySpec,
     ) -> Result<MutationResult, GitHubError> {
+        self.set_pull_request_draft(spec, false)
+    }
+
+    pub fn mark_pull_request_draft(
+        &self,
+        spec: &PullRequestReadySpec,
+    ) -> Result<MutationResult, GitHubError> {
+        self.set_pull_request_draft(spec, true)
+    }
+
+    fn set_pull_request_draft(
+        &self,
+        spec: &PullRequestReadySpec,
+        draft: bool,
+    ) -> Result<MutationResult, GitHubError> {
         validate_ready_spec(spec)?;
         let root = format!(
             "/repos/{}/{}/pulls/{}",
@@ -429,7 +445,7 @@ impl<T: MutationTransport> GitHubWriter<T> {
         );
         let before: PullRequestDto = self.mutate_json("GET", &root, &json!({}))?;
         validate_ready_identity(&before, spec)?;
-        if !before.draft {
+        if before.draft == draft {
             return Ok(MutationResult::Existing(before.number));
         }
         if before.node_id.trim().is_empty() {
@@ -439,7 +455,11 @@ impl<T: MutationTransport> GitHubWriter<T> {
             "POST",
             "/graphql",
             &json!({
-                "query": "mutation MarkPipPullRequestReady($input: MarkPullRequestReadyForReviewInput!) { markPullRequestReadyForReview(input: $input) { pullRequest { id isDraft } } }",
+                "query": if draft {
+                    "mutation DraftPipFollowUp($input: ConvertPullRequestToDraftInput!) { convertPullRequestToDraft(input: $input) { pullRequest { id isDraft } } }"
+                } else {
+                    "mutation MarkPipPullRequestReady($input: MarkPullRequestReadyForReviewInput!) { markPullRequestReadyForReview(input: $input) { pullRequest { id isDraft } } }"
+                },
                 "variables": {"input": {
                     "pullRequestId": before.node_id,
                     "clientMutationId": spec.client_mutation_id,
@@ -455,12 +475,13 @@ impl<T: MutationTransport> GitHubWriter<T> {
                 .mark_pull_request_ready_for_review
                 .pull_request
                 .is_draft
+                != draft
         {
             return Err(GitHubError::InvalidIdentity);
         }
         let after: PullRequestDto = self.mutate_json("GET", &root, &json!({}))?;
         validate_ready_identity(&after, spec)?;
-        if after.draft {
+        if after.draft != draft {
             return Err(GitHubError::InvalidIdentity);
         }
         Ok(MutationResult::Updated(after.number))

@@ -48,6 +48,7 @@ pub enum Event {
     BuilderRetryAuthorized,
     ReviewRetryAuthorized,
     InfrastructureRecoveryAuthorized,
+    FollowUpRecoveryAuthorized,
     PublicationRetryAuthorized,
     BuildRecorded,
     ReviewReady,
@@ -76,7 +77,7 @@ pub enum Event {
 }
 
 impl Event {
-    pub const ALL: [Self; 43] = [
+    pub const ALL: [Self; 44] = [
         Self::PlanRecorded,
         Self::Proceed,
         Self::WaitingForIssueCreator,
@@ -95,6 +96,7 @@ impl Event {
         Self::BuilderRetryAuthorized,
         Self::ReviewRetryAuthorized,
         Self::InfrastructureRecoveryAuthorized,
+        Self::FollowUpRecoveryAuthorized,
         Self::PublicationRetryAuthorized,
         Self::BuildRecorded,
         Self::ReviewReady,
@@ -208,6 +210,7 @@ string_enum!(Event, "event", {
     "BUILDER_RETRY_AUTHORIZED" => BuilderRetryAuthorized,
     "REVIEW_RETRY_AUTHORIZED" => ReviewRetryAuthorized,
     "INFRASTRUCTURE_RECOVERY_AUTHORIZED" => InfrastructureRecoveryAuthorized,
+    "FOLLOW_UP_RECOVERY_AUTHORIZED" => FollowUpRecoveryAuthorized,
     "PUBLICATION_RETRY_AUTHORIZED" => PublicationRetryAuthorized,
     "BUILD_RECORDED" => BuildRecorded,
     "REVIEW_READY" => ReviewReady,
@@ -335,6 +338,11 @@ pub fn transition(
     // and the original takeover evidence before accepting this fact.
     if state == CaseState::TakenOver && event == Event::HumanMerged {
         return decision(CaseState::Completed, &[Effect::RecordCompletion]);
+    }
+    // The store verifies the exact false-takeover lineage; this is never a
+    // general human-feedback reopening path and grants no extra loop budget.
+    if state == CaseState::TakenOver && event == Event::FollowUpRecoveryAuthorized {
+        return decision(CaseState::Planning, &[Effect::DispatchPlanner]);
     }
     if state.is_terminal() {
         return Err(TransitionError::TerminalState(state));
