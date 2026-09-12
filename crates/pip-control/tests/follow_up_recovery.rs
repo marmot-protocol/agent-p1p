@@ -8,6 +8,7 @@ use serde_json::json;
 fn only_proven_false_follow_up_takeover_can_be_recovered_once_without_resetting_history() {
     for fault in [
         "none",
+        "queued-peer",
         "real-takeover",
         "not-ready",
         "bounded",
@@ -86,6 +87,32 @@ fn only_proven_false_follow_up_takeover_can_be_recovered_once_without_resetting_
             },None).unwrap();
         }
         let before = store.immutable_history_for_case(&key).unwrap();
+        let peer = format!("repo:{}#10@3", active.repository.id);
+        if fault == "queued-peer" {
+            store
+                .create_case(&NewCase {
+                    case_key: peer.clone(),
+                    repository_id: active.repository.id,
+                    issue_number: 10,
+                    workflow_version: 3,
+                    policy_revision: active.revision,
+                    initial_state: "READY_TO_BUILD".into(),
+                    observed_at: 1,
+                    event: EventInput {
+                        event_id: "peer-intake".into(),
+                        event_type: "ISSUE_AUTHORIZED".into(),
+                        payload: json!({}),
+                    },
+                    effects: vec![pip_store::EffectInput {
+                        effect_id: "peer-builder".into(),
+                        effect_type: "RUN_DIRECT_WORKER".into(),
+                        payload: json!({}),
+                    }],
+                })
+                .unwrap();
+            let effect = store.claim_effect("peer-worker", 5, 100).unwrap().unwrap();
+            store.begin_direct_attempt(&effect, "peer-task", 5).unwrap();
+        }
         let request = PublicationRetryRequest {
             case_key: key.clone(),
             expected_revision: if fault == "stale" { 3 } else { 4 },
@@ -100,7 +127,7 @@ fn only_proven_false_follow_up_takeover_can_be_recovered_once_without_resetting_
             10,
             if fault == "nonroot" { 1000 } else { 0 },
         );
-        if fault == "none" {
+        if matches!(fault, "none" | "queued-peer") {
             assert_eq!(result.unwrap(), ApplyResult::Applied);
             let case = store.case(&key).unwrap().unwrap();
             assert_eq!(case.state, "PLANNING");
@@ -117,7 +144,14 @@ fn only_proven_false_follow_up_takeover_can_be_recovered_once_without_resetting_
                 before.events.as_slice()
             );
             assert_eq!(after.evidence, before.evidence);
-            assert_eq!(store.status(11).unwrap().outbox_pending, 1);
+            assert_eq!(
+                store.status(11).unwrap().outbox_pending,
+                if fault == "queued-peer" { 2 } else { 1 }
+            );
+            if fault == "queued-peer" {
+                assert_eq!(store.running_direct_attempts_for_case(&peer).unwrap(), 1);
+                assert_eq!(store.case(&peer).unwrap().unwrap().state_revision, 1);
+            }
             assert_eq!(
                 store
                     .claim_effect("test", 11, 30)

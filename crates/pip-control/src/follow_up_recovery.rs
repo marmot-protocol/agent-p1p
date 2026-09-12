@@ -53,7 +53,10 @@ pub fn authorize_follow_up_recovery(
     if case.state_revision != request.expected_revision
         || case.head_sha.as_deref() != Some(&request.expected_head)
         || now >= deadline
-        || store.status(now).map_err(error)?.direct_attempts_running != 0
+        || store
+            .running_direct_attempts_for_case(&case.case_key)
+            .map_err(error)?
+            != 0
         || store
             .failed_direct_attempt_count_for_case(&case.case_key)
             .map_err(error)?

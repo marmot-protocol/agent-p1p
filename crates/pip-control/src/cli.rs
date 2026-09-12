@@ -136,7 +136,7 @@ fn authorize_retry(arguments: &[String], review: bool) -> Result<Value, CliError
         ],
         &[],
     )?;
-    let (policy, mut store) = offline_recovery_store(&options)?;
+    let (policy, mut store) = offline_recovery_store(&options, false)?;
     let number = |name: &'static str| -> Result<u64, CliError> {
         required(&options, name)?
             .parse()
@@ -187,7 +187,7 @@ fn authorize_head_recovery(arguments: &[String], kind: &str) -> Result<Value, Cl
         ],
         &[],
     )?;
-    let (policy, mut store) = offline_recovery_store(&options)?;
+    let (policy, mut store) = offline_recovery_store(&options, kind == "follow-up")?;
     let request = crate::PublicationRetryRequest {
         case_key: required(&options, "--case")?.into(),
         expected_revision: required(&options, "--expected-revision")?
@@ -215,6 +215,7 @@ fn authorize_head_recovery(arguments: &[String], kind: &str) -> Result<Value, Cl
 
 fn offline_recovery_store(
     options: &BTreeMap<String, String>,
+    allow_queued_peers: bool,
 ) -> Result<(crate::RepositoryPolicy, Store), CliError> {
     let uid = rustix::process::geteuid().as_raw();
     if uid != 0 {
@@ -236,17 +237,6 @@ fn offline_recovery_store(
         .map_err(CliError::Reconciliation)?;
     let queue = Path::new(required(options, "--direct-queue")?);
     crate::DirectQueue::new(queue).map_err(|error| CliError::Reconciliation(error.to_string()))?;
-    for directory in ["inbox", "results"] {
-        if fs::read_dir(queue.join(directory))
-            .map_err(|error| CliError::Filesystem(error.to_string()))?
-            .next()
-            .is_some()
-        {
-            return Err(CliError::Reconciliation(
-                "direct queue must be drained before authorizing a retry".into(),
-            ));
-        }
-    }
     let database = Path::new(required(options, "--database")?);
     let metadata =
         fs::symlink_metadata(database).map_err(|error| CliError::Filesystem(error.to_string()))?;
@@ -254,7 +244,19 @@ fn offline_recovery_store(
         return Err(CliError::UnsafeInput(database.into()));
     }
     // Never create or migrate a database as a side effect of operator recovery.
-    drop(Store::open_read_only(database).map_err(|error| CliError::Ledger(error.to_string()))?);
+    let readonly =
+        Store::open_read_only(database).map_err(|error| CliError::Ledger(error.to_string()))?;
+    crate::recovery_queue::validate(
+        queue,
+        &readonly,
+        if allow_queued_peers {
+            Some(required(options, "--case")?)
+        } else {
+            None
+        },
+    )
+    .map_err(CliError::Reconciliation)?;
+    drop(readonly);
     let store = Store::open(database).map_err(|error| CliError::Ledger(error.to_string()))?;
     Ok((policy, store))
 }

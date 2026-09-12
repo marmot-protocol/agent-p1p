@@ -21,6 +21,11 @@ that same PR/head. It appends `FOLLOW_UP_RECOVERY_AUTHORIZED` and queues plannin
 once. Original feedback, plan, PR/head, takeover, elapsed-time deadline and
 already spent remediation/failure budgets are preserved. The operator must
 inspect the retained history and restore the accepted active policy separately.
+All execution units must still be stopped and disabled, but this case-scoped
+command permits another case's frozen direct queue to remain in place. Entries
+must be regular bounded envelopes bound to known peer attempts in the ledger;
+unknown entries or work belonging to the recovery case block the command. No
+peer queue, lease, result or case is modified by recovery.
 
 Do not downgrade a recovered ledger to a binary that cannot interpret
 `FOLLOW_UP_RECOVERY_AUTHORIZED`; equal schema versions do not imply compatible
