@@ -439,7 +439,7 @@ fn handoff<S: IntakeSource, W: DispositionWriter>(
     // Withdraw Pip's completed disposition before accepting follow-up work.
     // On an uncertain GitHub response the case stays ready; the exact-head
     // mutation is idempotent. Never reinterpret a non-draft active PR here.
-    if state == CaseState::ShadowReady && !bounded {
+    if state == CaseState::ShadowReady {
         let pr = case.pr_number.ok_or("ready case has no PR")?;
         let result = writer.mark_draft(&pip_github::PullRequestReadySpec {
             owner: policy.repository.owner.clone(),

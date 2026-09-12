@@ -94,6 +94,11 @@ fn ready_follow_up_withdraws_readiness_before_replanning_and_retries_safely() {
 }
 
 #[test]
+fn bounded_ready_follow_up_withdraws_readiness_without_granting_more_work() {
+    conversation_roundtrip_with_bound(true, Some("SHADOW_READY"), false, true);
+}
+
+#[test]
 fn conversation_runs_once_and_publishes_without_creating_a_case() {
     conversation_roundtrip(false, None);
 }
@@ -123,6 +128,15 @@ fn slotted_conversation_can_answer_while_an_unrelated_native_worker_runs() {
 }
 
 fn conversation_roundtrip_with_peer(follow_up: bool, state: Option<&str>, peer: bool) {
+    conversation_roundtrip_with_bound(follow_up, state, peer, false);
+}
+
+fn conversation_roundtrip_with_bound(
+    follow_up: bool,
+    state: Option<&str>,
+    peer: bool,
+    bounded: bool,
+) {
     let dir = tempfile::tempdir().unwrap();
     let mut path = dir.path().join("ledger.db");
     let mut store = Store::open(&path).unwrap();
@@ -186,7 +200,11 @@ fn conversation_roundtrip_with_peer(follow_up: bool, state: Option<&str>, peer: 
                         case_key: case_key.clone(),
                         expected_revision: 1,
                         next_state: state.into(),
-                        remediation_round: 0,
+                        remediation_round: if bounded {
+                            policy.max_remediation_rounds
+                        } else {
+                            0
+                        },
                         plan_version: 1,
                         pr_number: Some(77),
                         head_sha: Some("b".repeat(40)),
@@ -300,7 +318,21 @@ fn conversation_roundtrip_with_peer(follow_up: bool, state: Option<&str>, peer: 
     assert_eq!(run(&mut store).unwrap()["result"], "idle");
     assert_eq!(writer.0.borrow().len(), 1);
     assert!(writer.0.borrow()[0].contains("Here is the explanation."));
-    if follow_up && matches!(state, Some("WAITING_HUMAN" | "SHADOW_READY")) {
+    if bounded {
+        let case = &store.status(102).unwrap().cases[0];
+        assert_eq!(case.state, "ESCALATED");
+        assert_eq!(case.remediation_round, policy.max_remediation_rounds);
+        assert_eq!(writer.2.get(), 2);
+        assert!(writer.0.borrow()[0].contains("revision limit"));
+        assert_eq!(
+            store
+                .claim_effect("test", 102, 30)
+                .unwrap()
+                .unwrap()
+                .effect_type,
+            "ESCALATE"
+        );
+    } else if follow_up && matches!(state, Some("WAITING_HUMAN" | "SHADOW_READY")) {
         let case = &store.status(102).unwrap().cases[0];
         assert_eq!(case.state, "PLANNING");
         let revisions = if state == Some("SHADOW_READY") { 3 } else { 2 };
