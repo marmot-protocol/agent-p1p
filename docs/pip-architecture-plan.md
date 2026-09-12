@@ -58,6 +58,10 @@ lifecycle boundary before use.
     draft PR ready for review and publish a human-held readiness recommendation.
     A person reviews and merges. Promotion and notification retry idempotently;
     leaving draft after accepted final review is not itself a human takeover.
+    If authorized human feedback requests another pass, first return Pip's
+    exact owned PR to draft, then record feedback and dispatch planning. An
+    uncertain draft mutation is retried before advancing the ledger. Subsequent
+    readiness still requires fresh exact-head CI, reviews and final acceptance.
 11. Observe the human merge of the same accepted PR head and record `COMPLETED`,
     retaining GitHub's merge commit SHA separately from the reviewed head. This
     is read-only observation, not merge authority, and works after issue closure.
@@ -75,7 +79,12 @@ A narrowly proven historical ready-to-takeover misclassification may append
 `HUMAN_MERGED` and move to `COMPLETED`: the immediately preceding state must be
 `SHADOW_READY`, the original takeover must record only the PR disposition change,
 and original plus fresh GitHub evidence must confirm the same owned, merged PR
-and head. Original events remain intact. Other terminal cases cannot reopen work.
+and head. Original events remain intact. An offline operator may also correct
+the proven `SHADOW_READY` → feedback → non-draft-only false takeover using
+`FOLLOW_UP_RECOVERY_AUTHORIZED`, after verifying ownership and returning the PR
+to draft. This preserves the already spent loop budget, original deadline and
+all history, and redispatches the interrupted planning pass once. Genuine human
+takeovers and other terminal cases cannot reopen work.
 
 This is a dynamic bounded loop, not a pre-created multi-round DAG. Rust creates
 only currently authorized work; no synthetic activation-gate cards. Hermes
