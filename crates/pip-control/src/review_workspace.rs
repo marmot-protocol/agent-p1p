@@ -80,11 +80,15 @@ pub(crate) fn direct_target(
 }
 
 fn directory(path: &Path, owner: u32) -> Result<(), String> {
+    protected_directory(path, owner, 0o055)
+}
+
+fn protected_directory(path: &Path, owner: u32, required: u32) -> Result<(), String> {
     let meta = fs::symlink_metadata(path).map_err(error)?;
     if !meta.is_dir()
         || meta.uid() != owner
         || meta.mode() & 0o022 != 0
-        || meta.mode() & 0o055 != 0o055
+        || meta.mode() & required != required
     {
         return Err("review directory is not controller-owned and protected".into());
     }
@@ -244,16 +248,20 @@ fn protect(path: &Path, writable: bool) -> Result<(), String> {
         return Ok(());
     }
     if meta.is_dir() {
-        if writable {
+        if writable && meta.uid() == rustix::process::geteuid().as_raw() {
             fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(error)?;
         }
         for entry in fs::read_dir(path).map_err(error)? {
             protect(&entry.map_err(error)?.path(), writable)?;
         }
     }
-    let mode = if writable {
-        if meta.is_dir() { 0o700 } else { 0o600 }
-    } else if meta.is_dir() || meta.mode() & 0o111 != 0 {
+    // Unlinking files needs write access to the directory, not chmod access to
+    // the file. Build output belongs to the worker and is group-writable; the
+    // controller cannot chmod it. Leave foreign directories unchanged too.
+    if writable {
+        return Ok(());
+    }
+    let mode = if meta.is_dir() || meta.mode() & 0o111 != 0 {
         0o555
     } else {
         0o444
@@ -282,7 +290,9 @@ pub(crate) fn retire(source: &Path) -> Result<(), String> {
         .map(|entry| entry.map(|e| e.path()).map_err(error))
         .collect::<Result<_, _>>()?;
     for root in &roots {
-        directory(root, owner)?;
+        // Retry an interrupted retirement that already made the root private.
+        // Runtime materialization still requires worker-traversable 0755 roots.
+        protected_directory(root, owner, 0o500)?;
         let marker = root.join("ownership.json");
         let meta = fs::symlink_metadata(&marker).map_err(error)?;
         if !meta.is_file() || meta.uid() != owner || meta.mode() & 0o077 != 0 || meta.len() > 16384
@@ -317,6 +327,97 @@ fn error(error: impl std::fmt::Display) -> String {
 mod tests {
     use super::*;
     use std::process::Command;
+
+    // The disposable lifecycle container invokes this explicitly as root.
+    // Subprocesses use the real service UIDs, so chmod EPERM cannot be hidden
+    // by a same-UID unit test (or by running cleanup as root).
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires root and installed pip-control/pip-worker service identities"]
+    fn retirement_with_real_worker_owned_build_output() {
+        const TEST: &str =
+            "review_workspace::tests::retirement_with_real_worker_owned_build_output";
+        if let Ok(fixture) = std::env::var("PIP_REVIEW_RETIREMENT_FIXTURE") {
+            let source = Path::new(&fixture).join("repo-1-issue-2-workflow-3");
+            if std::env::var("PIP_REVIEW_RETIREMENT_PHASE").unwrap() == "prepare" {
+                fs::create_dir(&source).unwrap();
+                git_at(&source, &["init", "-q"]);
+                fs::write(source.join("file"), "source retained").unwrap();
+                git_at(&source, &["add", "file"]);
+                git_at(
+                    &source,
+                    &["-c", "commit.gpgsign=false", "commit", "-qm", "fixture"],
+                );
+                let head = git_at(&source, &["rev-parse", "HEAD"]);
+                let snapshot =
+                    pip_controller::review_snapshot(source.to_str().unwrap(), "review", &head);
+                materialize(&snapshot).unwrap();
+                fs::write(
+                    Path::new(&fixture).join("snapshot-root"),
+                    snapshot["root"].as_str().unwrap(),
+                )
+                .unwrap();
+            } else {
+                retire(&source).unwrap();
+                assert!(source.join("file").is_file());
+                let root = fs::read_to_string(Path::new(&fixture).join("snapshot-root")).unwrap();
+                assert!(!Path::new(&root).exists());
+            }
+            return;
+        }
+        assert!(rustix::process::geteuid().is_root());
+        let temp = tempfile::tempdir().unwrap();
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        let fixture = temp.path().join("fixture");
+        let status = Command::new("install")
+            .args(["-d", "-o", "pip-control", "-g", "pip-control", "-m", "0755"])
+            .arg(&fixture)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let run = |phase: &str| {
+            assert!(
+                Command::new("runuser")
+                    .args(["-u", "pip-control", "--"])
+                    .arg(std::env::current_exe().unwrap())
+                    .args(["--ignored", "--exact", TEST, "--nocapture"])
+                    .env("PIP_REVIEW_RETIREMENT_FIXTURE", &fixture)
+                    .env("PIP_REVIEW_RETIREMENT_PHASE", phase)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        run("prepare");
+        let root = fs::read_to_string(fixture.join("snapshot-root")).unwrap();
+        assert!(Command::new("runuser").args(["-u", "pip-worker", "--", "sh", "-c",
+            "umask 0007; mkdir -p \"$1/build/target/debug\"; printf cache > \"$1/build/target/debug/output\"; chmod 0440 \"$1/build/target/debug/output\"", "fixture"])
+            .arg(&root).status().unwrap().success());
+        run("retire");
+    }
+
+    #[test]
+    fn retirement_permissions_do_not_touch_files_or_symlink_targets() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("snapshot");
+        fs::create_dir(&root).unwrap();
+        let file = root.join("read-only-file");
+        fs::write(&file, "keep").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o444)).unwrap();
+        let outside = temp.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o555)).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+        protect(&root, true).unwrap();
+        assert_eq!(
+            fs::metadata(&file).unwrap().mode() & 0o777,
+            0o444,
+            "unlink needs parent write permission, not permission to chmod a worker-owned file"
+        );
+        assert_eq!(fs::metadata(&outside).unwrap().mode() & 0o777, 0o555);
+        fs::remove_dir_all(&root).unwrap();
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o755)).unwrap();
+    }
 
     #[test]
     fn failed_read_only_snapshot_is_removed_without_following_symlinks() {
@@ -428,6 +529,8 @@ mod tests {
             "first"
         );
         assert_eq!(git_at(&checkout, &["remote"]), "");
+        // A prior interrupted retirement may already have made this root private.
+        fs::set_permissions(root, fs::Permissions::from_mode(0o700)).unwrap();
         retire(&source).unwrap();
         assert!(!root.exists());
         assert!(source.exists());

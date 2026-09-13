@@ -94,6 +94,26 @@ impl<T: ReadTransport> GitHubReader<T> {
                 context.insert(field.into(), value.clone());
             }
         }
+        // GitHub can include the entire preceding diff in an inline comment.
+        // This is optional context, not the comment or its authorization. Keep
+        // identity/location intact and explicitly report omission instead of
+        // wedging the durable intake queue on a legitimate large hunk.
+        if serde_json::to_vec(&context)
+            .map_err(|_| GitHubError::InvalidIdentity)?
+            .len()
+            > 32 * 1024
+            && let Some(hunk) = context.remove("diff_hunk")
+        {
+            let hunk = hunk.as_str().ok_or(GitHubError::InvalidIdentity)?;
+            context.insert(
+                "diff_hunk_omitted".into(),
+                serde_json::json!({
+                    "reason": "context_size_limit",
+                    "bytes": hunk.len(),
+                    "sha256": hex_digest(&Sha256::digest(hunk.as_bytes())),
+                }),
+            );
+        }
         let context = if context.is_empty() {
             Value::Null
         } else {

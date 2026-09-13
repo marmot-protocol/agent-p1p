@@ -132,6 +132,8 @@ test "$(stat -c '%U:%G:%a' /var/lib/pip/worktrees)" = pip-control:pip-control:77
 test "$(stat -c '%U:%G:%a' /var/lib/pip/worktrees/hermes-scratch)" = pip-control:pip-control:700
 read -r review_test </work/review-test-binary
 test -x "$review_test"
+"$review_test" --ignored --exact \
+  review_workspace::tests::retirement_with_real_worker_owned_build_output --nocapture
 systemd-run --quiet --wait --pipe --collect --unit=pip-review-storage-regression \
   --property=User=pip-control --property=Group=pip-control \
   --property=UMask=0077 --property=RestrictSUIDSGID=yes \

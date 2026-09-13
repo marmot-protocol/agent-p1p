@@ -102,6 +102,48 @@ fn inline_feedback_keeps_its_file_hunk_and_exact_commit_context() {
 }
 
 #[test]
+fn oversized_inline_hunk_is_explicitly_omitted_without_losing_feedback() {
+    let transport = FakeTransport::default();
+    // Escaping can exceed the context budget even below 32 KiB of raw text.
+    for hunk in ["é".repeat(18000), "\n".repeat(20000)] {
+        transport.push(response(&serde_json::json!({"id":11,"user":{"id":22,"type":"User"},
+            "pull_request_url":"https://api.github.test/repos/owner/repo/pulls/42","body":"Please check this",
+            "updated_at":"2026-09-08T12:00:00Z","path":"src/main.rs","diff_hunk":hunk,
+            "commit_id":"a".repeat(40),"line":826,"in_reply_to_id":9}).to_string()));
+        let reader = GitHubReader::new(
+            transport.clone(),
+            "https://api.github.test",
+            "token",
+            4 * 1024 * 1024,
+            3,
+        )
+        .unwrap();
+        let comment = reader
+            .read_discussion_comment("owner", "repo", 42, "pull_request_review_comment", 11)
+            .unwrap();
+        assert_eq!(comment.body, "Please check this");
+        assert_eq!(comment.reply_to, Some(9));
+        assert_eq!(comment.context["path"], "src/main.rs");
+        assert_eq!(comment.context["commit_id"], "a".repeat(40));
+        assert_eq!(comment.context["line"], 826);
+        assert!(comment.context.get("diff_hunk").is_none());
+        assert_eq!(
+            comment.context["diff_hunk_omitted"]["reason"],
+            "context_size_limit"
+        );
+        assert_eq!(comment.context["diff_hunk_omitted"]["bytes"], hunk.len());
+        assert_eq!(
+            comment.context["diff_hunk_omitted"]["sha256"]
+                .as_str()
+                .unwrap()
+                .len(),
+            64
+        );
+        assert!(serde_json::to_vec(&comment.context).unwrap().len() <= 32 * 1024);
+    }
+}
+
+#[test]
 fn official_github_webhook_vector_verifies_in_constant_time_path() {
     let signature = "sha256=757107ea0eb2509fc211221cce984b8a37570b6d7586c22c46f4379c8b043e17";
     assert!(verify_webhook(

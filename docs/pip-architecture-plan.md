@@ -266,6 +266,10 @@ Keep signed webhook intake for low latency and bounded polling for missed events
 Retain the isolated loopback receiver, delivery-ID deduplication, bounded durable
 spool, authenticated payloads and live issue revalidation. Public ingress never
 receives repository credentials, provider credentials or ledger access.
+Inline discussion intake retains the authenticated comment and exact file/commit
+references. If an optional diff excerpt exceeds the bounded context budget, omit
+that excerpt explicitly with its byte count and digest; do not discard the
+comment or block the spool merely because GitHub supplied a large diff hunk.
 
 Eligibility checks current label, trusted numeric actor, open issue/repository
 identity, exclusions, pause and capacity limits. Label removal and takeover stop
@@ -306,6 +310,9 @@ reserve. Disposable build caches have separate retention from accepted artifacts
 Cleanup must not delete active work or unpreserved commits and must not block
 unrelated workflow progress. Legacy workspace layouts exist only for explicit
 migration/retirement, not parallel permanent execution paths.
+Review-copy retirement must handle group-writable worker-owned build output
+without attempting to chmod it, and accept controller-private snapshot roots
+left by interrupted cleanup only after validating their ownership markers.
 
 ## Packaging and code organization
 
