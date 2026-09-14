@@ -412,7 +412,7 @@ pub fn transition(
         (State::Escalated, Ev::PlannerRetryAuthorized) => {
             decision(State::Planning, &[Fx::DispatchPlanner])
         }
-        (State::Escalated, Ev::InfrastructureRecoveryAuthorized)
+        (State::Escalated | State::Blocked, Ev::InfrastructureRecoveryAuthorized)
             if context.remediation_round < context.max_remediation_rounds =>
         {
             decision(State::Remediating, &[Fx::DispatchBuilder])

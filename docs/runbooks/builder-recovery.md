@@ -56,7 +56,7 @@ Do not downgrade a recovered ledger to a binary that cannot interpret
 `FOLLOW_UP_RECOVERY_AUTHORIZED`; equal schema versions do not imply compatible
 workflow behavior.
 
-## Recover review infrastructure after an expired deadline
+## Recover review or remediation infrastructure
 
 `authorize-infrastructure-recovery` is an exceptional root-only operation after
 repairing a controller infrastructure defect. It uses the same inert-policy,
@@ -65,14 +65,20 @@ Supply `--policy`, `--database`, `--direct-queue`, `--case`, `--expected-revisio
 `--expected-head`, `--request-id`, and a bounded human `--reason` explaining the
 repair and required reconciliation. Reuse the request ID after an uncertain response.
 
-Only an elapsed-time escalation directly from `REVIEWING`, with retained plan,
-build, PR and exact head, is eligible. The command appends
+An elapsed-time escalation directly from `REVIEWING`, or a builder's explicit
+`BLOCKED` result directly from `REMEDIATING`, with retained plan, build, PR and
+exact head, is eligible. For a blocked builder, the operator must first inspect
+the result and repair the infrastructure cause; a dependency/scope hold is not
+permission to proceed. Verify that the assigned checkout's staged work and head
+are retained and that GitHub still has the same owned open draft PR/head.
+The command appends
 `INFRASTRUCTURE_RECOVERY_AUTHORIZED` and grants one new time window equal to the
 accepted policy's case-duration limit, measured from the real operator clock.
 It preserves original authorization time, accepted policy, all failures/results,
 and the provider-failure limit. It consumes a normal remediation round and queues
 the builder to reconcile retained work with current upstream before fresh CI,
-independent reviews and final preflight. It does not activate runtime or authorize
+independent reviews and final preflight. A retained checkout is reused, not reset.
+It does not activate runtime or authorize
 merge. Other escalation causes and exhausted remediation/failure budgets remain held.
 
 Do not downgrade a recovered ledger to a binary that does not understand this

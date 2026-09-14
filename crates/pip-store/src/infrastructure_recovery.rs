@@ -10,7 +10,7 @@ pub(crate) fn validate(
     let payload = &input.event.payload;
     let request = &payload["request"];
     let reason = request["reason"].as_str().ok_or_else(invalid)?;
-    if current.state != "ESCALATED"
+    if !matches!(current.state.as_str(), "ESCALATED" | "BLOCKED")
         || input.next_state != "REMEDIATING"
         || payload["schema_version"] != 1
         || payload["operator_uid"] != 0
@@ -38,9 +38,14 @@ pub(crate) fn validate(
     }
     let recoverable: bool = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM events WHERE case_key=?1 AND state_revision=?2
-         AND event_type='OPERATIONAL_BOUND_REACHED' AND next_state='ESCALATED'
-         AND previous_state='REVIEWING' AND observed_at<=?3
-         AND json_extract(payload_json,'$.bound')='ELAPSED_TIME')",
+         AND observed_at<=?3 AND (
+           (event_type='OPERATIONAL_BOUND_REACHED' AND next_state='ESCALATED'
+            AND previous_state='REVIEWING'
+            AND json_extract(payload_json,'$.bound')='ELAPSED_TIME')
+           OR (event_type='BLOCKED' AND next_state='BLOCKED'
+               AND previous_state='REMEDIATING'
+               AND json_extract(payload_json,'$.role')='builder'
+               AND json_extract(payload_json,'$.outcome')='BLOCKED')))",
         params![
             current.case_key,
             sql_u64(current.state_revision)?,

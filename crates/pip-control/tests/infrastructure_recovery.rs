@@ -14,6 +14,19 @@ fn fixture() -> (
     PublicationRetryRequest,
     u64,
 ) {
+    fixture_with_hold(false)
+}
+
+fn fixture_with_hold(
+    builder_blocked: bool,
+) -> (
+    tempfile::TempDir,
+    Store,
+    RepositoryPolicy,
+    RepositoryPolicy,
+    PublicationRetryRequest,
+    u64,
+) {
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::open(dir.path().join("ledger.db")).unwrap();
     let mut paused = load_repository_policy(include_bytes!(
@@ -90,16 +103,132 @@ fn fixture() -> (
             .unwrap();
     }
     let now = 101 + active.max_case_elapsed_seconds;
-    enforce_operational_bounds(&mut store, &active, now).unwrap();
+    if builder_blocked {
+        for (revision, state, event, payload) in [
+            (3, "REMEDIATING", "REQUEST_CHANGES", json!({})),
+            (
+                4,
+                "BLOCKED",
+                "BLOCKED",
+                json!({"role":"builder", "outcome":"BLOCKED", "evidence":{"block_reason":"controller-created Git object directories are private"}}),
+            ),
+        ] {
+            store
+                .apply_transition(
+                    &TransitionInput {
+                        case_key: CASE.into(),
+                        expected_revision: revision,
+                        next_state: state.into(),
+                        remediation_round: 1,
+                        plan_version: 1,
+                        pr_number: Some(77),
+                        head_sha: Some("b".repeat(40)),
+                        observed_at: 104 + revision,
+                        event: EventInput {
+                            event_id: event.into(),
+                            event_type: event.into(),
+                            payload,
+                        },
+                        run: None,
+                        evidence: vec![],
+                        findings: vec![],
+                        effects: vec![],
+                    },
+                    None,
+                )
+                .unwrap();
+        }
+    } else {
+        enforce_operational_bounds(&mut store, &active, now).unwrap();
+    }
     let request = PublicationRetryRequest {
         case_key: CASE.into(),
-        expected_revision: 4,
+        expected_revision: if builder_blocked { 5 } else { 4 },
         expected_head: "b".repeat(40),
         request_id: "repair-1".into(),
         reason: "Sandbox permission bug repaired; reconcile current target before fresh reviews"
             .into(),
     };
     (dir, store, paused, active, request, now)
+}
+
+#[test]
+fn blocked_remediation_can_resume_after_operator_repairs_infrastructure() {
+    let (_dir, mut store, paused, active, request, now) = fixture_with_hold(true);
+    let before = store.immutable_history_for_case(CASE).unwrap();
+    assert_eq!(
+        authorize_infrastructure_recovery(&mut store, &paused, &request, now, 0).unwrap(),
+        ApplyResult::Applied
+    );
+    let case = store.case(CASE).unwrap().unwrap();
+    assert_eq!(case.state, "REMEDIATING");
+    assert_eq!(case.remediation_round, 2);
+    assert_eq!(case.head_sha, Some(request.expected_head.clone()));
+    let after = store.immutable_history_for_case(CASE).unwrap();
+    assert_eq!(
+        &after.events[..before.events.len()],
+        before.events.as_slice()
+    );
+    assert_eq!(after.runs, before.runs);
+    assert_eq!(
+        authorize_infrastructure_recovery(&mut store, &paused, &request, now + 1, 0).unwrap(),
+        ApplyResult::Replayed
+    );
+    enforce_operational_bounds(&mut store, &active, now + 2).unwrap();
+    assert_eq!(store.case(CASE).unwrap().unwrap().state, "REMEDIATING");
+}
+
+#[test]
+fn blocked_recovery_does_not_reopen_other_holds_or_exhausted_rounds() {
+    for (prior, event, role, outcome, round) in [
+        ("PLANNING", "BLOCKED", "planner", "BLOCKED", 1),
+        ("REMEDIATING", "BLOCKED", "reviewer-general", "BLOCKED", 1),
+        ("REMEDIATING", "BLOCKED", "builder", "RETURN_TO_PLANNING", 1),
+        (
+            "REMEDIATING",
+            "CROSS_REPO_DEPENDENCY",
+            "builder",
+            "BLOCKED",
+            1,
+        ),
+        ("REMEDIATING", "BLOCKED", "builder", "BLOCKED", 3),
+    ] {
+        let (_dir, mut store, paused, _active, mut request, now) = fixture_with_hold(true);
+        // Construct a later hold to exercise authoritative ledger validation.
+        for (revision, state, kind, payload) in [
+            (5, prior, "FIXTURE_STATE", json!({})),
+            (6, "BLOCKED", event, json!({"role":role,"outcome":outcome})),
+        ] {
+            store
+                .apply_transition(
+                    &TransitionInput {
+                        case_key: CASE.into(),
+                        expected_revision: revision,
+                        next_state: state.into(),
+                        remediation_round: round,
+                        plan_version: 1,
+                        pr_number: Some(77),
+                        head_sha: Some("b".repeat(40)),
+                        observed_at: now - 2,
+                        event: EventInput {
+                            event_id: format!("fixture-{revision}"),
+                            event_type: kind.into(),
+                            payload,
+                        },
+                        run: None,
+                        evidence: vec![],
+                        findings: vec![],
+                        effects: vec![],
+                    },
+                    None,
+                )
+                .unwrap();
+        }
+        request.expected_revision = 7;
+        let before = store.status(now).unwrap();
+        assert!(authorize_infrastructure_recovery(&mut store, &paused, &request, now, 0).is_err());
+        assert_eq!(store.status(now).unwrap(), before);
+    }
 }
 
 #[test]

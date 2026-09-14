@@ -62,6 +62,13 @@ impl GitRunner for LocalRemote {
             .any(|arg| arg == "push" || arg == "ls-remote" || arg == "fetch")
         {
             if command.args.iter().any(|arg| arg == "fetch") {
+                assert!(
+                    !command
+                        .args
+                        .iter()
+                        .any(|arg| arg.starts_with("core.sharedRepository=")),
+                    "Git group sharing requests setgid, forbidden in the controller sandbox"
+                );
                 assert_eq!(
                     command
                         .environment

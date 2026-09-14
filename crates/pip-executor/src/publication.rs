@@ -481,12 +481,12 @@ impl<R: GitRunner + Clone> GitPublisher<R> {
             return Err(PublicationError::VerificationFailed);
         }
         // Fetch the observed immutable object, without moving refs or FETCH_HEAD.
-        // Group sharing keeps fetched objects readable across the controller/worker boundary.
-        self.execute(
+        // Git's sharedRepository mode tries to setgid directories, forbidden by
+        // the controller sandbox. Share only the resulting object store instead,
+        // including objects left by an interrupted/failed fetch.
+        let fetched = self.execute(
             spec,
             vec![
-                "-c".into(),
-                "core.sharedRepository=group".into(),
                 "fetch".into(),
                 "--no-tags".into(),
                 "--no-write-fetch-head".into(),
@@ -495,7 +495,10 @@ impl<R: GitRunner + Clone> GitPublisher<R> {
                 remote.into(),
                 target.to_string(),
             ],
-        )?;
+        );
+        crate::isolated_workspace::share_git_object_store(spec.worktree())
+            .map_err(|error| PublicationError::Filesystem(error.to_string()))?;
+        fetched?;
         let base = self
             .single_line(
                 spec,

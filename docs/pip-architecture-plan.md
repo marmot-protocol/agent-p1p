@@ -313,6 +313,13 @@ Use one supported case workspace layout, one assigned branch and controlled
 publication. Disable worker-controlled Git hooks, credential helpers, URL
 rewrites and configuration injection before credential-bearing operations.
 Never share a private credential-bearing Git configuration with a worker.
+Target fetches explicitly share only case-local Git objects and their directories
+across the service identities. Do not use Git's setgid-based shared-repository
+mode in the restricted controller sandbox. Reusing a validated checkout repairs
+private object-store entries left by interrupted controller operations without
+rewriting staged work, refs, source, or credentials. Verify the full round trip:
+worker build, controller fetch/sign/publication, then worker remediation, under
+both service sandboxes.
 
 Keep workspaces/build output on the managed storage volume with a free-space
 reserve. Disposable build caches have separate retention from accepted artifacts.

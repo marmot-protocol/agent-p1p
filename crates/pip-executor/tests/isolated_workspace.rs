@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use pip_core::{CaseId, IssueNumber, RepositoryId, WorkflowVersion};
 use pip_executor::{
-    AllocationResult, IsolatedWorkspace, ProcessGitRunner, RetirementResult, WorktreeSpec,
+    AllocationError, AllocationResult, CommitSigningIdentity, GitCommand, GitOutput,
+    GitPublicationSpec, GitPublisher, GitRunner, IsolatedWorkspace, ProcessGitRunner,
+    RetirementResult, WorktreeSpec,
 };
 
 use pip_executor::workspace_git_environment;
@@ -29,9 +31,9 @@ fn git(path: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().to_owned()
 }
 
-// Invoked three times by the disposable systemd lifecycle test: preparation
-// as pip-control, editing under the worker sandbox, then reconciliation and
-// retirement as pip-control. No provider, credential, or network is used.
+// Complete round trip through both service sandboxes, including target fetch,
+// signing with a disposable key, and a second builder commit. No live provider,
+// credential, repository or network is used.
 #[test]
 #[ignore = "requires distinct service UIDs and systemd; run tests/lifecycle/workspace-handoff.sh"]
 fn service_identity_workspace_handoff() {
@@ -80,6 +82,119 @@ fn service_identity_workspace_handoff() {
             )
             .unwrap();
         }
+        "publish" => {
+            let repository = root.join("private-repository");
+            // Force a real target fetch with previously unseen loose objects.
+            for n in 0..40 {
+                fs::write(
+                    repository.join(format!("upstream-{n}")),
+                    format!("upstream {n}\n"),
+                )
+                .unwrap();
+            }
+            git(&repository, &["add", "."]);
+            git(
+                &repository,
+                &[
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "commit",
+                    "-qm",
+                    "upstream",
+                ],
+            );
+            fs::write(
+                root.join("canonical-head"),
+                git(&repository, &["rev-parse", "HEAD"]),
+            )
+            .unwrap();
+            let key = root.join("signing-key");
+            assert!(
+                Command::new("ssh-keygen")
+                    .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+                    .arg(&key)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            let identity = CommitSigningIdentity {
+                name: "Fixture".into(),
+                email: "fixture@example.invalid".into(),
+                public_key: fs::read_to_string(root.join("signing-key.pub")).unwrap(),
+            };
+            let branch = git(&case_path, &["branch", "--show-current"]);
+            let spec = GitPublicationSpec::new_scoped(
+                root.join("workspaces"),
+                &case_path,
+                "origin",
+                REMOTE,
+                branch,
+                git(&case_path, &["rev-parse", "HEAD"]).parse().unwrap(),
+                None,
+            )
+            .unwrap();
+            let publisher = GitPublisher::new(
+                HandoffRemote(repository),
+                "git",
+                Duration::from_secs(30),
+                1024 * 1024,
+            )
+            .unwrap();
+            let bound = publisher.with_integrated_target(&spec, "main").unwrap();
+            let base = fs::read_to_string(root.join("base"))
+                .unwrap()
+                .parse()
+                .unwrap();
+            let (_, signed) = publisher
+                .publish_signed(&bound, base, &identity, &key)
+                .unwrap();
+            fs::write(root.join("published-head"), signed.head.to_string()).unwrap();
+            fs::set_permissions(
+                root.join("published-head"),
+                fs::Permissions::from_mode(0o640),
+            )
+            .unwrap();
+            assert_eq!(fs::metadata(key).unwrap().permissions().mode() & 0o077, 0);
+        }
+        "worker-remediate" => {
+            assert!(fs::read(root.join("signing-key")).is_err());
+            assert!(fs::read_dir(root.join("private-repository")).is_err());
+            assert_eq!(
+                git(&case_path, &["rev-parse", "HEAD"]),
+                fs::read_to_string(root.join("published-head")).unwrap()
+            );
+            for entry in fs::read_dir(case_path.join(".git/objects")).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    assert_eq!(
+                        fs::metadata(&path).unwrap().permissions().mode() & 0o7777,
+                        0o770
+                    );
+                    // Exercise write access in every prefix, not a lucky hash.
+                    let probe = path.join("handoff-probe");
+                    fs::write(&probe, "probe").unwrap();
+                    fs::remove_file(probe).unwrap();
+                }
+            }
+            fs::write(case_path.join("tracked"), "review finding fixed\n").unwrap();
+            git(&case_path, &["add", "tracked"]);
+            git(
+                &case_path,
+                &[
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "commit",
+                    "-qm",
+                    "remediate",
+                ],
+            );
+            git(&case_path, &["fsck", "--no-dangling"]);
+            assert!(git(&case_path, &["status", "--porcelain"]).is_empty());
+        }
         "reconcile" => {
             let case = CaseId::new(
                 RepositoryId::new(NonZeroU64::new(123).unwrap()),
@@ -104,7 +219,10 @@ fn service_identity_workspace_handoff() {
                 AllocationResult::Existing
             );
             assert_ne!(git(spec.path(), &["rev-parse", "HEAD"]), base);
-            assert_eq!(git(spec.repository(), &["rev-parse", "HEAD"]), base);
+            assert_eq!(
+                git(spec.repository(), &["rev-parse", "HEAD"]),
+                fs::read_to_string(root.join("canonical-head")).unwrap()
+            );
             assert_eq!(
                 fs::read_to_string(case_path.join("new-directory/new-file")).unwrap(),
                 "worker-owned\n"
@@ -116,6 +234,27 @@ fn service_identity_workspace_handoff() {
             assert!(spec.repository().is_dir());
         }
         _ => panic!("invalid test phase"),
+    }
+}
+
+#[derive(Clone)]
+struct HandoffRemote(std::path::PathBuf);
+
+impl GitRunner for HandoffRemote {
+    fn run(&self, command: &GitCommand) -> Result<GitOutput, AllocationError> {
+        let mut command = command.clone();
+        if command
+            .args
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "fetch" | "push" | "ls-remote"))
+        {
+            for arg in &mut command.args {
+                if arg == REMOTE {
+                    *arg = self.0.to_string_lossy().into_owned();
+                }
+            }
+        }
+        ProcessGitRunner.run(&command)
     }
 }
 
@@ -153,6 +292,34 @@ fn allocator() -> IsolatedWorkspace<ProcessGitRunner> {
 }
 
 const REMOTE: &str = "https://github.com/example/fixture.git";
+
+#[test]
+fn reused_workspace_repairs_private_object_directories_without_touching_staged_work() {
+    let tmp = tempfile::tempdir().unwrap();
+    let spec = fixture(tmp.path());
+    allocator().allocate(&spec, REMOTE).unwrap();
+    fs::write(spec.path().join("tracked"), "retained staged fix\n").unwrap();
+    git(spec.path(), &["add", "tracked"]);
+    let index = fs::read(spec.path().join(".git/index")).unwrap();
+    let head = git(spec.path(), &["rev-parse", "HEAD"]);
+    let private = spec.path().join(".git/objects/aa");
+    fs::create_dir_all(&private).unwrap();
+    fs::set_permissions(&private, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(
+        allocator().allocate(&spec, REMOTE).unwrap(),
+        AllocationResult::Existing
+    );
+    assert_eq!(
+        fs::metadata(private).unwrap().permissions().mode() & 0o7777,
+        0o770
+    );
+    assert_eq!(fs::read(spec.path().join(".git/index")).unwrap(), index);
+    assert_eq!(git(spec.path(), &["rev-parse", "HEAD"]), head);
+    assert_eq!(
+        fs::read_to_string(spec.path().join("tracked")).unwrap(),
+        "retained staged fix\n"
+    );
+}
 
 #[test]
 fn builder_retry_preserves_descendant_commits_and_unfinished_edits() {

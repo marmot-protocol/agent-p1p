@@ -80,6 +80,7 @@ impl<R: GitRunner> IsolatedWorkspace<R> {
         }
         if fs::symlink_metadata(spec.path()).is_ok() {
             self.verify_for_controller(spec.path(), spec.branch(), remote_url)?;
+            share_git_object_store(spec.path()).map_err(io_error)?;
             return Ok(AllocationResult::Existing);
         }
         // Initialize a fresh Git directory, not a copy of the cache's config,
@@ -446,4 +447,31 @@ pub(crate) fn share_git_metadata_path(
         }
     }
     Ok(())
+}
+
+/// Repair partial controller fetches before handing a retained checkout back to
+/// the worker. Objects need read access; their directories also need write
+/// access for new hashes. Do not rewrite the index, refs, source, or credentials.
+/// Requires the same exclusive workspace ownership as publication/allocation.
+pub(crate) fn share_git_object_store(worktree: &Path) -> Result<(), std::io::Error> {
+    fn share(path: &Path) -> Result<(), std::io::Error> {
+        let metadata = fs::symlink_metadata(path)?;
+        if metadata.is_dir() {
+            for entry in fs::read_dir(path)? {
+                share(&entry?.path())?;
+            }
+        }
+        let required = if metadata.is_dir() { 0o770 } else { 0o440 };
+        if metadata.permissions().mode() & required != required {
+            fs::set_permissions(path, fs::Permissions::from_mode(required))?;
+        }
+        Ok(())
+    }
+    let objects = worktree.join(".git/objects");
+    // Validate the entire tree before any permission changes; no links, special
+    // files or hard-linked objects. Existing accessible worker-owned entries
+    // need no chmod, which would fail across the service UID boundary.
+    validate_metadata_tree(&worktree.join(".git"))
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    share(&objects)
 }

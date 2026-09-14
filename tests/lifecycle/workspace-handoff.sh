@@ -61,7 +61,18 @@ chmod 0770 "$fixture/workspaces/repo-123-issue-456-workflow-1"
 systemctl reset-failed "$unit"
 systemctl start "$unit" || { journalctl -u "$unit" --no-pager; exit 1; }
 test "$(systemctl show "$unit" -p Result --value)" = success
+printf '[Service]\nEnvironment=PIP_HANDOFF_ROOT=%s PIP_HANDOFF_PHASE=publish\nPrivateNetwork=yes\n' "$fixture" \
+  > "/run/systemd/system/$prepare_unit.d/fixture.conf"
+systemctl daemon-reload
+systemctl start "$prepare_unit" || { journalctl -u "$prepare_unit" --no-pager; exit 1; }
+test "$(systemctl show "$prepare_unit" -p Result --value)" = success
+printf '[Service]\nEnvironment=PIP_HANDOFF_ROOT=%s PIP_HANDOFF_PHASE=worker-remediate\nPrivateNetwork=yes\n' "$fixture" \
+  > "/run/systemd/system/$unit.d/fixture.conf"
+systemctl daemon-reload
+systemctl start "$unit" || { journalctl -u "$unit" --no-pager; exit 1; }
+test "$(systemctl show "$unit" -p Result --value)" = success
 runuser -u pip-control -- env PIP_HANDOFF_ROOT="$fixture" PIP_HANDOFF_PHASE=reconcile \
   /bin/sh -c 'umask 0077; exec "$@"' pip-handoff \
   "$binary" --ignored --exact service_identity_workspace_handoff --nocapture
 echo WORKSPACE_TWO_UID_SANDBOX_HANDOFF_OK
+echo WORKSPACE_TWO_UID_PUBLICATION_REMEDIATION_OK
