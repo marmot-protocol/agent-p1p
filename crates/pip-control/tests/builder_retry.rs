@@ -302,7 +302,7 @@ fn fixture_at(
             event: EventInput {
                 event_id: "intake".into(),
                 event_type: "ISSUE_AUTHORIZED".into(),
-                payload: json!({}),
+                payload: json!({"label_event_id":10}),
             },
             effects: vec![],
         })
@@ -394,6 +394,278 @@ fn exhausted_builder_can_be_retried_after_automatic_escalation_without_erasing_h
         enforce_operational_bounds(&mut store, &accepted, 143).unwrap(),
         OperationalBoundsCycle::Idle
     );
+}
+
+fn reauthorized_fixture() -> (
+    tempfile::TempDir,
+    Store,
+    RepositoryPolicy,
+    RepositoryPolicy,
+    BuilderRetryRequest,
+) {
+    reauthorized_fixture_variant("")
+}
+
+fn reauthorized_fixture_variant(
+    scenario: &str,
+) -> (
+    tempfile::TempDir,
+    Store,
+    RepositoryPolicy,
+    RepositoryPolicy,
+    BuilderRetryRequest,
+) {
+    let (dir, mut store, paused, accepted, request) = fixture();
+    // Match the legacy case: three bring-up failures, one authorized retry, then
+    // a fourth failure, followed by withdrawal and a new trusted label.
+    authorize_builder_retry(&mut store, &paused, &request, 140, 0).unwrap();
+    let old = store.claim_effect("dispatch", 141, 5).unwrap().unwrap();
+    store.complete_dispatch_outputs(&old.effect_id, &[], &[EffectInput {
+        effect_id:"fourth-worker".into(), effect_type:"RUN_DIRECT_WORKER".into(),
+        payload:json!({"source_effect_id":old.effect_id,"role":"builder","task_id":"fourth-task"})
+    }], "dispatch", 142, None).unwrap();
+    let attempt_at = if scenario == "new-attempt" { 200 } else { 143 };
+    let task = store
+        .claim_effect("worker", attempt_at, 5)
+        .unwrap()
+        .unwrap();
+    let id = store
+        .begin_direct_attempt(&task, "fourth-task", attempt_at)
+        .unwrap();
+    store
+        .fail_direct_attempt(id, "worker", attempt_at + 1, "provider probe unavailable")
+        .unwrap();
+    store.release_effect(&task.effect_id, "worker").unwrap();
+    enforce_operational_bounds(&mut store, &accepted, (attempt_at + 1).max(145)).unwrap();
+    let mut input = TransitionInput {
+        case_key: CASE.into(),
+        expected_revision: 4,
+        next_state: "ABANDONED".into(),
+        plan_version: 1,
+        remediation_round: 0,
+        pr_number: None,
+        head_sha: None,
+        observed_at: (attempt_at + 1).max(150),
+        event: EventInput {
+            event_id: "withdraw".into(),
+            event_type: "AUTHORIZATION_REMOVED".into(),
+            payload: json!({"blockers":["LATEST_AUTHORIZATION_REMOVED"]}),
+        },
+        run: None,
+        evidence: vec![],
+        findings: vec![],
+        effects: vec![],
+    };
+    store.apply_transition(&input, None).unwrap();
+    input.expected_revision = 5;
+    input.next_state = "PLANNING".into();
+    input.observed_at = (attempt_at + 1).max(200);
+    input.event = EventInput {
+        event_id: "reauthorized".into(),
+        event_type: "ISSUE_REAUTHORIZED".into(),
+        payload: json!({"label":accepted.intake.label,"label_actor_id":accepted.intake.trusted_actor_ids[0],
+            "label_event_id":30,"removed_label_event_id":20,"policy_revision":accepted.revision}),
+    };
+    input.effects = vec![EffectInput {
+        effect_id: "fresh-planner".into(),
+        effect_type: "DISPATCH_PLANNER".into(),
+        payload: json!({"case_key":CASE,"state_revision":6,"effect":"DISPATCH_PLANNER"}),
+    }];
+    if scenario == "not-reauthorized" {
+        input.event.event_type = "HUMAN_CLARIFIED".into();
+    }
+    store.apply_transition(&input, None).unwrap();
+    if matches!(scenario, "different-bound" | "different-source") {
+        input.expected_revision = 6;
+        input.next_state = "ESCALATED".into();
+        input.effects.clear();
+        input.event = EventInput {
+            event_id: "other-bound".into(),
+            event_type: "OPERATIONAL_BOUND_REACHED".into(),
+            payload: json!({"bound":if scenario=="different-bound" {"ELAPSED_TIME"} else {"PROVIDER_FAILURES"},
+                "observed":4,"limit":4,"details":{"source":if scenario=="different-source" {"other"} else {"direct-worker"}}}),
+        };
+        store.apply_transition(&input, None).unwrap();
+    } else {
+        enforce_operational_bounds(&mut store, &accepted, input.observed_at).unwrap();
+    }
+    (
+        dir,
+        store,
+        paused,
+        accepted,
+        BuilderRetryRequest {
+            case_key: CASE.into(),
+            expected_revision: 7,
+            effect_id: "fresh-planner".into(),
+            expected_failures: 4,
+            request_id: "operator-planner-retry".into(),
+            reason: "Historical runtime failures repaired; fresh planning authorized".into(),
+        },
+    )
+}
+
+#[test]
+fn reauthorized_planning_recovery_preserves_history_and_grants_only_one_failure_allowance() {
+    let (_dir, mut store, paused, accepted, request) = reauthorized_fixture();
+    let before = store.immutable_history_for_case(CASE).unwrap();
+    assert_eq!(store.case(CASE).unwrap().unwrap().state, "ESCALATED");
+    assert_eq!(
+        pip_control::authorize_planner_retry(&mut store, &paused, &request, 201, 0).unwrap(),
+        ApplyResult::Applied
+    );
+    let case = store.case(CASE).unwrap().unwrap();
+    assert_eq!(case.state, "PLANNING");
+    assert_eq!(case.plan_version, 1);
+    assert_eq!(store.case_authorized_at(CASE).unwrap(), Some(200));
+    let history = store.immutable_history_for_case(CASE).unwrap();
+    assert_eq!(history.runs, before.runs);
+    assert_eq!(
+        &history.events[..before.events.len()],
+        before.events.as_slice()
+    );
+    assert_eq!(store.failed_direct_attempt_count_for_case(CASE).unwrap(), 4);
+    assert_eq!(store.effective_provider_failure_limit(CASE, 3).unwrap(), 5);
+    assert_eq!(
+        pip_control::authorize_planner_retry(&mut store, &paused, &request, 202, 0).unwrap(),
+        ApplyResult::Replayed
+    );
+    assert_eq!(
+        enforce_operational_bounds(&mut store, &accepted, 203).unwrap(),
+        OperationalBoundsCycle::Idle
+    );
+    let mut stacked = request.clone();
+    stacked.request_id = "stacked".into();
+    stacked.expected_revision = 8;
+    assert!(pip_control::authorize_planner_retry(&mut store, &paused, &stacked, 204, 0).is_err());
+    let effect = store
+        .claim_effect_matching("dispatch", 205, 5, &["DISPATCH_PLANNER"])
+        .unwrap()
+        .unwrap();
+    assert_ne!(effect.effect_id, "fresh-planner");
+    store
+        .complete_dispatch_outputs(
+            &effect.effect_id,
+            &[],
+            &[EffectInput {
+                effect_id: "next-worker".into(),
+                effect_type: "RUN_DIRECT_WORKER".into(),
+                payload: json!({"source_effect_id":effect.effect_id,"role":"planner"}),
+            }],
+            "dispatch",
+            206,
+            None,
+        )
+        .unwrap();
+    let effect = store
+        .claim_effect_matching("worker", 207, 5, &["RUN_DIRECT_WORKER"])
+        .unwrap()
+        .unwrap();
+    let id = store
+        .begin_direct_attempt(&effect, "new-task", 207)
+        .unwrap();
+    store
+        .fail_direct_attempt(id, "worker", 208, "another failure")
+        .unwrap();
+    store.release_effect(&effect.effect_id, "worker").unwrap();
+    assert!(matches!(
+        enforce_operational_bounds(&mut store, &accepted, 209).unwrap(),
+        OperationalBoundsCycle::Escalated {
+            bound: OperationalBound::ProviderFailures,
+            observed: 5,
+            limit: 5,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn planner_retry_rejects_stale_requests_and_nonhistorical_or_dispatched_work() {
+    for scenario in [
+        "uid",
+        "active",
+        "model",
+        "revision",
+        "failures",
+        "effect",
+        "reason",
+        "deadline",
+        "different-bound",
+        "different-source",
+        "not-reauthorized",
+        "delivered",
+        "leased",
+        "new-attempt",
+        "head",
+        "frozen",
+    ] {
+        let (_dir, mut store, mut paused, accepted, mut request) =
+            reauthorized_fixture_variant(scenario);
+        let db = rusqlite::Connection::open(store.path()).unwrap();
+        let mut uid = 0;
+        let mut now = 201;
+        match scenario {
+            "uid" => uid = 1000,
+            "active" => paused.dispatch_enabled = true,
+            "model" => paused.roles[0].model = "other".into(),
+            "revision" => request.expected_revision += 1,
+            "failures" => request.expected_failures += 1,
+            "effect" => request.effect_id = "fourth-worker".into(),
+            "reason" => request.reason.clear(),
+            "deadline" => now = 200 + accepted.max_case_elapsed_seconds,
+            "different-bound" | "different-source" | "not-reauthorized" | "new-attempt" => {}
+            "delivered" => {
+                db.execute(
+                    "UPDATE outbox SET delivered_at=200 WHERE effect_id='fresh-planner'",
+                    [],
+                )
+                .unwrap();
+            }
+            "leased" => {
+                db.execute("UPDATE outbox SET lease_owner='worker',lease_until=250 WHERE effect_id='fresh-planner'",[]).unwrap();
+            }
+            "head" => {
+                db.execute(
+                    "UPDATE cases SET pr_number=77,head_sha=?1",
+                    ["b".repeat(40)],
+                )
+                .unwrap();
+            }
+            "frozen" => {
+                db.execute("INSERT INTO dispatch_batches(effect_id,case_key,state_revision,payload_json,payload_sha256,frozen_at) VALUES ('fresh-planner',?1,6,'[]',?2,200)",rusqlite::params![CASE,"a".repeat(64)]).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        drop(db);
+        let before = store.status(now).unwrap();
+        let history = store.immutable_history_for_case(CASE).unwrap();
+        assert!(
+            pip_control::authorize_planner_retry(&mut store, &paused, &request, now, uid).is_err(),
+            "accepted {scenario}"
+        );
+        assert_eq!(store.status(now).unwrap(), before, "mutated {scenario}");
+        assert_eq!(store.immutable_history_for_case(CASE).unwrap(), history);
+    }
+}
+
+#[test]
+fn planner_retry_preserves_deadline_and_rejects_conflicting_replay() {
+    let (_dir, mut store, paused, accepted, mut request) = reauthorized_fixture();
+    pip_control::authorize_planner_retry(&mut store, &paused, &request, 201, 0).unwrap();
+    request.reason.push_str(" changed");
+    assert!(pip_control::authorize_planner_retry(&mut store, &paused, &request, 202, 0).is_err());
+    assert!(matches!(
+        enforce_operational_bounds(
+            &mut store,
+            &accepted,
+            200 + accepted.max_case_elapsed_seconds
+        )
+        .unwrap(),
+        OperationalBoundsCycle::Escalated {
+            bound: OperationalBound::ElapsedTime,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -593,6 +865,15 @@ fn root_cli_retry_checks_real_uid_stopped_units_and_empty_queue() {
     ];
     let binary = env!("CARGO_BIN_EXE_pip-control");
     let run = || Command::new(binary).args(args).output().unwrap();
+    let mut planner_args = args;
+    planner_args[0] = "authorize-planner-retry";
+    let planner_denied = Command::new("runuser")
+        .args(["-u", "pip-worker", "--", binary])
+        .args(planner_args)
+        .output()
+        .unwrap();
+    assert!(!planner_denied.status.success());
+    assert!(String::from_utf8_lossy(&planner_denied.stderr).contains("requires root"));
     let mut review_args = args;
     review_args[0] = "authorize-review-retry";
     let publication_args = [
@@ -636,6 +917,9 @@ fn root_cli_retry_checks_real_uid_stopped_units_and_empty_queue() {
     assert!(!denied.status.success());
     assert!(String::from_utf8_lossy(&denied.stderr).contains("requires root"));
     fs::write(queue.join("inbox/stale.json"), b"{}").unwrap();
+    let planner_stale = Command::new(binary).args(planner_args).output().unwrap();
+    assert!(!planner_stale.status.success());
+    assert!(String::from_utf8_lossy(&planner_stale.stderr).contains("queue must be drained"));
     let publication_stale = Command::new(binary)
         .args(publication_args)
         .output()
@@ -658,6 +942,9 @@ fn root_cli_retry_checks_real_uid_stopped_units_and_empty_queue() {
             .success()
     );
     let active = run();
+    let planner_active = Command::new(binary).args(planner_args).output().unwrap();
+    assert!(!planner_active.status.success());
+    assert!(String::from_utf8_lossy(&planner_active.stderr).contains("execution units"));
     let publication_active = Command::new(binary)
         .args(publication_args)
         .output()

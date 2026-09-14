@@ -1211,7 +1211,7 @@ impl Store {
                 .ok_or(StoreError::InvalidInteger)?;
             if matches!(
                 input.event.event_type.as_str(),
-                "BUILDER_RETRY_AUTHORIZED" | "REVIEW_RETRY_AUTHORIZED"
+                "BUILDER_RETRY_AUTHORIZED" | "REVIEW_RETRY_AUTHORIZED" | "PLANNER_RETRY_AUTHORIZED"
             ) {
                 builder_retry::validate_retry(&transaction, &current, input)?;
             }

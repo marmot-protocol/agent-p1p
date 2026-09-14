@@ -57,6 +57,23 @@ pub fn authorize_review_retry(
     )
 }
 
+pub fn authorize_planner_retry(
+    store: &mut Store,
+    paused: &RepositoryPolicy,
+    request: &BuilderRetryRequest,
+    now: u64,
+    operator_uid: u32,
+) -> Result<ApplyResult, String> {
+    authorize_retry(
+        store,
+        paused,
+        request,
+        now,
+        operator_uid,
+        Event::PlannerRetryAuthorized,
+    )
+}
+
 fn authorize_retry(
     store: &mut Store,
     paused: &RepositoryPolicy,
@@ -65,7 +82,7 @@ fn authorize_retry(
     operator_uid: u32,
     event: Event,
 ) -> Result<ApplyResult, String> {
-    let review_retry = event == Event::ReviewRetryAuthorized;
+    let event_name = event.to_string();
     let (case, accepted) = recovery_context(store, paused, &request.case_key, operator_uid)?;
     let event_id = EventId::from_str(&request.request_id).map_err(error)?;
     let authorization = BuilderRetryAuthorization {
@@ -85,7 +102,7 @@ fn authorize_retry(
         .iter()
         .find(|event| event.event_id == request.request_id)
     {
-        if event.event_type == retry_event_name(review_retry)
+        if event.event_type == event_name
             && event.payload == payload
             && request.expected_revision.checked_add(1) == Some(event.state_revision)
         {
@@ -185,12 +202,4 @@ pub(crate) fn recovery_command(
 
 fn error(value: impl std::fmt::Display) -> String {
     value.to_string()
-}
-
-fn retry_event_name(review: bool) -> &'static str {
-    if review {
-        "REVIEW_RETRY_AUTHORIZED"
-    } else {
-        "BUILDER_RETRY_AUTHORIZED"
-    }
 }

@@ -46,6 +46,7 @@ pub enum Event {
     HumanFeedbackReceived,
     BuilderDispatched,
     BuilderRetryAuthorized,
+    PlannerRetryAuthorized,
     ReviewRetryAuthorized,
     InfrastructureRecoveryAuthorized,
     FollowUpRecoveryAuthorized,
@@ -77,7 +78,7 @@ pub enum Event {
 }
 
 impl Event {
-    pub const ALL: [Self; 44] = [
+    pub const ALL: [Self; 45] = [
         Self::PlanRecorded,
         Self::Proceed,
         Self::WaitingForIssueCreator,
@@ -94,6 +95,7 @@ impl Event {
         Self::HumanFeedbackReceived,
         Self::BuilderDispatched,
         Self::BuilderRetryAuthorized,
+        Self::PlannerRetryAuthorized,
         Self::ReviewRetryAuthorized,
         Self::InfrastructureRecoveryAuthorized,
         Self::FollowUpRecoveryAuthorized,
@@ -208,6 +210,7 @@ string_enum!(Event, "event", {
     "HUMAN_FEEDBACK_RECEIVED" => HumanFeedbackReceived,
     "BUILDER_DISPATCHED" => BuilderDispatched,
     "BUILDER_RETRY_AUTHORIZED" => BuilderRetryAuthorized,
+    "PLANNER_RETRY_AUTHORIZED" => PlannerRetryAuthorized,
     "REVIEW_RETRY_AUTHORIZED" => ReviewRetryAuthorized,
     "INFRASTRUCTURE_RECOVERY_AUTHORIZED" => InfrastructureRecoveryAuthorized,
     "FOLLOW_UP_RECOVERY_AUTHORIZED" => FollowUpRecoveryAuthorized,
@@ -405,6 +408,9 @@ pub fn transition(
         }
         (State::Escalated, Ev::ReviewRetryAuthorized) => {
             decision(State::WaitingCi, &[Fx::ObserveCi])
+        }
+        (State::Escalated, Ev::PlannerRetryAuthorized) => {
+            decision(State::Planning, &[Fx::DispatchPlanner])
         }
         (State::Escalated, Ev::InfrastructureRecoveryAuthorized)
             if context.remediation_round < context.max_remediation_rounds =>

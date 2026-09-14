@@ -284,6 +284,10 @@ current policy; preserve prior plans, failures, effects and workspace-retirement
 only the elapsed-time window, not failure allowances. Capacity and pause rules
 still apply. Completed work, human takeovers, other abandonment decisions and
 cases with a PR require explicit recovery rather than label-driven restart.
+If retained provider failures stop the new generation before planner dispatch,
+an offline operator may authorize one extra failure allowance and fresh planning.
+This appends history, preserves the deadline, requires stopped execution and an
+undispatched reauthorization, and cannot silently reset or stack failure budgets.
 Webhook intake records the delivery but cannot supply the execution-quiescence
 check needed to restart an existing case.
 

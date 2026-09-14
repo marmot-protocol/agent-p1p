@@ -1,6 +1,25 @@
 use pip_core::{CaseState, Effect, Event, MergeMode, TransitionContext, transition};
 
 #[test]
+fn planner_recovery_only_reopens_escalated_work_for_a_fresh_plan() {
+    let event: Event = "PLANNER_RETRY_AUTHORIZED".parse().unwrap();
+    let context = TransitionContext::default();
+    let decision = transition(CaseState::Escalated, event, context).unwrap();
+    assert_eq!(decision.next_state, CaseState::Planning);
+    assert_eq!(decision.effects, [Effect::DispatchPlanner]);
+    for state in [
+        CaseState::Planning,
+        CaseState::TakenOver,
+        CaseState::Abandoned,
+        CaseState::Completed,
+        CaseState::ReadyToBuild,
+        CaseState::ShadowReady,
+    ] {
+        assert!(transition(state, event, context).is_err());
+    }
+}
+
+#[test]
 fn publication_recovery_only_releases_publication_not_another_agent_attempt() {
     let event: Event = "PUBLICATION_RETRY_AUTHORIZED".parse().unwrap();
     let context = TransitionContext {

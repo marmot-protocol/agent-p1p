@@ -1,5 +1,30 @@
 # Offline work and publication recovery
 
+## Recover reauthorized planning stopped by historical provider failures
+
+`authorize-planner-retry` uses the same root-only, inert-policy, stopped/disabled
+execution-unit and drained-queue checks and arguments as `authorize-builder-retry`
+below. Use the superseded `DISPATCH_PLANNER` effect ID, not an old builder task.
+
+Use this only after repairing the historical runtime failures and verifying that
+a fresh trusted label reauthorized a pre-PR case, but provider-failure enforcement
+escalated it before planning could be dispatched. The immediately preceding
+generation must be `ISSUE_REAUTHORIZED`; all direct attempts must predate that
+generation. Delivered planner tasks, frozen dispatches, leased work, accepted
+PRs, other escalation causes and expired deadlines remain held.
+
+The command appends `PLANNER_RETRY_AUTHORIZED`, returns the case to `PLANNING`
+and queues one fresh planning task. It preserves old plans, failures, accepted
+policy and the reauthorization deadline. Its case-specific failure limit becomes
+the observed failure count plus one. Successful stages may continue normally;
+another provider failure stops automation again. The same request ID replays
+without another grant; an unused allowance cannot be stacked. Restore the
+accepted active policy separately; normal live authorization, model, workspace,
+CI, review and human-merge gates still apply.
+
+Do not resume this ledger under a release that cannot interpret this event and
+allowance. Schema compatibility alone is not behavioral compatibility.
+
 ## Recover a false takeover after ready-for-review feedback
 
 Normal follow-up feedback on a `SHADOW_READY` PR now returns the exact owned PR

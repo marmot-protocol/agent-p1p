@@ -95,8 +95,9 @@ pub fn run_cli(arguments: impl IntoIterator<Item = String>) -> Result<Value, Cli
         "direct-worker-cycle" => direct_worker_cycle(&arguments[1..]),
         "bootstrap-runtime" => bootstrap_runtime(&arguments[1..]),
         "scratch-retire" => scratch_retire(&arguments[1..]),
-        "authorize-builder-retry" => authorize_retry(&arguments[1..], false),
-        "authorize-review-retry" => authorize_retry(&arguments[1..], true),
+        "authorize-builder-retry" => authorize_retry(&arguments[1..], "builder"),
+        "authorize-review-retry" => authorize_retry(&arguments[1..], "review"),
+        "authorize-planner-retry" => authorize_retry(&arguments[1..], "planner"),
         "authorize-publication-retry" => authorize_publication_retry(&arguments[1..]),
         "authorize-infrastructure-recovery" => authorize_infrastructure_recovery(&arguments[1..]),
         "authorize-follow-up-recovery" => authorize_head_recovery(&arguments[1..], "follow-up"),
@@ -120,7 +121,7 @@ fn validate_worker_result(arguments: &[String]) -> Result<Value, CliError> {
     )
 }
 
-fn authorize_retry(arguments: &[String], review: bool) -> Result<Value, CliError> {
+fn authorize_retry(arguments: &[String], kind: &str) -> Result<Value, CliError> {
     let options = options(
         arguments,
         &[
@@ -150,10 +151,10 @@ fn authorize_retry(arguments: &[String], review: bool) -> Result<Value, CliError
         request_id: required(&options, "--request-id")?.into(),
         reason: required(&options, "--reason")?.into(),
     };
-    let authorize = if review {
-        crate::authorize_review_retry
-    } else {
-        crate::authorize_builder_retry
+    let authorize = match kind {
+        "planner" => crate::authorize_planner_retry,
+        "review" => crate::authorize_review_retry,
+        _ => crate::authorize_builder_retry,
     };
     let result = authorize(&mut store, &policy, &request, current_time()?, 0)
         .map_err(CliError::Reconciliation)?;

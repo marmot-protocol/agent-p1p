@@ -18,12 +18,17 @@ pub(crate) fn validate_retry(
     input: &TransitionInput,
 ) -> Result<()> {
     let review = input.event.event_type == "REVIEW_RETRY_AUTHORIZED";
-    let next_state = if review {
+    let planner = input.event.event_type == "PLANNER_RETRY_AUTHORIZED";
+    let next_state = if planner {
+        "PLANNING"
+    } else if review {
         "WAITING_CI"
     } else {
         "READY_TO_BUILD"
     };
-    let effect_type = if review {
+    let effect_type = if planner {
+        "DISPATCH_PLANNER"
+    } else if review {
         "OBSERVE_CI"
     } else {
         "DISPATCH_BUILDER"
@@ -40,13 +45,14 @@ pub(crate) fn validate_retry(
         || authorization.reason.trim().is_empty()
         || authorization.reason.len() > 2000
         || authorization.reason.chars().any(char::is_control)
-        || !(current.state == "ESCALATED" || !review && current.state == "READY_TO_BUILD")
+        || (current.state != "READY_TO_BUILD" || planner || review) && current.state != "ESCALATED"
         || input.next_state != next_state
-        || current.plan_version == 0
+        || !planner && current.plan_version == 0
         || input.plan_version != current.plan_version
         || input.remediation_round != current.remediation_round
         || current.pr_number.is_some() != current.head_sha.is_some()
         || review && current.pr_number.is_none()
+        || planner && current.pr_number.is_some()
         || input.pr_number != current.pr_number
         || input.head_sha != current.head_sha
         || input.run.is_some()
@@ -92,6 +98,9 @@ pub(crate) fn validate_retry(
     )?;
     if unsigned(failed) != authorization.failed_attempts {
         return Err(invalid());
+    }
+    if planner {
+        return validate_undispatched_planner(transaction, current, input, &authorization);
     }
     // Only an exact direct-worker failure-bound escalation is recoverable here.
     // Scope, elapsed-time, review and other terminal decisions stay held.
@@ -151,7 +160,7 @@ pub(crate) fn validate_retry(
          AND EXISTS(SELECT 1 FROM direct_attempts WHERE effect_id=?1 AND case_key=?2 AND status='FAILED')
          AND EXISTS(SELECT 1 FROM runs WHERE case_key=?2 AND role='planner')
          AND (?9=0 OR EXISTS(SELECT 1 FROM runs WHERE case_key=?2 AND role='builder'))
-         AND NOT EXISTS(SELECT 1 FROM events WHERE case_key=?2 AND event_type IN ('BUILDER_RETRY_AUTHORIZED','REVIEW_RETRY_AUTHORIZED')
+         AND NOT EXISTS(SELECT 1 FROM events WHERE case_key=?2 AND event_type IN ('BUILDER_RETRY_AUTHORIZED','REVIEW_RETRY_AUTHORIZED','PLANNER_RETRY_AUTHORIZED')
              AND json_extract(payload_json,'$.failed_attempts')>=?4)",
         params![authorization.effect_id,current.case_key,sql_u64(effect_revision)?,failed,escalated,if escalated {0} else {1},if review { "reviewer-secperf" } else { "builder" },review,current.pr_number.is_some(),resolved],|row|row.get(0))?;
     if !admissible {
@@ -171,6 +180,64 @@ pub(crate) fn validate_retry(
     Ok(())
 }
 
+/// Reauthorization deliberately preserves failure budgets. If historical failures
+/// stop that generation before dispatch, an operator may grant one extra allowance
+/// without reviving a stale plan or relaxing any other workflow bound.
+fn validate_undispatched_planner(
+    transaction: &Transaction<'_>,
+    current: &StoredCase,
+    input: &TransitionInput,
+    authorization: &BuilderRetryAuthorization,
+) -> Result<()> {
+    let invalid = || {
+        StoreError::InvalidInput(
+            "planner retry requires an undispatched reauthorized generation stopped by historical provider failures",
+        )
+    };
+    authorization
+        .failed_attempts
+        .checked_add(1)
+        .filter(|value| *value <= i64::MAX as u64)
+        .ok_or_else(invalid)?;
+    let admissible: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM events stop JOIN events fresh
+           ON fresh.case_key=stop.case_key AND fresh.state_revision=stop.state_revision-1
+         JOIN outbox task ON task.case_key=fresh.case_key AND task.state_revision=fresh.state_revision
+         WHERE stop.case_key=?1 AND stop.state_revision=?2
+           AND stop.event_type='OPERATIONAL_BOUND_REACHED'
+           AND stop.previous_state='PLANNING' AND stop.next_state='ESCALATED'
+           AND json_extract(stop.payload_json,'$.bound')='PROVIDER_FAILURES'
+           AND json_extract(stop.payload_json,'$.details.source')='direct-worker'
+           AND json_extract(stop.payload_json,'$.observed')=?4
+           AND json_extract(stop.payload_json,'$.limit')<=?4
+           AND fresh.event_type='ISSUE_REAUTHORIZED' AND fresh.next_state='PLANNING'
+           AND task.effect_id=?3 AND task.effect_type='DISPATCH_PLANNER'
+           AND task.delivered_at IS NULL AND task.superseded_at IS NOT NULL
+           AND task.lease_owner IS NULL AND task.lease_until IS NULL
+           AND NOT EXISTS(SELECT 1 FROM dispatch_batches WHERE effect_id=task.effect_id)
+           AND NOT EXISTS(SELECT 1 FROM task_projections WHERE effect_id=task.effect_id)
+           AND NOT EXISTS(SELECT 1 FROM direct_attempts WHERE case_key=?1
+               AND (status='RUNNING' OR started_at>=fresh.observed_at OR completed_at>=fresh.observed_at))
+           AND NOT EXISTS(SELECT 1 FROM outbox WHERE case_key=?1
+               AND state_revision=fresh.state_revision AND effect_id!=task.effect_id)
+           AND NOT EXISTS(SELECT 1 FROM outbox WHERE case_key=?1
+               AND (lease_owner IS NOT NULL OR lease_until IS NOT NULL
+                 OR (delivered_at IS NULL AND superseded_at IS NULL AND effect_type!='ESCALATE')))
+           AND NOT EXISTS(SELECT 1 FROM events WHERE case_key=?1
+               AND event_type IN ('BUILDER_RETRY_AUTHORIZED','REVIEW_RETRY_AUTHORIZED','PLANNER_RETRY_AUTHORIZED')
+               AND json_extract(payload_json,'$.failed_attempts')>=?4))",
+        params![current.case_key,sql_u64(current.state_revision)?,authorization.effect_id,sql_u64(authorization.failed_attempts)?],
+        |row|row.get(0),
+    )?;
+    let expected = serde_json::json!({"case_key":current.case_key,"state_revision":current.state_revision+1,
+        "effect":"DISPATCH_PLANNER","remediation_round":current.remediation_round,"plan_version":current.plan_version,
+        "pr_number":current.pr_number,"head_sha":current.head_sha});
+    if !admissible || input.effects[0].payload != expected {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
 impl Store {
     /// A retry contributes exactly one failure allowance, never erases failures.
     /// Successful later stages can proceed, but another failure reaches the new bound.
@@ -179,7 +246,8 @@ impl Store {
             "SELECT MAX(json_extract(payload_json,'$.failed_attempts')+1) FROM events
              WHERE case_key=?1 AND ((event_type='BUILDER_RETRY_AUTHORIZED'
                AND previous_state IN ('READY_TO_BUILD','ESCALATED') AND next_state='READY_TO_BUILD')
-               OR (event_type='REVIEW_RETRY_AUTHORIZED' AND previous_state='ESCALATED' AND next_state='WAITING_CI'))",
+               OR (event_type='REVIEW_RETRY_AUTHORIZED' AND previous_state='ESCALATED' AND next_state='WAITING_CI')
+               OR (event_type='PLANNER_RETRY_AUTHORIZED' AND previous_state='ESCALATED' AND next_state='PLANNING'))",
             [case_key],
             |row| row.get(0),
         )?;
