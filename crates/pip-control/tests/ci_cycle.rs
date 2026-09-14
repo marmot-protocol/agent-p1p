@@ -25,6 +25,165 @@ impl PullRequestSource for FixtureSource {
 }
 
 #[test]
+fn confirmed_conflict_routes_once_to_bounded_remediation_without_waiting_for_ci() {
+    for exhausted in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = waiting_ci_store(directory.path().join("ledger.db"));
+        let policy = active_policy();
+        if exhausted {
+            let case = store.case("repo:984321#1240@1").unwrap().unwrap();
+            store
+                .apply_transition(
+                    &TransitionInput {
+                        case_key: case.case_key,
+                        expected_revision: case.state_revision,
+                        next_state: "WAITING_CI".into(),
+                        remediation_round: policy.max_remediation_rounds,
+                        plan_version: case.plan_version,
+                        pr_number: case.pr_number,
+                        head_sha: case.head_sha,
+                        observed_at: 20,
+                        event: EventInput {
+                            event_id: "fixture-exhausted".into(),
+                            event_type: "FIXTURE_EXHAUSTED_ROUNDS".into(),
+                            payload: json!({}),
+                        },
+                        run: None,
+                        evidence: vec![],
+                        findings: vec![],
+                        effects: vec![],
+                    },
+                    None,
+                )
+                .unwrap();
+        }
+        let mut pr = evidence(vec![]);
+        pr.pull_request.mergeable = Some(false);
+        pr.pull_request.mergeable_state = "dirty".into();
+        let source = FixtureSource { evidence: pr };
+        let before = store
+            .immutable_history_for_case("repo:984321#1240@1")
+            .unwrap();
+        assert!(
+            matches!(reconcile_ci_once(&source,&policy,&mut store,100).unwrap(),
+            CiCycle::Transitioned{verdict,..} if verdict=="FAILED")
+        );
+        let case = store.case("repo:984321#1240@1").unwrap().unwrap();
+        assert_eq!(
+            case.state,
+            if exhausted {
+                "ESCALATED"
+            } else {
+                "REMEDIATING"
+            }
+        );
+        assert_eq!(case.head_sha, Some("b".repeat(40)));
+        assert_eq!(case.pr_number, Some(77));
+        assert_eq!(
+            case.remediation_round,
+            if exhausted {
+                policy.max_remediation_rounds
+            } else {
+                1
+            }
+        );
+        let history = store.immutable_history_for_case(&case.case_key).unwrap();
+        assert_eq!(history.runs, before.runs);
+        let event = history.events.last().unwrap();
+        assert_eq!(event.event_type, "CI_FAILED");
+        assert_eq!(event.payload["blockers"], json!(["PR_MERGE_CONFLICT"]));
+        let retained = history
+            .evidence
+            .iter()
+            .find(|row| row.kind == "GITHUB_CI")
+            .unwrap();
+        assert_eq!(retained.payload["pull_request"]["base_sha"], "a".repeat(40));
+        assert_eq!(retained.payload["pull_request"]["head_sha"], "b".repeat(40));
+        assert_eq!(
+            reconcile_ci_once(&source, &policy, &mut store, 101).unwrap(),
+            CiCycle::Idle
+        );
+        assert_eq!(
+            store.immutable_history_for_case(&case.case_key).unwrap(),
+            history
+        );
+        let effect = store.claim_effect("inspect", 102, 5).unwrap().unwrap();
+        assert_eq!(
+            effect.effect_type,
+            if exhausted {
+                "ESCALATE"
+            } else {
+                "DISPATCH_BUILDER"
+            }
+        );
+    }
+}
+
+#[test]
+fn conflicting_pr_with_a_changed_head_cannot_dispatch_remediation() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = waiting_ci_store(directory.path().join("ledger.db"));
+    let mut pr = evidence(vec![]);
+    pr.pull_request.mergeable = Some(false);
+    pr.pull_request.mergeable_state = "dirty".into();
+    pr.pull_request.head_sha = "c".repeat(40);
+    let before = store.status(100).unwrap();
+    assert!(
+        reconcile_ci_once(
+            &FixtureSource { evidence: pr },
+            &active_policy(),
+            &mut store,
+            100
+        )
+        .is_err()
+    );
+    assert_eq!(store.status(100).unwrap(), before);
+}
+
+#[test]
+fn unknown_or_nonconflicting_mergeability_keeps_missing_ci_pending() {
+    for (mergeable, state) in [
+        (None, "unknown"),
+        (None, "dirty"),
+        (Some(true), "behind"),
+        (Some(true), "blocked"),
+        (Some(false), "unknown"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = waiting_ci_store(directory.path().join("ledger.db"));
+        let mut pr = evidence(vec![]);
+        pr.pull_request.mergeable = mergeable;
+        pr.pull_request.mergeable_state = state.into();
+        let before = store.status(100).unwrap();
+        assert!(
+            matches!(reconcile_ci_once(&FixtureSource{evidence:pr},&active_policy(),&mut store,100).unwrap(),
+            CiCycle::Pending{blockers,..} if blockers==["MISSING_REQUIRED_CONTEXT:test"])
+        );
+        assert_eq!(store.status(100).unwrap(), before);
+    }
+}
+
+#[test]
+fn confirmed_conflict_cannot_release_reviewers_even_with_green_ci() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = waiting_ci_store(directory.path().join("ledger.db"));
+    let mut pr = evidence(vec![check(CheckConclusion::Success)]);
+    pr.pull_request.mergeable = Some(false);
+    pr.pull_request.mergeable_state = "dirty".into();
+    reconcile_ci_once(
+        &FixtureSource { evidence: pr },
+        &active_policy(),
+        &mut store,
+        100,
+    )
+    .unwrap();
+    assert_eq!(
+        store.case("repo:984321#1240@1").unwrap().unwrap().state,
+        "REMEDIATING"
+    );
+}
+
+#[test]
 fn scoped_ci_advances_the_healthy_case_without_selecting_a_broken_peer() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = waiting_ci_store(directory.path().join("ledger.db"));

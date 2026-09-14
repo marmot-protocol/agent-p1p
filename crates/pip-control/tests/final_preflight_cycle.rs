@@ -424,9 +424,11 @@ fn mergeability_blockers_distinguish_conflicts_unknown_and_branch_requirements()
         let directory = tempfile::tempdir().unwrap();
         let policy = active_policy();
         let mut source = accepted_source();
+        // Reach final review while mergeable, then observe a later base conflict.
+        // A conflict already present at the CI stage now correctly remediates.
+        let mut store = final_review_store(directory.path().join("ledger.db"), &policy, &source);
         source.evidence.pull_request.mergeable = mergeable;
         source.evidence.pull_request.mergeable_state = state.into();
-        let mut store = final_review_store(directory.path().join("ledger.db"), &policy, &source);
         let result = reconcile_final_preflight_once(
             &source,
             &policy,

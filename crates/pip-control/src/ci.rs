@@ -10,7 +10,8 @@ use pip_core::{
     PolicyRevision, PullRequestNumber, RepositoryId, StateRevision, WorkflowVersion,
 };
 use pip_github::{
-    CiVerdict, GitHubError, GitHubReader, PullRequestEvidence, ReadTransport, evaluate_ci,
+    CiEvaluation, CiVerdict, GitHubError, GitHubReader, PullRequestEvidence, ReadTransport,
+    evaluate_ci,
 };
 use pip_store::{EvidenceInput, Store, StoreError, StoredCase};
 use serde::Serialize;
@@ -144,7 +145,19 @@ pub fn reconcile_ci_once<'a, S: PullRequestSource>(
     {
         return Err(CiCycleError::PullRequestDrift);
     }
-    let evaluation = evaluate_ci(&evidence, expected_head, &policy.required_ci_contexts);
+    // GitHub does not start pull_request workflows while conflicts exist.
+    // After verifying the exact case/head, route a confirmed conflict through
+    // bounded remediation; unknown/behind/blocked is not proof of a conflict.
+    let evaluation = if evidence.pull_request.mergeable == Some(false)
+        && evidence.pull_request.mergeable_state == "dirty"
+    {
+        CiEvaluation {
+            verdict: CiVerdict::Failed,
+            blockers: vec!["PR_MERGE_CONFLICT".into()],
+        }
+    } else {
+        evaluate_ci(&evidence, expected_head, &policy.required_ci_contexts)
+    };
     if evaluation.verdict == CiVerdict::Pending {
         return Ok(CiCycle::Pending {
             case_key: case.case_key,

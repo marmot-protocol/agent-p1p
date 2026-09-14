@@ -46,6 +46,11 @@ lifecycle boundary before use.
    records the source-to-published commit binding, then publishes the signed
    commit to the assigned branch and creates/updates one draft PR.
 6. Observe required CI for that exact head.
+   Confirmed GitHub merge conflicts (`mergeable=false`, state `dirty`) enter the
+   existing bounded builder-remediation path even when CI has not started.
+   Retain the observed head/base and conflict evidence; unknown mergeability or
+   merely being behind the base is not a conflict. Repaired heads require fresh
+   CI and reviews, and exhausted remediation limits still escalate.
 7. Run every configured required reviewer independently on the same head.
 8. If changes are needed, combine blocking findings, remediate, and repeat CI
    and the required review set on the new head.

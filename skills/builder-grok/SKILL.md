@@ -1,7 +1,7 @@
 ---
 name: builder-grok
 description: Use when implementing an approved Pip plan with Grok.
-version: 0.15.0
+version: 0.16.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -31,6 +31,12 @@ The Rust direct-provider runtime starts one fresh Cursor Agent invocation using 
 9. Return the Rust `builder` result contract from `references/worker-result-contracts.md` in the loaded `workflow-contract` skill directory (not the target repository). Record the actual implementation base under `evidence.implementation_base_sha`. `RETURN_TO_PLANNING` must include `evidence.incompatibility.reason` and nonempty concrete `evidence.incompatibility.observations`; branch movement by itself is not an incompatibility. Save and validate the object using the field guide's local validator, then return it as the entire final response without prose or a code fence. The direct runtime captures the response; do not look for Hermes completion tools or update Kanban. Put durable artifact paths under `evidence`. Never merge.
 
 ## Completion
+
+For `PR_MERGE_CONFLICT` in the focused `GITHUB_CI` evidence, reconcile the retained
+implementation with the current target branch in the assigned checkout. Resolve
+conflicts within the accepted plan, preserve intended changes, and rerun relevant
+checks. Missing CI in this situation is not a passing result or a reason to wait:
+the controller will publish the repaired head and require fresh CI and reviews.
 
 A publication-ready result includes concise human-facing strings under `evidence`:
 `pr_title` (descriptive change title, not a workflow/issue-number label),
