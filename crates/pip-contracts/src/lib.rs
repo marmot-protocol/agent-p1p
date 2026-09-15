@@ -9,6 +9,14 @@ use serde_json::{Map, Value};
 
 pub const CONTRACT_VERSION: u32 = 2;
 
+/// Full case history travels as a digest-bound file, not inline model context.
+/// Keep transport limits distinct from prompt and provider-output limits.
+pub const MAX_EVIDENCE_BUNDLE_BYTES: usize = 8 * 1024 * 1024;
+/// Pretty JSON can expand the compact bundle; still bound the on-disk input.
+pub const MAX_EVIDENCE_ARTIFACT_BYTES: usize = 32 * 1024 * 1024;
+/// Leave room for the frozen task, policy, and binding around its evidence.
+pub const MAX_WORK_ENVELOPE_BYTES: usize = 12 * 1024 * 1024;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ContractError {
     UnsupportedContractVersion,

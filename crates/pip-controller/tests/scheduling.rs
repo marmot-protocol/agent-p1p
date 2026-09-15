@@ -727,7 +727,7 @@ fn oversized_immutable_history_fails_before_worker_projection() {
             event: pip_store::EventInput {
                 event_id: "event-intake".into(),
                 event_type: "ISSUE_AUTHORIZED".into(),
-                payload: json!({"oversized": "x".repeat(600 * 1024)}),
+                payload: json!({"oversized": "x".repeat(pip_contracts::MAX_EVIDENCE_BUNDLE_BYTES)}),
             },
             effects: vec![pip_store::EffectInput {
                 effect_id: "effect-planner".into(),
@@ -742,7 +742,7 @@ fn oversized_immutable_history_fails_before_worker_projection() {
         .unwrap();
     let case = store.case(case_key).unwrap().unwrap();
 
-    assert_eq!(
+    assert!(matches!(
         schedule_claimed_dispatch(
             &claimed,
             &case,
@@ -750,8 +750,9 @@ fn oversized_immutable_history_fails_before_worker_projection() {
             &policy(),
             GitSha::from_str(&"a".repeat(40)).unwrap(),
         ),
-        Err(DispatchError::InvalidEvidenceBundle)
-    );
+        Err(DispatchError::EvidenceBundleTooLarge { bytes, limit })
+            if bytes > limit && limit == pip_contracts::MAX_EVIDENCE_BUNDLE_BYTES
+    ));
 }
 
 #[test]
@@ -789,7 +790,7 @@ fn final_reviewer_receives_the_committed_preflight_and_complete_history() {
     ))
     .unwrap()["results"][0]
         .clone();
-    plan["evidence"]["diagnostic_rows"] = json!(vec!["x".repeat(300); 1000]);
+    plan["evidence"]["diagnostic_rows"] = json!(vec!["x".repeat(300); 2000]);
     store
         .apply_transition(
             &pip_store::TransitionInput {
@@ -885,7 +886,9 @@ fn final_reviewer_receives_the_committed_preflight_and_complete_history() {
     );
     assert_eq!(run["payload"], plan);
     assert_eq!(event["payload_sha256"], run["payload_sha256"]);
-    assert!(serde_json::to_vec(bundle).unwrap().len() < 350_000);
+    let bundle_bytes = serde_json::to_vec(bundle).unwrap().len();
+    assert!(bundle_bytes > 512 * 1024);
+    assert!(bundle_bytes < 650_000);
     // Export compaction never rewrites accepted ledger records.
     assert_eq!(
         store.immutable_history_for_case(case_key).unwrap().events[1].payload,

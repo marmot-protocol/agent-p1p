@@ -18,7 +18,32 @@ use crate::direct_worker::{DirectWorkerRuntime, validate_job};
 use crate::{DirectWorkerRuntimeError, PolicyError};
 
 const MAX_QUEUE_FILES: usize = 1024;
-const MAX_ENVELOPE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_ENVELOPE_BYTES: usize = pip_contracts::MAX_WORK_ENVELOPE_BYTES;
+
+#[cfg(test)]
+mod envelope_tests {
+    use super::*;
+
+    #[test]
+    fn artifact_backed_history_survives_the_durable_queue() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("job.json");
+        let value = serde_json::json!({"history": "x".repeat(7 * 1024 * 1024)});
+        write_new(&path, &value, 0o600).unwrap();
+        assert_eq!(read_envelope::<serde_json::Value>(&path).unwrap(), value);
+    }
+
+    #[test]
+    fn oversized_envelopes_are_not_written_or_read() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("job.json");
+        let value = serde_json::json!({"history": "x".repeat(MAX_ENVELOPE_BYTES)});
+        assert!(write_new(&path, &value, 0o600).is_err());
+        assert!(!path.exists());
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(read_envelope::<serde_json::Value>(&path).is_err());
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "result", rename_all = "snake_case")]

@@ -201,7 +201,7 @@ fn short_temporary_root_supports_private_socket_staging_and_retirement() {
 #[test]
 fn scratch_retains_exact_evidence_and_rejects_artifact_drift() {
     let (_temp, policy, store, mut body) = setup("PLANNING");
-    let bundle = json!({"records":"x".repeat(200_000)});
+    let bundle = json!({"records":"x".repeat(600_000)});
     let bytes = serde_json::to_vec(&bundle).unwrap();
     let root = std::path::PathBuf::from(body["storage"]["root"].as_str().unwrap());
     let path = root.join("immutable-evidence.json");

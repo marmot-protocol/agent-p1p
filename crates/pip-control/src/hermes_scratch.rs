@@ -222,7 +222,7 @@ fn retain_evidence(root: &Path, body: &Value, owner: u32) -> Result<(), String> 
         .filter(|v| v.is_object())
         .ok_or("missing evidence bundle")?;
     let bytes = serde_json::to_vec(bundle).map_err(failure)?;
-    if bytes.len() > 512 * 1024 + 128 {
+    if bytes.len() > pip_contracts::MAX_EVIDENCE_BUNDLE_BYTES {
         return Err("oversized evidence artifact".into());
     }
     let path = root.join("immutable-evidence.json");

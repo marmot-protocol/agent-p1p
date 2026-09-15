@@ -176,11 +176,18 @@ impl<R: ProcessRunner> CursorExecutor<R> {
         let evidence = immutable_input
             .as_object_mut()
             .and_then(|input| input.remove("immutable_evidence_bundle"))
-            .map(|bundle| serde_json::to_vec_pretty(&bundle))
-            .transpose()
-            .map_err(|error| CursorExecutionError::InvalidResult(error.to_string()))?;
+            .map(|bundle| {
+                let compact = serde_json::to_vec(&bundle)
+                    .map_err(|error| CursorExecutionError::InvalidResult(error.to_string()))?;
+                if compact.len() > pip_contracts::MAX_EVIDENCE_BUNDLE_BYTES {
+                    return Err(CursorExecutionError::UnsafeSecretInput);
+                }
+                serde_json::to_vec_pretty(&bundle)
+                    .map_err(|error| CursorExecutionError::InvalidResult(error.to_string()))
+            })
+            .transpose()?;
         if let Some(bytes) = &evidence {
-            if bytes.len() > self.max_output_bytes
+            if bytes.len() > pip_contracts::MAX_EVIDENCE_ARTIFACT_BYTES
                 || contains_secret(&String::from_utf8_lossy(bytes))
             {
                 return Err(CursorExecutionError::UnsafeSecretInput);

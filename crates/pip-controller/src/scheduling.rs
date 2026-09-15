@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-const MAX_EVIDENCE_BUNDLE_BYTES: usize = 512 * 1024;
+use pip_contracts::MAX_EVIDENCE_BUNDLE_BYTES;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExecutionKind {
@@ -319,12 +319,19 @@ pub enum DispatchError {
     WrongExecutor,
     InvalidStoredCase,
     InvalidEvidenceBundle,
+    EvidenceBundleTooLarge { bytes: usize, limit: usize },
     StaleEffect,
     UnsupportedEffect,
 }
 
 impl fmt::Display for DispatchError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Self::EvidenceBundleTooLarge { bytes, limit } = self {
+            return write!(
+                formatter,
+                "immutable evidence bundle is {bytes} bytes; limit is {limit} bytes"
+            );
+        }
         formatter.write_str(match self {
             Self::InvalidPolicy => "invalid workflow role policy",
             Self::InvalidEffectId => "invalid durable effect identity",
@@ -336,6 +343,7 @@ impl fmt::Display for DispatchError {
             Self::InvalidEvidenceBundle => {
                 "worker dispatch requires a bounded immutable evidence bundle"
             }
+            Self::EvidenceBundleTooLarge { .. } => unreachable!(),
             Self::StaleEffect => "outbox effect does not match the current case revision",
             Self::UnsupportedEffect => "outbox effect is not a worker dispatch",
         })
@@ -442,9 +450,6 @@ fn immutable_evidence_bundle(store: &Store, case: &StoredCase) -> Result<Value, 
     });
     let encoded =
         serde_json::to_vec(&unsigned).map_err(|_| DispatchError::InvalidEvidenceBundle)?;
-    if encoded.len() > MAX_EVIDENCE_BUNDLE_BYTES {
-        return Err(DispatchError::InvalidEvidenceBundle);
-    }
     let mut bundle = unsigned
         .as_object()
         .cloned()
@@ -453,6 +458,15 @@ fn immutable_evidence_bundle(store: &Store, case: &StoredCase) -> Result<Value, 
         "sha256".into(),
         Value::String(hex_digest(&Sha256::digest(encoded))),
     );
+    let bytes = serde_json::to_vec(&bundle)
+        .map_err(|_| DispatchError::InvalidEvidenceBundle)?
+        .len();
+    if bytes > MAX_EVIDENCE_BUNDLE_BYTES {
+        return Err(DispatchError::EvidenceBundleTooLarge {
+            bytes,
+            limit: MAX_EVIDENCE_BUNDLE_BYTES,
+        });
+    }
     Ok(Value::Object(bundle))
 }
 

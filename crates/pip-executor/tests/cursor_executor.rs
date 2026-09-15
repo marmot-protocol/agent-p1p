@@ -24,7 +24,7 @@ fn direct_prompt_uses_digest_bound_evidence_without_repeating_history() {
     let runner = FakeRunner::default();
     runner.push(envelope(&results()[1]));
     let mut input = task(WorkerRole::Builder, "composer-2.5", 1);
-    let bundle = json!({"records": vec!["x".repeat(1000); 200]});
+    let bundle = json!({"records": vec!["x".repeat(1000); 1200]});
     input.immutable_input["immutable_evidence_bundle"] = bundle.clone();
     executor(runner)
         .execute(&health("composer-2.5"), &input, &worktree, &artifacts)
@@ -57,6 +57,24 @@ fn direct_prompt_uses_digest_bound_evidence_without_repeating_history() {
 struct FakeRunner {
     outputs: Rc<RefCell<VecDeque<Result<ProcessOutput, ProcessError>>>>,
     commands: Rc<RefCell<Vec<ProcessSpec>>>,
+}
+
+#[test]
+fn oversized_evidence_is_rejected_before_starting_a_provider() {
+    let tmp = tempfile::tempdir().unwrap();
+    let worktree = tmp.path().join("worktree");
+    fs::create_dir(&worktree).unwrap();
+    let artifacts = tmp.path().join("artifacts");
+    let runner = FakeRunner::default();
+    let mut input = task(WorkerRole::Builder, "composer-2.5", 1);
+    input.immutable_input["immutable_evidence_bundle"] =
+        json!({"records": "x".repeat(pip_contracts::MAX_EVIDENCE_BUNDLE_BYTES)});
+    assert!(matches!(
+        executor(runner.clone()).execute(&health("composer-2.5"), &input, &worktree, &artifacts),
+        Err(CursorExecutionError::UnsafeSecretInput)
+    ));
+    assert!(runner.commands.borrow().is_empty());
+    assert!(!artifacts.join("immutable-evidence.json").exists());
 }
 
 impl FakeRunner {

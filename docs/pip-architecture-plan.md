@@ -179,7 +179,13 @@ that the provider does not supply.
 Keep accepted results, relevant GitHub observations and decision history durable.
 Give workers compact role-specific evidence, including the accepted plan and
 applicable findings. Keep full history available through immutable artifacts;
-do not copy the entire growing ledger into every prompt. Bound individual
+do not copy the entire growing ledger into every prompt. The transport uses a
+shared 8 MiB compact-history limit, a 12 MiB frozen queue-envelope limit, and a
+32 MiB limit for the direct worker's line-readable JSON artifact. These are file
+budgets, not increases to model context or provider-output limits. History is
+never truncated to fit; oversized dispatch errors report the observed size and
+limit. Existing immutable jobs and evidence digests remain valid across upgrades.
+Bound individual
 payloads and preserve provenance without making unrelated formatting or release
 changes invalidate a job.
 
