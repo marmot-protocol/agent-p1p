@@ -35,6 +35,8 @@ fn fixture_with_hold(
     .unwrap();
     paused.repository.id = 42;
     paused.revision = 7;
+    // This historical recovery fixture deliberately exhausts a three-round policy.
+    paused.max_remediation_rounds = 3;
     let mut active = paused.clone();
     active.intake.enabled = true;
     active.intake.paused = false;

@@ -1,6 +1,36 @@
 use pip_control::{PolicyError, load_repository_policy};
 
 #[test]
+fn ten_round_policy_allows_corrections_until_ten_and_completion_at_the_limit() {
+    use pip_core::{CaseState, Event, MergeMode, TransitionContext, transition};
+    let policy = load_repository_policy(include_bytes!(
+        "../../../config/target/repositories/mdk.json"
+    ))
+    .unwrap();
+    for (round, event, expected) in [
+        (3, Event::CiFailed, CaseState::Remediating),
+        (9, Event::CiFailed, CaseState::Remediating),
+        (10, Event::CiFailed, CaseState::Escalated),
+        (10, Event::CiAccepted, CaseState::Reviewing),
+    ] {
+        assert_eq!(
+            transition(
+                CaseState::WaitingCi,
+                event,
+                TransitionContext {
+                    remediation_round: round,
+                    max_remediation_rounds: policy.max_remediation_rounds,
+                    merge_mode: MergeMode::Shadow
+                }
+            )
+            .unwrap()
+            .next_state,
+            expected
+        );
+    }
+}
+
+#[test]
 fn capacity_rollout_preserves_case_authority_but_never_substitutes_models_or_scope() {
     let accepted = load_repository_policy(include_bytes!(
         "../../../config/target/repositories/mdk.json"
@@ -66,7 +96,7 @@ fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
     let bytes = include_bytes!("../../../config/target/repositories/mdk.json");
     let policy = load_repository_policy(bytes).unwrap();
     assert_eq!(policy.policy_format, 2);
-    assert_eq!(policy.revision, 6);
+    assert_eq!(policy.revision, 9);
     assert_eq!(policy.workflow_version, 3);
     assert_eq!(policy.repository.id, 1_055_628_515);
     assert_eq!(policy.repository.full_name(), "marmot-protocol/mdk");
@@ -91,6 +121,7 @@ fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
     assert!(!policy.merge.autonomous);
     assert_eq!(policy.merge.method, "squash");
     assert_eq!(policy.max_case_elapsed_seconds, 86_400);
+    assert_eq!(policy.max_remediation_rounds, 10);
     assert_eq!(policy.max_provider_failures, 3);
     assert_eq!(policy.max_hermes_attempts, Some(1));
     assert_eq!(
@@ -119,8 +150,9 @@ fn phase9_mdk_policy_preserves_historical_sol_activation() {
     let target = load_repository_policy(target_bytes).unwrap();
     let active = load_repository_policy(active_bytes).unwrap();
 
-    assert_eq!(target.revision, 6);
+    assert_eq!(target.revision, 9);
     assert_eq!(active.revision, 4);
+    assert_eq!(active.max_remediation_rounds, 3);
     assert!(active.intake.enabled);
     assert!(!active.intake.paused);
     assert!(active.dispatch_enabled);
@@ -132,6 +164,7 @@ fn phase9_mdk_policy_preserves_historical_sol_activation() {
     let mut target: serde_json::Value = serde_json::from_slice(target_bytes).unwrap();
     let active: serde_json::Value = serde_json::from_slice(active_bytes).unwrap();
     target["revision"] = active["revision"].clone();
+    target["max_remediation_rounds"] = active["max_remediation_rounds"].clone();
     target["intake"]["enabled"] = active["intake"]["enabled"].clone();
     target["intake"]["paused"] = active["intake"]["paused"].clone();
     target["dispatch_enabled"] = active["dispatch_enabled"].clone();

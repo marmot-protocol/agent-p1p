@@ -100,6 +100,9 @@ pub fn run_cli(arguments: impl IntoIterator<Item = String>) -> Result<Value, Cli
         "authorize-planner-retry" => authorize_retry(&arguments[1..], "planner"),
         "authorize-publication-retry" => authorize_publication_retry(&arguments[1..]),
         "authorize-infrastructure-recovery" => authorize_infrastructure_recovery(&arguments[1..]),
+        "authorize-remediation-extension" => {
+            authorize_head_recovery(&arguments[1..], "remediation")
+        }
         "authorize-follow-up-recovery" => authorize_head_recovery(&arguments[1..], "follow-up"),
         "install-release" => install(&arguments[1..]),
         _ => Err(CliError::InvalidArgument(command.into())),
@@ -200,6 +203,8 @@ fn authorize_head_recovery(arguments: &[String], kind: &str) -> Result<Value, Cl
     };
     let authorize = if kind == "follow-up" {
         crate::authorize_follow_up_recovery
+    } else if kind == "remediation" {
+        crate::authorize_remediation_extension
     } else if infrastructure {
         crate::authorize_infrastructure_recovery
     } else {

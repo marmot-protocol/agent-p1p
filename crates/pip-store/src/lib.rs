@@ -17,6 +17,7 @@ mod builder_retry;
 mod conversations;
 mod follow_up_recovery;
 mod infrastructure_recovery;
+mod remediation_extension;
 pub use conversations::{Conversation, ConversationInput};
 mod case_activity;
 pub use case_activity::CaseActivity;
@@ -1223,6 +1224,8 @@ impl Store {
             }
             let policy_revision = if input.event.event_type == "ISSUE_REAUTHORIZED" {
                 reauthorization::validate(&transaction, &current, input)?
+            } else if input.event.event_type == "REMEDIATION_BUDGET_EXTENDED" {
+                remediation_extension::validate(&transaction, &current, input)?
             } else {
                 current.policy_revision
             };

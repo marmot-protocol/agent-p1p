@@ -1,6 +1,6 @@
 {
   "policy_format": 2,
-  "revision": 6,
+  "revision": 9,
   "repository": {
     "id": 1055628515,
     "owner": "marmot-protocol",
@@ -39,7 +39,7 @@
     "autonomous": false,
     "method": "squash"
   },
-  "max_remediation_rounds": 3,
+  "max_remediation_rounds": 10,
   "max_case_elapsed_seconds": 86400,
   "max_provider_failures": 3,
   "max_hermes_attempts": 1,

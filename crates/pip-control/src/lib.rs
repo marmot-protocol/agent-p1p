@@ -20,6 +20,8 @@ mod final_preflight;
 mod follow_up_recovery;
 mod hermes_scratch;
 mod infrastructure_recovery;
+mod remediation_extension;
+pub use remediation_extension::authorize_remediation_extension;
 mod recovery_queue;
 pub use follow_up_recovery::authorize_follow_up_recovery;
 mod install;

@@ -245,6 +245,11 @@ execution path and cannot be enabled accidentally by a generic configuration.
 
 ## Failure and recovery
 
+The MDK target policy allows ten remediation rounds (previously three). This
+is a temporary safety ceiling, not a measure of productive progress. See
+[`runbooks/remediation-budget.md`](runbooks/remediation-budget.md) for the
+implemented accounting, independent limits, and existing-case rollout boundary.
+
 Infrastructure unavailability is not a failed attempt to solve an issue.
 Distinguish unavailable runtime/authentication, transport failures, invalid
 results, task failure, and human scope blockers. Preserve observations without
