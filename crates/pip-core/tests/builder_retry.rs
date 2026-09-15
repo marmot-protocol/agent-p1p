@@ -1,6 +1,27 @@
 use pip_core::{CaseState, Effect, Event, MergeMode, TransitionContext, transition};
 
 #[test]
+fn native_review_recovery_preserves_exhausted_remediation_budget() {
+    let event: Event = "NATIVE_REVIEW_RETRY_AUTHORIZED".parse().unwrap();
+    let context = TransitionContext {
+        remediation_round: 10,
+        max_remediation_rounds: 10,
+        ..TransitionContext::default()
+    };
+    let decision = transition(CaseState::Escalated, event, context).unwrap();
+    assert_eq!(decision.next_state, CaseState::WaitingCi);
+    assert_eq!(decision.effects, [Effect::ObserveCi]);
+    for state in [
+        CaseState::Reviewing,
+        CaseState::TakenOver,
+        CaseState::Completed,
+        CaseState::Abandoned,
+    ] {
+        assert!(transition(state, event, context).is_err());
+    }
+}
+
+#[test]
 fn planner_recovery_only_reopens_escalated_work_for_a_fresh_plan() {
     let event: Event = "PLANNER_RETRY_AUTHORIZED".parse().unwrap();
     let context = TransitionContext::default();

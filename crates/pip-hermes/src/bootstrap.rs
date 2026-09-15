@@ -531,7 +531,9 @@ fn profile_config(profile: &ProfileBootstrapSpec) -> Result<Vec<u8>, BootstrapEr
         "model": profile.model,
         "provider": profile.provider,
         "fallback_providers": [],
-        "max_concurrent_sessions": 1,
+        // Kanban completion precedes CLI lease release. Permit one bounded
+        // teardown overlap; the dispatcher still runs one task per profile.
+        "max_concurrent_sessions": 2,
         "agent": {
             "disabled_toolsets": ["browser", "cronjob", "delegation", "image_gen", "memory", "messaging", "tts", "vision", "web"],
             "reasoning_effort": profile.reasoning_effort

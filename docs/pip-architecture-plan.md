@@ -112,12 +112,18 @@ enables bounded stage slots; its absence retains the serial execution default:
 {"native_sessions":2,"builders":1,"direct_reviewers":1,"ready_plans":2,"cargo_jobs":2}
 ```
 
-`native_sessions` caps the dedicated Hermes runtime, while Hermes's existing
+`native_sessions` caps active Kanban tasks in the dedicated Hermes runtime, while Hermes's existing
 one-task-per-profile limit keeps planning, general review and final review from
 duplicating their own lane. `builders` and `direct_reviewers` are independent
 limits in the existing Cursor queue adapter. Required work has priority over
 comparison reviews; remediation has priority over new builds. These are not
 additional workflow databases or agent orchestrators. Limits are integers 1–8.
+
+Managed profiles allow two CLI session leases so a newly claimed task can start
+while its predecessor finishes after `kanban_complete`. This is one bounded
+handoff overlap, not a second Kanban slot in that profile; host resource limits
+still apply to both processes. It avoids treating ordinary completion cleanup
+as a model/provider failure without patching Hermes or disabling its session cap.
 
 `ready_plans` bounds planning lookahead: at most that many waiting plans plus one
 planning case can be admitted in `PLANNING`/`READY_TO_BUILD`. Total repository and

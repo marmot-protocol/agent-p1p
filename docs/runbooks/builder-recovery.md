@@ -1,5 +1,24 @@
 # Offline work and publication recovery
 
+## Recover a native reviewer startup failure
+
+`authorize-native-review-retry` uses the root-only head-bound arguments and
+stopped/disabled execution-unit checks of `authorize-infrastructure-recovery`.
+It permits validated frozen peer jobs, but never running workers or queued work
+belonging to the recovery case. First diagnose and repair the native runtime
+failure and verify the same authorized, owned, open draft PR and exact head.
+
+Only a `hermes-circuit-breaker` provider-failure escalation immediately from
+`REVIEWING`, tied to its frozen required general-review projection without a
+retained completion, is eligible. The immutable event
+`NATIVE_REVIEW_RETRY_AUTHORIZED` returns to `WAITING_CI` once per case. It does
+not reset the failed Hermes task, grant builder rounds, change direct-provider
+allowances, extend the deadline, or accept old reviews. Fresh live authorization,
+CI, independent exact-head reviews and final review remain required. A second
+native failure stays escalated; the same request ID only replays the original
+grant. Preserve the old board failure and all ledger history. Do not downgrade
+to a release that cannot interpret this recovery event.
+
 ## Recover reauthorized planning stopped by historical provider failures
 
 `authorize-planner-retry` uses the same root-only, inert-policy, stopped/disabled

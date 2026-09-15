@@ -107,7 +107,10 @@ fn bootstrap_creates_only_managed_profiles_and_reprobes_the_board() {
     assert_eq!(planner_config["provider"], "openai-codex");
     assert_eq!(planner_config["model"], "gpt-5.6-sol");
     assert_eq!(planner_config["agent"]["reasoning_effort"], "xhigh");
-    assert_eq!(planner_config["max_concurrent_sessions"], 1);
+    // A completed Kanban worker can still hold its CLI lease during teardown.
+    // Keep one execution slot, with one bounded session handoff overlap.
+    assert_eq!(planner_config["max_concurrent_sessions"], 2);
+    assert_eq!(root_config["kanban"]["max_in_progress_per_profile"], 1);
     assert_eq!(planner_config["terminal"]["home_mode"], "profile");
     assert_eq!(planner_config["lsp"]["enabled"], false);
     assert_eq!(

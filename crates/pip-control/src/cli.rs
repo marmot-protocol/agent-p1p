@@ -97,6 +97,9 @@ pub fn run_cli(arguments: impl IntoIterator<Item = String>) -> Result<Value, Cli
         "scratch-retire" => scratch_retire(&arguments[1..]),
         "authorize-builder-retry" => authorize_retry(&arguments[1..], "builder"),
         "authorize-review-retry" => authorize_retry(&arguments[1..], "review"),
+        "authorize-native-review-retry" => {
+            authorize_head_recovery(&arguments[1..], "native-review")
+        }
         "authorize-planner-retry" => authorize_retry(&arguments[1..], "planner"),
         "authorize-publication-retry" => authorize_publication_retry(&arguments[1..]),
         "authorize-infrastructure-recovery" => authorize_infrastructure_recovery(&arguments[1..]),
@@ -191,7 +194,8 @@ fn authorize_head_recovery(arguments: &[String], kind: &str) -> Result<Value, Cl
         ],
         &[],
     )?;
-    let (policy, mut store) = offline_recovery_store(&options, kind == "follow-up")?;
+    let (policy, mut store) =
+        offline_recovery_store(&options, matches!(kind, "follow-up" | "native-review"))?;
     let request = crate::PublicationRetryRequest {
         case_key: required(&options, "--case")?.into(),
         expected_revision: required(&options, "--expected-revision")?
@@ -201,7 +205,9 @@ fn authorize_head_recovery(arguments: &[String], kind: &str) -> Result<Value, Cl
         request_id: required(&options, "--request-id")?.into(),
         reason: required(&options, "--reason")?.into(),
     };
-    let authorize = if kind == "follow-up" {
+    let authorize = if kind == "native-review" {
+        crate::authorize_native_review_retry
+    } else if kind == "follow-up" {
         crate::authorize_follow_up_recovery
     } else if kind == "remediation" {
         crate::authorize_remediation_extension
@@ -214,7 +220,7 @@ fn authorize_head_recovery(arguments: &[String], kind: &str) -> Result<Value, Cl
         .map_err(CliError::Reconciliation)?;
     Ok(
         json!({"ok":true,"result":format!("{result:?}"),"case_key":request.case_key,"request_id":request.request_id,
-        "additional_attempts":0,"runtime_activated":false,"history_preserved":true,
+        "additional_attempts":if kind == "native-review" {1} else {0},"runtime_activated":false,"history_preserved":true,
         "recovery_deadline":if infrastructure {store.infrastructure_recovery_deadline(&request.case_key).map_err(|e|CliError::Ledger(e.to_string()))?} else {None}}),
     )
 }

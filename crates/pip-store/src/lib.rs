@@ -17,6 +17,7 @@ mod builder_retry;
 mod conversations;
 mod follow_up_recovery;
 mod infrastructure_recovery;
+mod native_review_retry;
 mod remediation_extension;
 pub use conversations::{Conversation, ConversationInput};
 mod case_activity;
@@ -1221,6 +1222,9 @@ impl Store {
             }
             if input.event.event_type == "FOLLOW_UP_RECOVERY_AUTHORIZED" {
                 follow_up_recovery::validate(&transaction, &current, input)?;
+            }
+            if input.event.event_type == "NATIVE_REVIEW_RETRY_AUTHORIZED" {
+                native_review_retry::validate(&transaction, &current, input)?;
             }
             let policy_revision = if input.event.event_type == "ISSUE_REAUTHORIZED" {
                 reauthorization::validate(&transaction, &current, input)?
