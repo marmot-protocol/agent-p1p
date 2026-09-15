@@ -94,6 +94,11 @@ fn ready_follow_up_withdraws_readiness_before_replanning_and_retries_safely() {
 }
 
 #[test]
+fn ready_follow_up_waits_for_capacity_without_losing_answer_or_withdrawing_readiness() {
+    conversation_roundtrip_with_capacity(true, Some("SHADOW_READY"), false, false, true);
+}
+
+#[test]
 fn bounded_ready_follow_up_withdraws_readiness_without_granting_more_work() {
     conversation_roundtrip_with_bound(true, Some("SHADOW_READY"), false, true);
 }
@@ -136,6 +141,16 @@ fn conversation_roundtrip_with_bound(
     state: Option<&str>,
     peer: bool,
     bounded: bool,
+) {
+    conversation_roundtrip_with_capacity(follow_up, state, peer, bounded, false);
+}
+
+fn conversation_roundtrip_with_capacity(
+    follow_up: bool,
+    state: Option<&str>,
+    peer: bool,
+    bounded: bool,
+    full: bool,
 ) {
     let dir = tempfile::tempdir().unwrap();
     let mut path = dir.path().join("ledger.db");
@@ -306,10 +321,57 @@ fn conversation_roundtrip_with_bound(
         Some("/runtime/kanban/boards/pip-mdk/workspaces/task-conversation".into());
     drop(store);
     let mut store = Store::open(&path).unwrap();
+    if full {
+        // Fill the global pool with unrelated repository work. The ready case
+        // must reacquire admission before any draft mutation or replan event.
+        for n in 0..policy.intake.global_active_limit {
+            store
+                .create_case(&pip_store::NewCase {
+                    case_key: format!("z-peer-{n}"),
+                    repository_id: 99,
+                    issue_number: u64::from(n) + 1,
+                    workflow_version: 3,
+                    policy_revision: 1,
+                    initial_state: "BUILDING".into(),
+                    observed_at: 100,
+                    event: pip_store::EventInput {
+                        event_id: format!("seed-peer-{n}"),
+                        event_type: "SEED".into(),
+                        payload: json!({}),
+                    },
+                    effects: vec![],
+                })
+                .unwrap();
+        }
+        for _ in 0..2 {
+            assert_eq!(
+                run(&mut store).unwrap()["result"],
+                "waiting_for_issue_capacity"
+            );
+            assert_eq!(writer.2.get(), 0);
+            assert!(writer.0.borrow().is_empty());
+            assert_eq!(
+                store.conversation("feedback-123").unwrap().unwrap().state,
+                "ANSWERED"
+            );
+        }
+        // Test fixture advances the peer; production never resets case history.
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute(
+                "UPDATE cases SET state='SHADOW_READY' WHERE case_key LIKE 'z-peer-%'",
+                [],
+            )
+            .unwrap();
+    }
     if state == Some("SHADOW_READY") {
         assert!(run(&mut store).is_err());
-        assert_eq!(store.status(102).unwrap().cases[0].state, "SHADOW_READY");
-        assert_eq!(store.status(102).unwrap().cases[0].state_revision, 2);
+        let case = store
+            .case(&format!("repo:{}#42@3", policy.repository.id))
+            .unwrap()
+            .unwrap();
+        assert_eq!(case.state, "SHADOW_READY");
+        assert_eq!(case.state_revision, 2);
         assert!(writer.0.borrow().is_empty());
     }
     writer.1.set(true);
@@ -319,7 +381,10 @@ fn conversation_roundtrip_with_bound(
     assert_eq!(writer.0.borrow().len(), 1);
     assert!(writer.0.borrow()[0].contains("Here is the explanation."));
     if bounded {
-        let case = &store.status(102).unwrap().cases[0];
+        let case = store
+            .case(&format!("repo:{}#42@3", policy.repository.id))
+            .unwrap()
+            .unwrap();
         assert_eq!(case.state, "ESCALATED");
         assert_eq!(case.remediation_round, policy.max_remediation_rounds);
         assert_eq!(writer.2.get(), 2);
@@ -333,7 +398,10 @@ fn conversation_roundtrip_with_bound(
             "ESCALATE"
         );
     } else if follow_up && matches!(state, Some("WAITING_HUMAN" | "SHADOW_READY")) {
-        let case = &store.status(102).unwrap().cases[0];
+        let case = store
+            .case(&format!("repo:{}#42@3", policy.repository.id))
+            .unwrap()
+            .unwrap();
         assert_eq!(case.state, "PLANNING");
         let revisions = if state == Some("SHADOW_READY") { 3 } else { 2 };
         assert_eq!(case.state_revision, revisions);

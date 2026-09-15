@@ -128,6 +128,13 @@ as a model/provider failure without patching Hermes or disabling its session cap
 `ready_plans` bounds planning lookahead: at most that many waiting plans plus one
 planning case can be admitted in `PLANNING`/`READY_TO_BUILD`. Total repository and
 global active-issue limits still bound work in progress, including CI waits.
+`SHADOW_READY` (Pip finished, waiting for human review/merge) releases issue
+admission capacity without becoming terminal or discarding evidence. Other
+nonterminal states, including human-input holds and escalations, still count.
+An authorized follow-up on a ready PR reacquires capacity under the same
+cross-process lock as intake before withdrawing readiness and replanning. When
+full, its validated conversation answer remains queued durably; retrying does
+not rerun the model or bypass the two-issue policy limit.
 `cargo_jobs` is the per-task Cargo budget; host CPU/memory limits are a separate
 operational safeguard and must be measured under real workloads.
 

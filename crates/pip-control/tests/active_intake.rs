@@ -20,6 +20,59 @@ struct FixtureSource {
 }
 
 #[test]
+fn human_review_ready_releases_admission_but_other_nonterminal_states_do_not() {
+    for state in [
+        "SHADOW_READY",
+        "PLANNING",
+        "BUILDING",
+        "WAITING_CI",
+        "REVIEWING",
+        "FINAL_REVIEW",
+        "WAITING_HUMAN",
+        "BLOCKED",
+        "ESCALATED",
+    ] {
+        for same_repository in [true, false] {
+            let directory = tempdir().unwrap();
+            let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+            let policy = active_policy(if same_repository { 1 } else { 2 }, 1);
+            store
+                .create_case(&pip_store::NewCase {
+                    case_key: "existing".into(),
+                    repository_id: if same_repository {
+                        policy.repository.id
+                    } else {
+                        99
+                    },
+                    issue_number: 1,
+                    workflow_version: 3,
+                    policy_revision: 1,
+                    initial_state: state.into(),
+                    observed_at: 90,
+                    event: pip_store::EventInput {
+                        event_id: "seed".into(),
+                        event_type: "SEED".into(),
+                        payload: serde_json::json!({}),
+                    },
+                    effects: vec![],
+                })
+                .unwrap();
+            let before = store.immutable_history_for_case("existing").unwrap();
+            reconcile_intake(&source(&[42, 43, 44]), &policy, &mut store, 100, false).unwrap();
+            assert_eq!(
+                store.status(100).unwrap().cases.len(),
+                if state == "SHADOW_READY" { 2 } else { 1 },
+                "{state} same_repository={same_repository}"
+            );
+            assert_eq!(
+                store.immutable_history_for_case("existing").unwrap(),
+                before
+            );
+        }
+    }
+}
+
+#[test]
 fn simultaneous_intake_respects_the_shared_issue_capacity() {
     struct ConcurrentSource<'a>(FixtureSource, &'a std::sync::Barrier);
     impl IntakeSource for ConcurrentSource<'_> {

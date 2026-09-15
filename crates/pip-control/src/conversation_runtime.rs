@@ -12,6 +12,8 @@ use crate::{DispositionWriter, IntakeSource, RepositoryPolicy};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+const WAITING_FOR_ISSUE_CAPACITY: &str = "waiting_for_issue_capacity";
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Answer {
@@ -256,6 +258,11 @@ pub fn reconcile_conversation_once<
     // deterministic ledger event; a publication retry cannot repeat a replan.
     if message.reply_body.is_none() && answer.follow_up == "REPLAN" {
         let disposition = handoff(source, writer, policy, store, &message, &spec, now)?;
+        if disposition == WAITING_FOR_ISSUE_CAPACITY {
+            // Keep the validated answer durable and retry admission, not the
+            // model call. Do not publish a promise or withdraw readiness yet.
+            return Ok(json!({"result":WAITING_FOR_ISSUE_CAPACITY,"message_key":key}));
+        }
         answer.reply.push_str("\n\n");
         answer.reply.push_str(disposition);
     }
@@ -390,6 +397,11 @@ fn handoff<S: IntakeSource, W: DispositionWriter>(
     let Some(key) = &message.input.case_key else {
         return Ok(DISCUSSION_ONLY);
     };
+    // Share intake's cross-process admission lock through the state transition.
+    // A simultaneous webhook must not claim the same last available slot.
+    let admission_lock =
+        std::fs::File::open(store.path().parent().ok_or("missing ledger directory")?)?;
+    admission_lock.lock()?;
     let case = store.case(key)?.ok_or("conversation case disappeared")?;
     let history = store.immutable_history_for_case(key)?;
     let event_id = format!("event-{}", message.input.key);
@@ -436,6 +448,22 @@ fn handoff<S: IntakeSource, W: DispositionWriter>(
         );
     }
     let bounded = case.remediation_round >= policy.max_remediation_rounds;
+    if state == CaseState::ShadowReady {
+        let status = store.status(now)?;
+        let active = status
+            .cases
+            .iter()
+            .filter(|case| crate::intake::active_state(&case.state));
+        let repository_count = active
+            .clone()
+            .filter(|case| case.repository_id == policy.repository.id)
+            .count();
+        if active.count() >= policy.intake.global_active_limit as usize
+            || repository_count >= policy.intake.repository_active_limit as usize
+        {
+            return Ok(WAITING_FOR_ISSUE_CAPACITY);
+        }
+    }
     // Withdraw Pip's completed disposition before accepting follow-up work.
     // On an uncertain GitHub response the case stays ready; the exact-head
     // mutation is idempotent. Never reinterpret a non-draft active PR here.

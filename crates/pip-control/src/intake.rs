@@ -569,6 +569,11 @@ fn case_id(policy: &RepositoryPolicy, issue_number: u64) -> Result<CaseId, Activ
     ))
 }
 
-fn active_state(state: &str) -> bool {
-    !matches!(state, "COMPLETED" | "ABANDONED" | "TAKEN_OVER")
+pub(crate) fn active_state(state: &str) -> bool {
+    // Readiness is still tracked for merges and feedback, but is no longer
+    // work in progress. Unknown and held states remain conservative.
+    !matches!(
+        state,
+        "SHADOW_READY" | "COMPLETED" | "ABANDONED" | "TAKEN_OVER"
+    )
 }
