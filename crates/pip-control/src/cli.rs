@@ -100,6 +100,9 @@ pub fn run_cli(arguments: impl IntoIterator<Item = String>) -> Result<Value, Cli
         "authorize-native-review-retry" => {
             authorize_head_recovery(&arguments[1..], "native-review")
         }
+        "authorize-review-coordination-recovery" => {
+            authorize_head_recovery(&arguments[1..], "review-coordination")
+        }
         "authorize-planner-retry" => authorize_retry(&arguments[1..], "planner"),
         "authorize-publication-retry" => authorize_publication_retry(&arguments[1..]),
         "authorize-infrastructure-recovery" => authorize_infrastructure_recovery(&arguments[1..]),
@@ -205,7 +208,9 @@ fn authorize_head_recovery(arguments: &[String], kind: &str) -> Result<Value, Cl
         request_id: required(&options, "--request-id")?.into(),
         reason: required(&options, "--reason")?.into(),
     };
-    let authorize = if kind == "native-review" {
+    let authorize = if kind == "review-coordination" {
+        crate::authorize_review_coordination_recovery
+    } else if kind == "native-review" {
         crate::authorize_native_review_retry
     } else if kind == "follow-up" {
         crate::authorize_follow_up_recovery

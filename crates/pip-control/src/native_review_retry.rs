@@ -14,6 +14,41 @@ pub fn authorize_native_review_retry(
     now: u64,
     operator_uid: u32,
 ) -> Result<ApplyResult, String> {
+    authorize(
+        store,
+        paused,
+        request,
+        now,
+        operator_uid,
+        Event::NativeReviewRetryAuthorized,
+    )
+}
+
+pub fn authorize_review_coordination_recovery(
+    store: &mut Store,
+    paused: &RepositoryPolicy,
+    request: &PublicationRetryRequest,
+    now: u64,
+    operator_uid: u32,
+) -> Result<ApplyResult, String> {
+    authorize(
+        store,
+        paused,
+        request,
+        now,
+        operator_uid,
+        Event::ReviewCoordinationRecoveryAuthorized,
+    )
+}
+
+fn authorize(
+    store: &mut Store,
+    paused: &RepositoryPolicy,
+    request: &PublicationRetryRequest,
+    now: u64,
+    operator_uid: u32,
+    recovery_event: Event,
+) -> Result<ApplyResult, String> {
     let error = |e: pip_store::StoreError| e.to_string();
     let (case, accepted) = recovery_context(store, paused, &request.case_key, operator_uid)?;
     let id = EventId::from_str(&request.request_id).map_err(|e| e.to_string())?;
@@ -27,7 +62,7 @@ pub fn authorize_native_review_retry(
         .iter()
         .find(|event| event.event_id == request.request_id)
     {
-        if event.event_type == "NATIVE_REVIEW_RETRY_AUTHORIZED"
+        if event.event_type == recovery_event.to_string()
             && event.payload == payload
             && Some(event.state_revision) == request.expected_revision.checked_add(1)
         {
@@ -62,13 +97,13 @@ pub fn authorize_native_review_retry(
             .map_err(error)?
             >= failure_limit
     {
-        return Err("native review retry requires exact revision/head, stopped work and remaining time/failure budget".into());
+        return Err("review recovery requires exact revision/head, stopped work and remaining time/failure budget".into());
     }
     let command = recovery_command(
         &case,
         request.expected_revision,
         id,
-        Event::NativeReviewRetryAuthorized,
+        recovery_event,
         payload,
         now,
     )?;

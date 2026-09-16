@@ -1,5 +1,33 @@
 # Offline work and publication recovery
 
+## Recover review coordination stalls
+
+`authorize-review-coordination-recovery` takes the same root-only, inert-policy,
+stopped/disabled-unit, drained-queue and exact revision/head arguments as
+`authorize-infrastructure-recovery` below. It accepts only:
+
+- A `REVIEWING` case whose never-attempted required direct reviewer was
+  superseded by a peer `REVIEW_RECORDED`, with no intervening cohort change.
+- A `FINAL_REVIEW` escalation solely for `REVIEW_FEEDBACK_ALREADY_ATTEMPTED`
+  and unresolved review-thread blockers on the retained PR/head. The operator
+  must first verify the feedback against current source and have the stale or
+  addressed threads resolved on GitHub. A builder's disposition alone is not
+  authority to resolve them.
+
+Verify fresh label authorization and the same owned, open draft PR/head before
+recovery. One immutable `REVIEW_COORDINATION_RECOVERY_AUTHORIZED` event per case
+returns to `WAITING_CI`. Fresh CI, required reviews, thread preflight and final
+review remain mandatory; no old approval is promoted to readiness. The command
+preserves plan, PR/head, remediation count, failures, deadline, attempts, old
+superseded effects and all history. It grants no extra failure allowance or
+time. Repeat the same request ID after an uncertain response. It never starts
+runtime. Do not resume a recovered ledger with a release predating this event.
+
+Queued required reviewers now survive peer-only review completion. Their frozen
+job revision remains unchanged, and dispatch still validates the current exact
+head, plan, PR and round. Replans, remediation, authorization loss and all other
+workflow changes continue to supersede old required work.
+
 ## Recover a native reviewer startup failure
 
 `authorize-native-review-retry` uses the root-only head-bound arguments and

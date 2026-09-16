@@ -19,6 +19,7 @@ mod follow_up_recovery;
 mod infrastructure_recovery;
 mod native_review_retry;
 mod remediation_extension;
+mod review_coordination_recovery;
 pub use conversations::{Conversation, ConversationInput};
 mod case_activity;
 pub use case_activity::CaseActivity;
@@ -1226,6 +1227,9 @@ impl Store {
             if input.event.event_type == "NATIVE_REVIEW_RETRY_AUTHORIZED" {
                 native_review_retry::validate(&transaction, &current, input)?;
             }
+            if input.event.event_type == "REVIEW_COORDINATION_RECOVERY_AUTHORIZED" {
+                review_coordination_recovery::validate(&transaction, &current, input)?;
+            }
             let policy_revision = if input.event.event_type == "ISSUE_REAUTHORIZED" {
                 reauthorization::validate(&transaction, &current, input)?
             } else if input.event.event_type == "REMEDIATION_BUDGET_EXTENDED" {
@@ -1312,6 +1316,15 @@ impl Store {
                            'MERGE_VERIFIED'
                        )
                    )
+                   AND NOT (effect_type = 'RUN_DIRECT_WORKER' AND ?6
+                       AND EXISTS (SELECT 1 FROM events origin
+                           WHERE origin.case_key = outbox.case_key
+                             AND origin.state_revision = outbox.state_revision
+                             AND origin.next_state = 'REVIEWING')
+                       AND NOT EXISTS (SELECT 1 FROM events intervening
+                           WHERE intervening.case_key = outbox.case_key
+                             AND intervening.state_revision > outbox.state_revision
+                             AND intervening.event_type <> 'REVIEW_RECORDED'))
                    AND delivered_at IS NULL AND superseded_at IS NULL",
                 params![
                     sql_u64(input.observed_at)?,
@@ -1319,6 +1332,13 @@ impl Store {
                     input.case_key,
                     sql_u64(next_revision)?,
                     input.event.event_type,
+                    input.event.event_type == "REVIEW_RECORDED"
+                        && current.state == "REVIEWING"
+                        && input.next_state == current.state
+                        && input.plan_version == current.plan_version
+                        && input.remediation_round == current.remediation_round
+                        && input.pr_number == current.pr_number
+                        && input.head_sha == current.head_sha,
                 ],
             )?;
             insert_effects(
@@ -1470,6 +1490,22 @@ impl Store {
                     payload_sha256, accepted_at
              FROM runs WHERE case_key = ?1 ORDER BY accepted_at, run_id",
         )?;
+        statement
+            .query_map([case_key], stored_run)?
+            .map(|row| row.map_err(StoreError::from).and_then(parse_stored_run))
+            .collect()
+    }
+
+    pub fn current_review_runs_for_case(&self, case_key: &str) -> Result<Vec<StoredRun>> {
+        // A same-head operator recovery starts a fresh review set without
+        // changing the remediation budget or rewriting the earlier runs.
+        let mut statement = self.connection.prepare(
+            "SELECT r.run_id,r.case_key,r.event_id,r.task_id,r.role,r.payload_json,r.payload_sha256,r.accepted_at
+             FROM runs r JOIN events e ON e.event_id=r.event_id AND e.case_key=r.case_key
+             WHERE r.case_key=?1 AND r.role IN ('reviewer-general','reviewer-secperf')
+               AND e.state_revision > COALESCE((SELECT MAX(state_revision) FROM events
+                 WHERE case_key=?1 AND event_type='REVIEW_COORDINATION_RECOVERY_AUTHORIZED'),0)
+             ORDER BY r.accepted_at,r.run_id")?;
         statement
             .query_map([case_key], stored_run)?
             .map(|row| row.map_err(StoreError::from).and_then(parse_stored_run))

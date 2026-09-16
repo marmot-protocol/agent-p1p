@@ -224,7 +224,7 @@ fn joined_reviews(
         .as_deref()
         .ok_or(ReviewPublicationError::InvalidCase)?;
     let mut candidates = Vec::new();
-    for stored in store.runs_for_case(&case.case_key)? {
+    for stored in store.current_review_runs_for_case(&case.case_key)? {
         let result: WorkerResult = serde_json::from_value(stored.payload)
             .map_err(|error| ReviewPublicationError::Serialization(error.to_string()))?;
         if let WorkerResult::Review(review) = result

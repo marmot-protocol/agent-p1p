@@ -49,6 +49,7 @@ pub enum Event {
     PlannerRetryAuthorized,
     ReviewRetryAuthorized,
     NativeReviewRetryAuthorized,
+    ReviewCoordinationRecoveryAuthorized,
     InfrastructureRecoveryAuthorized,
     RemediationBudgetExtended,
     FollowUpRecoveryAuthorized,
@@ -80,7 +81,7 @@ pub enum Event {
 }
 
 impl Event {
-    pub const ALL: [Self; 47] = [
+    pub const ALL: [Self; 48] = [
         Self::PlanRecorded,
         Self::Proceed,
         Self::WaitingForIssueCreator,
@@ -100,6 +101,7 @@ impl Event {
         Self::PlannerRetryAuthorized,
         Self::ReviewRetryAuthorized,
         Self::NativeReviewRetryAuthorized,
+        Self::ReviewCoordinationRecoveryAuthorized,
         Self::InfrastructureRecoveryAuthorized,
         Self::RemediationBudgetExtended,
         Self::FollowUpRecoveryAuthorized,
@@ -217,6 +219,7 @@ string_enum!(Event, "event", {
     "PLANNER_RETRY_AUTHORIZED" => PlannerRetryAuthorized,
     "REVIEW_RETRY_AUTHORIZED" => ReviewRetryAuthorized,
     "NATIVE_REVIEW_RETRY_AUTHORIZED" => NativeReviewRetryAuthorized,
+    "REVIEW_COORDINATION_RECOVERY_AUTHORIZED" => ReviewCoordinationRecoveryAuthorized,
     "INFRASTRUCTURE_RECOVERY_AUTHORIZED" => InfrastructureRecoveryAuthorized,
     "REMEDIATION_BUDGET_EXTENDED" => RemediationBudgetExtended,
     "FOLLOW_UP_RECOVERY_AUTHORIZED" => FollowUpRecoveryAuthorized,
@@ -413,6 +416,9 @@ pub fn transition(
             decision(State::ReadyToBuild, &[Fx::DispatchBuilder])
         }
         (State::Escalated, Ev::ReviewRetryAuthorized | Ev::NativeReviewRetryAuthorized) => {
+            decision(State::WaitingCi, &[Fx::ObserveCi])
+        }
+        (State::Reviewing | State::Escalated, Ev::ReviewCoordinationRecoveryAuthorized) => {
             decision(State::WaitingCi, &[Fx::ObserveCi])
         }
         // The ledger proves a budget-only policy extension after CI escalation.

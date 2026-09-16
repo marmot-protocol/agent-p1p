@@ -367,7 +367,23 @@ fn prepare_direct_queue_once(
         let case = store
             .case(&claimed.case_key)?
             .ok_or(DirectQueueError::InvalidEnvelope)?;
-        let validation_case = validation_case(&claimed, &case, &task, false)?;
+        let peer_review = claimed.effect_type == "RUN_DIRECT_WORKER"
+            && matches!(
+                task.role,
+                pip_contracts::WorkerRole::ReviewerGeneral
+                    | pip_contracts::WorkerRole::ReviewerSecperf
+            )
+            && crate::results::current_job_generation(store, &case, claimed.state_revision, true)?;
+        let validation_case = if peer_review {
+            // Keep the current head/plan/round fences; only the revision belongs
+            // to the frozen cohort when another required reviewer finishes first.
+            StoredCase {
+                state_revision: claimed.state_revision,
+                ..case.clone()
+            }
+        } else {
+            validation_case(&claimed, &case, &task, false)?
+        };
         validate_job(&claimed, &validation_case, &task, policy)
             .map_err(|_| DirectQueueError::InvalidEnvelope)?;
         Ok::<_, DirectQueueError>(task)

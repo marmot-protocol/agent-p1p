@@ -463,6 +463,11 @@ fn validate_ledger_join(
         .collect::<Result<BTreeMap<_, _>, _>>()?;
     let mut mandatory_findings: BTreeMap<String, String> = BTreeMap::new();
     let history = store.immutable_history_for_case(&case.case_key)?;
+    let current_reviews = store
+        .current_review_runs_for_case(&case.case_key)?
+        .into_iter()
+        .map(|run| run.run_id)
+        .collect::<std::collections::BTreeSet<_>>();
     let published_build = crate::draft_pr::published_builder(&history, case)
         .map_err(|error| FinalPreflightError::InvalidWorkerEvidence(error.to_string()))?;
     let source_head = published_build
@@ -502,7 +507,8 @@ fn validate_ledger_join(
                         )));
                     }
                 }
-                if result.plan_version == case.plan_version
+                if current_reviews.contains(&stored.run_id)
+                    && result.plan_version == case.plan_version
                     && result.pr_number == pr_number
                     && result.reviewed_head_sha == head_sha
                 {

@@ -243,6 +243,123 @@ fn required_review_task() -> DirectTaskSpec {
 }
 
 #[test]
+fn queued_required_review_is_cancelled_when_its_cohort_changes() {
+    for variant in ["head", "plan", "round", "pr", "state", "event"] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = queued_shadow_review_with(
+            directory.path(),
+            vec![EffectInput {
+                effect_id: "effect-dispatch-reviewers:direct:secperf-kimi".into(),
+                effect_type: "RUN_DIRECT_WORKER".into(),
+                payload: serde_json::to_value(required_review_task()).unwrap(),
+            }],
+        );
+        store
+            .apply_transition(
+                &TransitionInput {
+                    case_key: case_key().into(),
+                    expected_revision: 2,
+                    next_state: if variant == "state" {
+                        "WAITING_CI"
+                    } else {
+                        "REVIEWING"
+                    }
+                    .into(),
+                    remediation_round: u32::from(variant == "round"),
+                    plan_version: if variant == "plan" { 2 } else { 1 },
+                    pr_number: Some(if variant == "pr" { 78 } else { 77 }),
+                    head_sha: Some(if variant == "head" { "c" } else { "b" }.repeat(40)),
+                    observed_at: 3,
+                    event: EventInput {
+                        event_id: "changed".into(),
+                        event_type: if variant == "event" {
+                            "CI_ACCEPTED"
+                        } else {
+                            "REVIEW_RECORDED"
+                        }
+                        .into(),
+                        payload: json!({}),
+                    },
+                    run: None,
+                    evidence: vec![],
+                    findings: vec![],
+                    effects: vec![],
+                },
+                None,
+            )
+            .unwrap();
+        assert!(
+            store
+                .claim_effect_matching("controller", 100, 30, &["RUN_DIRECT_WORKER"])
+                .unwrap()
+                .is_none(),
+            "{variant}"
+        );
+    }
+}
+
+#[test]
+fn queued_required_review_survives_peer_completion_before_its_first_attempt() {
+    let directory = tempfile::tempdir().unwrap();
+    let task = required_review_task();
+    let mut store = queued_shadow_review_with(
+        directory.path(),
+        vec![EffectInput {
+            effect_id: "effect-dispatch-reviewers:direct:secperf-kimi".into(),
+            effect_type: "RUN_DIRECT_WORKER".into(),
+            payload: serde_json::to_value(&task).unwrap(),
+        }],
+    );
+    store
+        .apply_transition(
+            &TransitionInput {
+                case_key: case_key().into(),
+                expected_revision: 2,
+                next_state: "REVIEWING".into(),
+                remediation_round: 0,
+                plan_version: 1,
+                pr_number: Some(77),
+                head_sha: Some("b".repeat(40)),
+                observed_at: 3,
+                event: EventInput {
+                    event_id: "general-completed".into(),
+                    event_type: "REVIEW_RECORDED".into(),
+                    payload: json!({}),
+                },
+                run: None,
+                evidence: vec![],
+                findings: vec![],
+                effects: vec![],
+            },
+            None,
+        )
+        .unwrap();
+    let queue = queue(directory.path());
+    let policy = active_policy();
+    assert_eq!(
+        reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 100, 30, true)
+            .unwrap(),
+        DirectQueueCycle::Prepared {
+            attempt_id: 1,
+            task_id: task.task_id.clone()
+        }
+    );
+    let mut result = serde_json::to_value(shadow_review_result()).unwrap();
+    result["task_id"] = json!(task.task_id);
+    result["reviewer_id"] = json!("secperf-kimi");
+    result["requested_model"] = json!("cursor/kimi-k3-max");
+    result["actual_model"] = json!("cursor/kimi-k3-max");
+    let runtime = runtime(Ok(serde_json::from_value(result).unwrap()));
+    execute_direct_queue_once(&runtime, &queue, 101).unwrap();
+    assert!(matches!(
+        reconcile_direct_queue_once(&mut store, &policy, &queue, "controller", 102, 30, true)
+            .unwrap(),
+        DirectQueueCycle::Ingested { .. }
+    ));
+    assert_eq!(runtime.tasks.borrow().len(), 1);
+}
+
+#[test]
 fn required_review_is_retained_under_changed_policy_and_accepted_after_peer_only_progress() {
     for intervening_event in ["REVIEW_RECORDED", "CI_ACCEPTED"] {
         let directory = tempfile::tempdir().unwrap();

@@ -20,6 +20,7 @@ mod final_preflight;
 mod follow_up_recovery;
 mod native_review_retry;
 pub use native_review_retry::authorize_native_review_retry;
+pub use native_review_retry::authorize_review_coordination_recovery;
 mod hermes_scratch;
 mod infrastructure_recovery;
 mod remediation_extension;

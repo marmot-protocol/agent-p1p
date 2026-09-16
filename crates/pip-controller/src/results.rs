@@ -308,7 +308,7 @@ fn join_review(
     current: &ReviewResult,
 ) -> Result<Event, IngestError> {
     let mut matching = Vec::new();
-    for stored in store.runs_for_case(&case.case_key)? {
+    for stored in store.current_review_runs_for_case(&case.case_key)? {
         let parsed: WorkerResult = serde_json::from_value(stored.payload)
             .map_err(|error| IngestError::Serialization(error.to_string()))?;
         if let WorkerResult::Review(previous) = parsed
