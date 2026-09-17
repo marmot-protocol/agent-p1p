@@ -113,6 +113,10 @@ fn reauthorization_is_atomic_replayable_and_preserves_plan_versions() {
         );
         assert_eq!(store.case_created_at(&input.case_key).unwrap(), Some(10));
         assert_eq!(store.case_authorized_at(&input.case_key).unwrap(), Some(30));
+        assert_eq!(
+            store.case_work_started_at(&input.case_key).unwrap(),
+            Some(30)
+        );
     }
 }
 

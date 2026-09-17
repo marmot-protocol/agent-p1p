@@ -64,9 +64,9 @@ pub(crate) fn validate(
     let eligible: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM events WHERE case_key=?1 AND state_revision=?2 AND event_type='CI_FAILED' AND previous_state='WAITING_CI' AND next_state='ESCALATED' AND observed_at<=?3)
         AND NOT EXISTS(SELECT 1 FROM direct_attempts WHERE case_key=?1 AND status='RUNNING')
         AND NOT EXISTS(SELECT 1 FROM outbox WHERE case_key=?1 AND lease_owner IS NOT NULL)",params![current.case_key,sql_u64(current.state_revision)?,sql_u64(input.observed_at)?],|row|row.get(0))?;
-    let authorized: i64 = tx.query_row("SELECT COALESCE((SELECT MAX(observed_at) FROM events WHERE case_key=?1 AND event_type='ISSUE_REAUTHORIZED'),created_at) FROM cases WHERE case_key=?1",[&current.case_key],|row|row.get(0))?;
+    let started = reauthorization::work_started_at(tx, &current.case_key)?.ok_or_else(invalid)?;
     let recovery: Option<i64> = tx.query_row("SELECT MAX(json_extract(payload_json,'$.deadline')) FROM events WHERE case_key=?1 AND event_type='INFRASTRUCTURE_RECOVERY_AUTHORIZED'",[&current.case_key],|row|row.get(0))?;
-    let deadline = unsigned(authorized)
+    let deadline = started
         .saturating_add(
             old["max_case_elapsed_seconds"]
                 .as_u64()

@@ -78,15 +78,17 @@ pub(crate) fn validate_retry(
     let elapsed_limit = accepted["max_case_elapsed_seconds"]
         .as_u64()
         .ok_or_else(invalid)?;
-    let (created, updated): (i64, i64) = transaction.query_row(
-        "SELECT COALESCE((SELECT MAX(observed_at) FROM events WHERE case_key=?1 AND event_type='ISSUE_REAUTHORIZED'),created_at), updated_at FROM cases WHERE case_key=?1",
+    let started =
+        reauthorization::work_started_at(transaction, &current.case_key)?.ok_or_else(invalid)?;
+    let updated: i64 = transaction.query_row(
+        "SELECT updated_at FROM cases WHERE case_key=?1",
         [&current.case_key],
-        |row| Ok((row.get(0)?, row.get(1)?)),
+        |row| row.get(0),
     )?;
     if limit == 0
         || u64::from(authorization.base_failure_limit) != limit
         || input.observed_at < unsigned(updated)
-        || input.observed_at.saturating_sub(unsigned(created)) >= elapsed_limit
+        || input.observed_at.saturating_sub(started) >= elapsed_limit
         || authorization.failed_attempts < limit
     {
         return Err(invalid());

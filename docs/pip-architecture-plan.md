@@ -67,6 +67,12 @@ lifecycle boundary before use.
     exact owned PR to draft, then record feedback and dispatch planning. An
     uncertain draft mutation is retried before advancing the ledger. Subsequent
     readiness still requires fresh exact-head CI, reviews and final acceptance.
+    Once capacity is reacquired and the handoff is recorded, an explicitly marked
+    ready-to-planning follow-up starts a fresh policy-bounded elapsed-time window.
+    Human-review and capacity-wait time cannot consume this new window. Replays,
+    answers without follow-up and feedback on already-active work do not renew it.
+    Authorization time, provider failures and spent remediation rounds remain;
+    historical unmarked feedback does not retroactively receive a new deadline.
 11. Observe the human merge of the same accepted PR head and record `COMPLETED`,
     retaining GitHub's merge commit SHA separately from the reviewed head. This
     is read-only observation, not merge authority, and works after issue closure.

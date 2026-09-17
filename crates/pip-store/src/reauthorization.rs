@@ -102,11 +102,35 @@ impl Store {
             .collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
-    /// Original creation time is immutable; only a fresh accepted label restarts the age window.
+    /// Original creation time is immutable; only a fresh accepted label changes authorization time.
     pub fn case_authorized_at(&self, case_key: &str) -> Result<Option<u64>> {
         self.connection.query_row(
             "SELECT COALESCE((SELECT MAX(observed_at) FROM events WHERE case_key=?1 AND event_type='ISSUE_REAUTHORIZED'),created_at) FROM cases WHERE case_key=?1",
             [case_key], |row| row.get::<_,i64>(0),
         ).optional()?.map(|value| u64::try_from(value).map_err(|_| StoreError::InvalidInteger)).transpose()
     }
+
+    /// Start of the current bounded work window, not a change of authorization.
+    /// Legacy feedback lacks the explicit marker and retains its old deadline.
+    pub fn case_work_started_at(&self, case_key: &str) -> Result<Option<u64>> {
+        work_started_at(&self.connection, case_key)
+    }
+}
+
+pub(crate) fn work_started_at(connection: &Connection, case_key: &str) -> Result<Option<u64>> {
+    connection
+        .query_row(
+            "SELECT MAX(created_at,COALESCE((SELECT MAX(observed_at) FROM events WHERE case_key=?1
+         AND (event_type='ISSUE_REAUTHORIZED' OR
+              (event_type='HUMAN_FEEDBACK_RECEIVED' AND previous_state='SHADOW_READY'
+               AND next_state='PLANNING' AND pr_number IS NOT NULL AND head_sha IS NOT NULL
+               AND json_type(payload_json,'$.fresh_work_window')='true'
+               AND json_type(payload_json,'$.bounded')='false'))),created_at))
+         FROM cases WHERE case_key=?1",
+            [case_key],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .map(|value| u64::try_from(value).map_err(|_| StoreError::InvalidInteger))
+        .transpose()
 }

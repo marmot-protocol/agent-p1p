@@ -524,7 +524,10 @@ fn handoff<S: IntakeSource, W: DispositionWriter>(
             accepted_plan_version: None,
             next_pr_number: None,
             next_head_sha: None,
-            event_payload: json!({"message_key":message.input.key,"bounded":bounded}),
+            // Only admission of new human-requested work after readiness starts
+            // another time window. The immutable event makes retries harmless.
+            event_payload: json!({"message_key":message.input.key,"bounded":bounded,
+                "fresh_work_window": state == CaseState::ShadowReady && !bounded}),
             run: None,
             findings: vec![],
             evidence: vec![pip_store::EvidenceInput {

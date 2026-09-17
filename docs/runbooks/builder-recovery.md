@@ -1,5 +1,12 @@
 # Offline work and publication recovery
 
+Elapsed-time eligibility uses the current recorded work window. A newly accepted
+human follow-up from `SHADOW_READY` may start a fresh bounded window, as described
+in [GitHub conversations](../github-conversations.md); it does not erase the
+original authorization or reset failure/remediation budgets. Recovery operations
+that preserve the deadline preserve that window too. Legacy, unmarked feedback
+does not renew it.
+
 ## Recover review coordination stalls
 
 `authorize-review-coordination-recovery` takes the same root-only, inert-policy,
@@ -211,7 +218,7 @@ do not mint a new policy revision for this operation. Live GitHub authorization,
 workspace verification, exact model, and normal dispatch gates still apply.
 The controller generates a new revision-bound task with current release skills
 and the existing accepted plan. Another failure reaches the new case-specific
-limit and normal controller reconciliation escalates it. The original case
+limit and normal controller reconciliation escalates it. The current work-window
 deadline can also stop it, including while paused.
 
 Recovery preserves existing builder commits and unfinished edits on the assigned

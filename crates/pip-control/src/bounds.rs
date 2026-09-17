@@ -89,12 +89,12 @@ pub fn enforce_operational_bounds<'a>(
         if !scope.matches(&case) || !automated_state(&case.state) {
             continue;
         }
-        let created_at = store
-            .case_authorized_at(&case.case_key)?
+        let work_started_at = store
+            .case_work_started_at(&case.case_key)?
             .ok_or(OperationalBoundsError::InvalidCase)?;
-        let elapsed = now.saturating_sub(created_at);
+        let elapsed = now.saturating_sub(work_started_at);
         let elapsed_limit = policy.max_case_elapsed_seconds;
-        let deadline = created_at.saturating_add(elapsed_limit).max(
+        let deadline = work_started_at.saturating_add(elapsed_limit).max(
             store
                 .infrastructure_recovery_deadline(&case.case_key)?
                 .unwrap_or(0),

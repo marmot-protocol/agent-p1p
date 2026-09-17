@@ -94,6 +94,11 @@ fn ready_follow_up_withdraws_readiness_before_replanning_and_retries_safely() {
 }
 
 #[test]
+fn ready_status_question_does_not_restart_work_or_refresh_its_clock() {
+    conversation_roundtrip(false, Some("SHADOW_READY"));
+}
+
+#[test]
 fn ready_follow_up_waits_for_capacity_without_losing_answer_or_withdrawing_readiness() {
     conversation_roundtrip_with_capacity(true, Some("SHADOW_READY"), false, false, true);
 }
@@ -121,6 +126,13 @@ fn escalated_pipeline_can_be_explained_without_restarting_work() {
 #[test]
 fn conversation_replan_recommendation_cannot_restart_escalated_work() {
     conversation_roundtrip(true, Some("ESCALATED"));
+}
+
+#[test]
+fn follow_up_cannot_reopen_taken_over_completed_or_abandoned_work() {
+    for state in ["TAKEN_OVER", "COMPLETED", "ABANDONED", "BLOCKED"] {
+        conversation_roundtrip(true, Some(state));
+    }
 }
 
 fn conversation_roundtrip(follow_up: bool, state: Option<&str>) {
@@ -164,6 +176,7 @@ fn conversation_roundtrip_with_capacity(
     policy.intake.paused = false;
     policy.github.automation_actor_id = Some(88);
     policy.intake.trusted_actor_ids = vec![99];
+    policy.max_case_elapsed_seconds = 60;
     let source = Source {
         comment: DiscussionComment {
             id: 500,
@@ -269,6 +282,7 @@ fn conversation_roundtrip_with_capacity(
             "provider_override":"openai-codex","model_override":"gpt-6-astra","max_retries":1,"priority":10
         })).unwrap());
     }
+    let now = std::cell::Cell::new(101);
     let run = |store: &mut Store| {
         pip_control::reconcile_conversation_once(
             &AuthorizedSource(&source, follow_up),
@@ -277,7 +291,7 @@ fn conversation_roundtrip_with_capacity(
             store,
             queue.clone(),
             ("hermes", &"a".repeat(40)),
-            101,
+            now.get(),
         )
     };
     assert_eq!(run(&mut store).unwrap()["result"], "queued");
@@ -299,7 +313,10 @@ fn conversation_roundtrip_with_capacity(
             assert_eq!(snapshot["recent_events"][0]["observed_at"], 90);
             assert!(!snapshot.to_string().contains("private_debug"));
         }
-        assert_eq!(snapshot["operator_recovery_required"], state == "ESCALATED");
+        assert_eq!(
+            snapshot["operator_recovery_required"],
+            matches!(state, "ESCALATED" | "BLOCKED")
+        );
     } else {
         assert_eq!(snapshot["tracking"], "NO_BOUND_CASE");
     }
@@ -321,6 +338,10 @@ fn conversation_roundtrip_with_capacity(
         Some("/runtime/kanban/boards/pip-mdk/workspaces/task-conversation".into());
     drop(store);
     let mut store = Store::open(&path).unwrap();
+    if state == Some("SHADOW_READY") {
+        // Human review (and capacity waits) can outlive the original 150 deadline.
+        now.set(1000);
+    }
     if full {
         // Fill the global pool with unrelated repository work. The ready case
         // must reacquire admission before any draft mutation or replan event.
@@ -354,6 +375,15 @@ fn conversation_roundtrip_with_capacity(
                 store.conversation("feedback-123").unwrap().unwrap().state,
                 "ANSWERED"
             );
+            assert_eq!(
+                store
+                    .immutable_history_for_case(&format!("repo:{}#42@3", policy.repository.id))
+                    .unwrap()
+                    .events
+                    .len(),
+                2
+            );
+            now.set(now.get() + 10);
         }
         // Test fixture advances the peer; production never resets case history.
         rusqlite::Connection::open(&path)
@@ -364,7 +394,7 @@ fn conversation_roundtrip_with_capacity(
             )
             .unwrap();
     }
-    if state == Some("SHADOW_READY") {
+    if state == Some("SHADOW_READY") && follow_up {
         assert!(run(&mut store).is_err());
         let case = store
             .case(&format!("repo:{}#42@3", policy.repository.id))
@@ -373,9 +403,12 @@ fn conversation_roundtrip_with_capacity(
         assert_eq!(case.state, "SHADOW_READY");
         assert_eq!(case.state_revision, 2);
         assert!(writer.0.borrow().is_empty());
+        now.set(now.get() + 10);
     }
     writer.1.set(true);
+    let handed_off_at = now.get();
     assert!(run(&mut store).is_err());
+    now.set(now.get() + 10);
     assert_eq!(run(&mut store).unwrap()["result"], "published");
     assert_eq!(run(&mut store).unwrap()["result"], "idle");
     assert_eq!(writer.0.borrow().len(), 1);
@@ -413,11 +446,46 @@ fn conversation_roundtrip_with_capacity(
             writer.2.get(),
             if state == Some("SHADOW_READY") { 2 } else { 0 }
         );
+        assert_eq!(store.case_created_at(&case.case_key).unwrap(), Some(90));
+        assert_eq!(store.case_authorized_at(&case.case_key).unwrap(), Some(90));
+        let work_started = if state == Some("SHADOW_READY") {
+            handed_off_at
+        } else {
+            90
+        };
+        assert_eq!(
+            store.case_work_started_at(&case.case_key).unwrap(),
+            Some(work_started)
+        );
+        // Publication retries must not move this boundary, and active-work
+        // clarification must not gain a new window at all.
+        assert_eq!(
+            pip_control::enforce_operational_bounds(&mut store, &policy, work_started + 59)
+                .unwrap(),
+            pip_control::OperationalBoundsCycle::Idle
+        );
+        assert!(matches!(
+            pip_control::enforce_operational_bounds(&mut store, &policy, work_started + 60)
+                .unwrap(),
+            pip_control::OperationalBoundsCycle::Escalated {
+                bound: pip_control::OperationalBound::ElapsedTime,
+                observed: 60,
+                limit: 60,
+                ..
+            }
+        ));
     } else if let Some(state) = state {
         let cases = store.status(102).unwrap().cases;
         assert_eq!(cases.len(), 1);
         assert_eq!(cases[0].state, state);
-        assert_eq!(cases[0].state_revision, 1);
+        assert_eq!(
+            cases[0].state_revision,
+            if state == "SHADOW_READY" { 2 } else { 1 }
+        );
+        assert_eq!(
+            store.case_work_started_at(&cases[0].case_key).unwrap(),
+            Some(90)
+        );
         assert_eq!(store.outbox_count().unwrap(), 0);
     } else {
         assert!(store.status(102).unwrap().cases.is_empty());

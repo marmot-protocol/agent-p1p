@@ -36,7 +36,7 @@ pub fn authorize_follow_up_recovery(
         return Err("recovery request conflicts with recorded authorization".into());
     }
     let created = store
-        .case_authorized_at(&case.case_key)
+        .case_work_started_at(&case.case_key)
         .map_err(error)?
         .ok_or("missing authorization")?;
     let deadline = created

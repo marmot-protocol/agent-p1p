@@ -32,6 +32,74 @@ fn elapsed_time_escalates_at_the_exact_policy_boundary() {
 }
 
 #[test]
+fn fresh_human_follow_up_does_not_reset_provider_failures() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path().join("ledger.db")).unwrap();
+    let mut policy = policy();
+    policy.max_case_elapsed_seconds = 60;
+    policy.max_provider_failures = 1;
+    create_case(&mut store, 100);
+    let effect = store.claim_effect("worker", 110, 30).unwrap().unwrap();
+    let attempt = store.begin_direct_attempt(&effect, "failed", 110).unwrap();
+    store
+        .fail_direct_attempt(attempt, "worker", 111, "provider unavailable")
+        .unwrap();
+    store.release_effect(&effect.effect_id, "worker").unwrap();
+    for (revision, state, at, event, payload) in [
+        (1, "SHADOW_READY", 120, "READY", json!({})),
+        (
+            2,
+            "PLANNING",
+            1000,
+            "HUMAN_FEEDBACK_RECEIVED",
+            json!({"bounded":false,"fresh_work_window":true}),
+        ),
+    ] {
+        store
+            .apply_transition(
+                &TransitionInput {
+                    case_key: "repo:1055628515#42@2".into(),
+                    expected_revision: revision,
+                    next_state: state.into(),
+                    remediation_round: 2,
+                    plan_version: 1,
+                    pr_number: Some(77),
+                    head_sha: Some("b".repeat(40)),
+                    observed_at: at,
+                    event: EventInput {
+                        event_id: format!("event-{revision}"),
+                        event_type: event.into(),
+                        payload,
+                    },
+                    run: None,
+                    evidence: vec![],
+                    findings: vec![],
+                    effects: vec![],
+                },
+                None,
+            )
+            .unwrap();
+    }
+    assert!(matches!(
+        enforce_operational_bounds(&mut store, &policy, 1001).unwrap(),
+        OperationalBoundsCycle::Escalated {
+            bound: OperationalBound::ProviderFailures,
+            observed: 1,
+            limit: 1,
+            ..
+        }
+    ));
+    let case = store.case("repo:1055628515#42@2").unwrap().unwrap();
+    assert_eq!(case.remediation_round, 2);
+    assert_eq!(
+        store
+            .failed_direct_attempt_count_for_case(&case.case_key)
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
 fn repeated_finding_fingerprints_and_provider_failures_are_bounded() {
     for scenario in ["finding", "provider"] {
         let directory = tempfile::tempdir().unwrap();

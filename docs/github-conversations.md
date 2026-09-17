@@ -27,6 +27,14 @@ a successful live rollout.
   plan/head, and a supported safe workflow state. It sends retained human feedback
   to a new planning pass; it does not directly dispatch a builder or approve scope.
   Subsequent builders and reviewers receive that feedback alongside normal evidence.
+- A trusted follow-up from `SHADOW_READY` starts a fresh `max_case_elapsed_seconds`
+  window when the controller records the ready-to-planning handoff, after capacity
+  admission and confirmation that the exact owned PR is back in draft. The event
+  carries `fresh_work_window: true`; duplicate delivery, reply publication retries
+  and capacity waits do not refresh it. Questions without a follow-up, feedback
+  during active work, and remediation-exhausted handoffs grant no new window.
+  Original authorization/history, provider failures and remediation counts remain.
+  Historical feedback without this marker retains its original deadline.
 - Completed, abandoned, taken-over, blocked and operationally escalated work is
   not reopened by comments. Exceptional recovery remains an operator action.
 
@@ -45,6 +53,12 @@ planner's exact model and reasoning, with a ten-minute limit and one attempt.
 Feedback replanning consumes the existing remediation budget; it cannot reset
 that budget. At most 100 conversations can be pending; overflow stays in the
 webhook spool for retry rather than being acknowledged and lost.
+
+The same recorded work window is used by normal elapsed-time enforcement and
+offline recovery eligibility checks. This grants no new retry allowance or merge
+authority. After recording marked follow-up events, do not downgrade to a release
+that only understands the original authorization clock: it would prematurely
+expire the resumed work. No existing case is automatically restarted on rollout.
 
 With explicit `execution_capacity`, that hold is case-scoped: feedback waits for
 its bound case's workers and holds that case's next dispatch/readiness, without
