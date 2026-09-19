@@ -12,6 +12,48 @@ struct FixtureSource {
     evidence: PullRequestEvidence,
 }
 
+#[test]
+fn native_failure_diagnostics_are_prioritized_before_the_four_check_cap() {
+    use pip_github::{GitHubReader, ReadRequest, ReadResponse, ReadTransport};
+    use std::{cell::RefCell, rc::Rc};
+    struct Unavailable(Rc<RefCell<Vec<String>>>);
+    impl ReadTransport for Unavailable {
+        fn get(&self, request: ReadRequest) -> Result<ReadResponse, GitHubError> {
+            self.0.borrow_mut().push(request.url);
+            Err(GitHubError::InvalidIdentity)
+        }
+    }
+    let requests = Rc::new(RefCell::new(vec![]));
+    let reader = GitHubReader::new(
+        Unavailable(requests.clone()),
+        "https://api.github.com",
+        "secret",
+        4096,
+        2,
+    )
+    .unwrap();
+    let mut checks = (1..=5)
+        .map(|id| CheckRunSnapshot {
+            id,
+            ..check(CheckConclusion::Failure)
+        })
+        .collect::<Vec<_>>();
+    checks[4].details_url = Some("https://github.com/org/repo/actions/runs/9/job/11".into());
+    checks.push(CheckRunSnapshot {
+        id: 6,
+        ..check(CheckConclusion::Success)
+    });
+    let result = reader.failure_diagnostics("org", "repo", &evidence(checks));
+    assert!(requests.borrow()[0].ends_with("/check-runs/5"));
+    assert_eq!(requests.borrow().len(), 4);
+    assert_eq!(result["omitted_checks"], 1);
+    assert_eq!(result["checks"][0]["availability"], "unavailable");
+    assert_eq!(
+        reader.failure_diagnostics("org", "repo", &evidence(vec![])),
+        json!({"checks":[],"omitted_checks":0})
+    );
+}
+
 impl PullRequestSource for FixtureSource {
     fn pull_request(
         &self,
@@ -22,6 +64,85 @@ impl PullRequestSource for FixtureSource {
     ) -> Result<PullRequestEvidence, GitHubError> {
         Ok(self.evidence.clone())
     }
+
+    fn failure_diagnostics(
+        &self,
+        _owner: &str,
+        _repository: &str,
+        _evidence: &PullRequestEvidence,
+    ) -> Value {
+        json!({"checks":[{"check_id":1,"log_excerpt":"native archive contains LLVM bitcode"}]})
+    }
+}
+
+#[test]
+fn optional_ci_wait_does_not_spend_budget_and_completed_failure_reaches_builder_evidence() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = waiting_ci_store(directory.path().join("ledger.db"));
+    let mut source = FixtureSource {
+        evidence: evidence(vec![check(CheckConclusion::Success)]),
+    };
+    source.evidence.check_runs.push(CheckRunSnapshot {
+        id: 2,
+        name: "Native packaging".into(),
+        status: CheckStatus::InProgress,
+        conclusion: None,
+        ..check(CheckConclusion::Success)
+    });
+    let before = store
+        .immutable_history_for_case("repo:984321#1240@1")
+        .unwrap();
+    for now in [100, 101] {
+        assert!(matches!(
+            reconcile_ci_once(&source, &active_policy(), &mut store, now).unwrap(),
+            CiCycle::Pending { .. }
+        ));
+        assert_eq!(
+            store
+                .immutable_history_for_case("repo:984321#1240@1")
+                .unwrap(),
+            before
+        );
+        assert_eq!(
+            store
+                .case("repo:984321#1240@1")
+                .unwrap()
+                .unwrap()
+                .remediation_round,
+            0
+        );
+    }
+    source.evidence.check_runs[1].status = CheckStatus::Completed;
+    source.evidence.check_runs[1].conclusion = Some(CheckConclusion::Failure);
+    reconcile_ci_once(&source, &active_policy(), &mut store, 102).unwrap();
+    let history = store
+        .immutable_history_for_case("repo:984321#1240@1")
+        .unwrap();
+    let ci = history
+        .evidence
+        .iter()
+        .find(|row| row.kind == "GITHUB_CI")
+        .unwrap();
+    assert_eq!(
+        ci.payload["diagnostics"]["checks"][0]["log_excerpt"],
+        "native archive contains LLVM bitcode"
+    );
+    assert_eq!(
+        store.case("repo:984321#1240@1").unwrap().unwrap().state,
+        "REMEDIATING"
+    );
+    assert_eq!(
+        store
+            .case("repo:984321#1240@1")
+            .unwrap()
+            .unwrap()
+            .remediation_round,
+        1
+    );
+    assert_eq!(
+        reconcile_ci_once(&source, &active_policy(), &mut store, 103).unwrap(),
+        CiCycle::Idle
+    );
 }
 
 #[test]
@@ -508,6 +629,7 @@ fn evidence(check_runs: Vec<CheckRunSnapshot>) -> PullRequestEvidence {
 
 fn check(conclusion: CheckConclusion) -> CheckRunSnapshot {
     CheckRunSnapshot {
+        details_url: None,
         id: match conclusion {
             CheckConclusion::Failure => 1,
             _ => 2,

@@ -4,6 +4,43 @@ use pip_github::{
 };
 
 #[test]
+fn unfinished_optional_checks_hold_reviews_without_hiding_failure() {
+    for status in [CheckStatus::Queued, CheckStatus::InProgress] {
+        let mut snapshot = evidence(
+            vec![
+                check(
+                    1,
+                    "Required CI",
+                    CheckStatus::Completed,
+                    Some(CheckConclusion::Success),
+                ),
+                check(2, "Native measurements", status, None),
+            ],
+            CommitStatusState::Success,
+            vec![],
+        );
+        let required = ["Required CI".into()];
+        let waiting = evaluate_ci(&snapshot, &"b".repeat(40), &required);
+        assert_eq!(waiting.verdict, CiVerdict::Pending);
+        assert_eq!(waiting.blockers, ["CI_PENDING"]);
+        snapshot.check_runs[1].status = CheckStatus::Completed;
+        snapshot.check_runs[1].conclusion = Some(CheckConclusion::Success);
+        assert_eq!(
+            evaluate_ci(&snapshot, &"b".repeat(40), &required).verdict,
+            CiVerdict::Accepted
+        );
+        snapshot.check_runs[1].conclusion = Some(CheckConclusion::Failure);
+        snapshot
+            .check_runs
+            .push(check(3, "Still running", status, None));
+        assert_eq!(
+            evaluate_ci(&snapshot, &"b".repeat(40), &required).verdict,
+            CiVerdict::Failed
+        );
+    }
+}
+
+#[test]
 fn completed_status_supersedes_earlier_pending_observations_but_not_failures() {
     for older in [CommitStatusState::Pending, CommitStatusState::Failure] {
         let evidence = evidence(
@@ -152,6 +189,7 @@ fn check(
     CheckRunSnapshot {
         id,
         app_id: 1,
+        details_url: None,
         name: name.into(),
         head_sha: "b".repeat(40),
         status,

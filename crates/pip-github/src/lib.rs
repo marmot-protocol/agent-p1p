@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod app_auth;
+mod ci_diagnostics;
 mod discussion;
 pub use discussion::DiscussionComment;
 mod write;
@@ -271,10 +272,26 @@ pub enum CheckConclusion {
     TimedOut,
 }
 
+impl CheckConclusion {
+    pub fn is_failure(self) -> bool {
+        matches!(
+            self,
+            Self::ActionRequired
+                | Self::Cancelled
+                | Self::Failure
+                | Self::Stale
+                | Self::StartupFailure
+                | Self::TimedOut
+        )
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct CheckRunSnapshot {
     pub id: u64,
     pub app_id: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details_url: Option<String>,
     pub name: String,
     pub head_sha: String,
     pub status: CheckStatus,
@@ -397,26 +414,28 @@ pub fn evaluate_ci(
     if !evidence.pull_request.open || evidence.pull_request.merged {
         push_unique(&mut failed, "PR_NOT_OPEN".into());
     }
-    let historical_failure = evidence.check_runs.iter().any(|check| {
-        matches!(
-            check.conclusion,
-            Some(
-                CheckConclusion::ActionRequired
-                    | CheckConclusion::Cancelled
-                    | CheckConclusion::Failure
-                    | CheckConclusion::StartupFailure
-                    | CheckConclusion::Stale
-                    | CheckConclusion::TimedOut
+    let historical_failure = evidence
+        .check_runs
+        .iter()
+        .any(|check| check.conclusion.is_some_and(CheckConclusion::is_failure))
+        || evidence.commit_statuses.iter().any(|status| {
+            matches!(
+                status.state,
+                CommitStatusState::Error | CommitStatusState::Failure
             )
-        )
-    }) || evidence.commit_statuses.iter().any(|status| {
-        matches!(
-            status.state,
-            CommitStatusState::Error | CommitStatusState::Failure
-        )
-    });
+        });
     if historical_failure {
         push_unique(&mut failed, "HISTORICAL_FAILED_ATTEMPT".into());
+    }
+    // Every observed failed check vetoes acceptance, including optional jobs.
+    // Apply the same boundary while those jobs are running: otherwise fast
+    // Required CI releases reviewers with a permanently stale native-CI snapshot.
+    if evidence
+        .check_runs
+        .iter()
+        .any(|check| check.status != CheckStatus::Completed)
+    {
+        push_unique(&mut pending, "CI_PENDING".into());
     }
     match evidence.commit_status_state {
         CommitStatusState::Error | CommitStatusState::Failure => {
@@ -616,6 +635,7 @@ struct AppDto {
 #[derive(Deserialize)]
 struct CheckRunDto {
     id: u64,
+    details_url: Option<String>,
     name: String,
     head_sha: String,
     status: CheckStatus,
@@ -990,6 +1010,7 @@ impl<T: ReadTransport> GitHubReader<T> {
             }
             check_runs.push(CheckRunSnapshot {
                 id: check.id,
+                details_url: check.details_url,
                 app_id: check.app.id,
                 name: check.name,
                 head_sha: check.head_sha,

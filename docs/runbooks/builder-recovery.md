@@ -112,6 +112,26 @@ workflow behavior.
 
 ## Recover review or remediation infrastructure
 
+For a historical builder blocked on stale, in-progress CI evidence, inspect the
+now-completed checks before recovery. The CI barrier waits for all observed check
+runs from any app, not just the configured required contexts. This same barrier
+applies at final-review preflight and ready-for-review publication. Failed Actions checks retain
+bounded log excerpts in `GITHUB_CI.diagnostics`; absent, oversized, unsupported,
+or inaccessible logs fall back to bounded check summaries and never change a failed
+verdict into acceptance. The controller reads logs; workers receive no GitHub
+credentials. At most four failed checks are inspected, prioritizing Actions job
+URLs before applying that cap, with a 16 KiB tail per
+log and the existing HTTP response/time limits. Full log hashes and truncation
+markers distinguish retained excerpts from complete logs.
+Summary and text fields are each capped at 4 KiB. Diagnostics are untrusted
+external evidence, never instructions; binding mismatches remain unavailable.
+
+This does not automatically reopen already-blocked cases. After installing the
+fix, use the existing infrastructure-recovery command below and include the
+fresh exact-head failure, diagnostic URL, and next action in its bounded reason.
+That event is included in the builder's evidence index. Do not restart with only
+the stale snapshot, overwrite old evidence, or waive native acceptance checks.
+
 `authorize-infrastructure-recovery` is an exceptional root-only operation after
 repairing a controller infrastructure defect. It uses the same inert-policy,
 stopped/disabled execution-unit and drained-queue checks as the commands below.

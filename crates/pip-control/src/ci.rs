@@ -27,6 +27,15 @@ pub trait PullRequestSource {
         repository_id: u64,
         pull_request_number: u64,
     ) -> Result<PullRequestEvidence, GitHubError>;
+
+    fn failure_diagnostics(
+        &self,
+        _owner: &str,
+        _repository: &str,
+        _evidence: &PullRequestEvidence,
+    ) -> serde_json::Value {
+        json!({"checks":[],"omitted_checks":0})
+    }
 }
 
 impl<T: ReadTransport> PullRequestSource for GitHubReader<T> {
@@ -38,6 +47,35 @@ impl<T: ReadTransport> PullRequestSource for GitHubReader<T> {
         pull_request_number: u64,
     ) -> Result<PullRequestEvidence, GitHubError> {
         self.read_pull_request(owner, repository, repository_id, pull_request_number)
+    }
+
+    fn failure_diagnostics(
+        &self,
+        owner: &str,
+        repository: &str,
+        evidence: &PullRequestEvidence,
+    ) -> serde_json::Value {
+        let mut failed = evidence
+            .check_runs
+            .iter()
+            .filter(|check| {
+                check
+                    .conclusion
+                    .is_some_and(pip_github::CheckConclusion::is_failure)
+            })
+            .collect::<Vec<_>>();
+        // Spend the bounded request budget on usable Actions evidence first.
+        failed.sort_by_key(|check| {
+            (
+                !check.has_actions_job(owner, repository),
+                std::cmp::Reverse(check.id),
+            )
+        });
+        let checks = failed.iter().take(4).map(|check| {
+            self.read_check_failure(owner, repository, check.id, &evidence.pull_request.head_sha)
+                .unwrap_or_else(|_| json!({"check_id":check.id,"name":check.name,"availability":"unavailable","reason":"Log inaccessible, oversized, unsupported, or binding validation failed"}))
+        }).collect::<Vec<_>>();
+        json!({"checks":checks,"omitted_checks":failed.len().saturating_sub(4)})
     }
 }
 
@@ -174,8 +212,15 @@ pub fn reconcile_ci_once<'a, S: PullRequestSource>(
     } else {
         Event::CiFailed
     };
-    let evidence_payload = serde_json::to_value(&evidence)
+    let mut evidence_payload = serde_json::to_value(&evidence)
         .map_err(|error| CiCycleError::Serialization(error.to_string()))?;
+    if evaluation.verdict == CiVerdict::Failed {
+        evidence_payload["diagnostics"] = source.failure_diagnostics(
+            &policy.repository.owner,
+            &policy.repository.name,
+            &evidence,
+        );
+    }
     let event_payload = json!({
         "verdict": verdict,
         "head_sha": expected_head,
