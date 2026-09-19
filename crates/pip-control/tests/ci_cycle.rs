@@ -22,6 +22,85 @@ impl PullRequestSource for FixtureSource {
     ) -> Result<PullRequestEvidence, GitHubError> {
         Ok(self.evidence.clone())
     }
+
+    fn failure_diagnostics(
+        &self,
+        _owner: &str,
+        _repository: &str,
+        _evidence: &PullRequestEvidence,
+    ) -> Value {
+        json!({"checks":[{"check_id":1,"log_excerpt":"native archive contains LLVM bitcode"}]})
+    }
+}
+
+#[test]
+fn optional_ci_wait_does_not_spend_budget_and_completed_failure_reaches_builder_evidence() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = waiting_ci_store(directory.path().join("ledger.db"));
+    let mut source = FixtureSource {
+        evidence: evidence(vec![check(CheckConclusion::Success)]),
+    };
+    source.evidence.check_runs.push(CheckRunSnapshot {
+        id: 2,
+        name: "Native packaging".into(),
+        status: CheckStatus::InProgress,
+        conclusion: None,
+        ..check(CheckConclusion::Success)
+    });
+    let before = store
+        .immutable_history_for_case("repo:984321#1240@1")
+        .unwrap();
+    for now in [100, 101] {
+        assert!(matches!(
+            reconcile_ci_once(&source, &active_policy(), &mut store, now).unwrap(),
+            CiCycle::Pending { .. }
+        ));
+        assert_eq!(
+            store
+                .immutable_history_for_case("repo:984321#1240@1")
+                .unwrap(),
+            before
+        );
+        assert_eq!(
+            store
+                .case("repo:984321#1240@1")
+                .unwrap()
+                .unwrap()
+                .remediation_round,
+            0
+        );
+    }
+    source.evidence.check_runs[1].status = CheckStatus::Completed;
+    source.evidence.check_runs[1].conclusion = Some(CheckConclusion::Failure);
+    reconcile_ci_once(&source, &active_policy(), &mut store, 102).unwrap();
+    let history = store
+        .immutable_history_for_case("repo:984321#1240@1")
+        .unwrap();
+    let ci = history
+        .evidence
+        .iter()
+        .find(|row| row.kind == "GITHUB_CI")
+        .unwrap();
+    assert_eq!(
+        ci.payload["diagnostics"]["checks"][0]["log_excerpt"],
+        "native archive contains LLVM bitcode"
+    );
+    assert_eq!(
+        store.case("repo:984321#1240@1").unwrap().unwrap().state,
+        "REMEDIATING"
+    );
+    assert_eq!(
+        store
+            .case("repo:984321#1240@1")
+            .unwrap()
+            .unwrap()
+            .remediation_round,
+        1
+    );
+    assert_eq!(
+        reconcile_ci_once(&source, &active_policy(), &mut store, 103).unwrap(),
+        CiCycle::Idle
+    );
 }
 
 #[test]

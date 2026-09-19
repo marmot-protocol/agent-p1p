@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod app_auth;
+mod ci_diagnostics;
 mod discussion;
 pub use discussion::DiscussionComment;
 mod write;
@@ -417,6 +418,16 @@ pub fn evaluate_ci(
     });
     if historical_failure {
         push_unique(&mut failed, "HISTORICAL_FAILED_ATTEMPT".into());
+    }
+    // Every observed failed check vetoes acceptance, including optional jobs.
+    // Apply the same boundary while those jobs are running: otherwise fast
+    // Required CI releases reviewers with a permanently stale native-CI snapshot.
+    if evidence
+        .check_runs
+        .iter()
+        .any(|check| check.status != CheckStatus::Completed)
+    {
+        push_unique(&mut pending, "CI_PENDING".into());
     }
     match evidence.commit_status_state {
         CommitStatusState::Error | CommitStatusState::Failure => {
