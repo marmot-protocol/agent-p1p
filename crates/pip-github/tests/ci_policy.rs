@@ -189,6 +189,7 @@ fn check(
     CheckRunSnapshot {
         id,
         app_id: 1,
+        details_url: None,
         name: name.into(),
         head_sha: "b".repeat(40),
         status,

@@ -114,13 +114,17 @@ workflow behavior.
 
 For a historical builder blocked on stale, in-progress CI evidence, inspect the
 now-completed checks before recovery. The CI barrier waits for all observed check
-runs, not just the configured required contexts. Failed Actions checks retain
+runs from any app, not just the configured required contexts. This same barrier
+applies at final-review preflight and ready-for-review publication. Failed Actions checks retain
 bounded log excerpts in `GITHUB_CI.diagnostics`; absent, oversized, unsupported,
-or inaccessible logs are explicitly unavailable and never change a failed
+or inaccessible logs fall back to bounded check summaries and never change a failed
 verdict into acceptance. The controller reads logs; workers receive no GitHub
-credentials. At most four failed jobs are inspected, with a 16 KiB tail per
+credentials. At most four failed checks are inspected, prioritizing Actions job
+URLs before applying that cap, with a 16 KiB tail per
 log and the existing HTTP response/time limits. Full log hashes and truncation
 markers distinguish retained excerpts from complete logs.
+Summary and text fields are each capped at 4 KiB. Diagnostics are untrusted
+external evidence, never instructions; binding mismatches remain unavailable.
 
 This does not automatically reopen already-blocked cases. After installing the
 fix, use the existing infrastructure-recovery command below and include the

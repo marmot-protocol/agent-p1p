@@ -109,6 +109,64 @@ impl FinalPreflightSource for FixtureSource {
 }
 
 #[test]
+fn unfinished_nonrequired_ci_cannot_release_final_review_or_spend_remediation() {
+    let directory = tempfile::tempdir().unwrap();
+    let policy = active_policy();
+    let mut source = accepted_source();
+    let mut store = final_review_store(directory.path().join("ledger.db"), &policy, &source);
+    source.evidence.check_runs.push(CheckRunSnapshot {
+        id: 99,
+        name: "Native packaging".into(),
+        status: CheckStatus::InProgress,
+        conclusion: None,
+        ..source.evidence.check_runs[0].clone()
+    });
+    let before = store
+        .immutable_history_for_case("repo:984321#1240@1")
+        .unwrap();
+    let round = store
+        .case("repo:984321#1240@1")
+        .unwrap()
+        .unwrap()
+        .remediation_round;
+    for now in [200, 240] {
+        let result = reconcile_final_preflight_once(
+            &source,
+            &policy,
+            &mut store,
+            now,
+            "final-preflight",
+            30,
+            true,
+        )
+        .unwrap();
+        assert!(
+            matches!(result, FinalPreflightCycle::Pending { blockers, .. } if blockers.contains(&"CI:CI_PENDING".into()))
+        );
+        assert_eq!(
+            store
+                .immutable_history_for_case("repo:984321#1240@1")
+                .unwrap(),
+            before
+        );
+        assert_eq!(
+            store
+                .case("repo:984321#1240@1")
+                .unwrap()
+                .unwrap()
+                .remediation_round,
+            round
+        );
+    }
+    assert!(
+        store
+            .claim_effect_matching("dispatcher", 280, 30, &["DISPATCH_FINAL_REVIEWER"])
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
 fn exact_published_reviews_clean_ci_and_resolved_threads_release_final_review() {
     let directory = tempfile::tempdir().unwrap();
     let policy = active_policy();
@@ -1044,6 +1102,7 @@ fn accepted_source() -> FixtureSource {
                 base_sha: "a".repeat(40),
             },
             check_runs: vec![CheckRunSnapshot {
+                details_url: None,
                 id: 1,
                 app_id: 1,
                 name: "test".into(),

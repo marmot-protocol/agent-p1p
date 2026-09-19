@@ -12,6 +12,48 @@ struct FixtureSource {
     evidence: PullRequestEvidence,
 }
 
+#[test]
+fn native_failure_diagnostics_are_prioritized_before_the_four_check_cap() {
+    use pip_github::{GitHubReader, ReadRequest, ReadResponse, ReadTransport};
+    use std::{cell::RefCell, rc::Rc};
+    struct Unavailable(Rc<RefCell<Vec<String>>>);
+    impl ReadTransport for Unavailable {
+        fn get(&self, request: ReadRequest) -> Result<ReadResponse, GitHubError> {
+            self.0.borrow_mut().push(request.url);
+            Err(GitHubError::InvalidIdentity)
+        }
+    }
+    let requests = Rc::new(RefCell::new(vec![]));
+    let reader = GitHubReader::new(
+        Unavailable(requests.clone()),
+        "https://api.github.com",
+        "secret",
+        4096,
+        2,
+    )
+    .unwrap();
+    let mut checks = (1..=5)
+        .map(|id| CheckRunSnapshot {
+            id,
+            ..check(CheckConclusion::Failure)
+        })
+        .collect::<Vec<_>>();
+    checks[4].details_url = Some("https://github.com/org/repo/actions/runs/9/job/11".into());
+    checks.push(CheckRunSnapshot {
+        id: 6,
+        ..check(CheckConclusion::Success)
+    });
+    let result = reader.failure_diagnostics("org", "repo", &evidence(checks));
+    assert!(requests.borrow()[0].ends_with("/check-runs/5"));
+    assert_eq!(requests.borrow().len(), 4);
+    assert_eq!(result["omitted_checks"], 1);
+    assert_eq!(result["checks"][0]["availability"], "unavailable");
+    assert_eq!(
+        reader.failure_diagnostics("org", "repo", &evidence(vec![])),
+        json!({"checks":[],"omitted_checks":0})
+    );
+}
+
 impl PullRequestSource for FixtureSource {
     fn pull_request(
         &self,
@@ -587,6 +629,7 @@ fn evidence(check_runs: Vec<CheckRunSnapshot>) -> PullRequestEvidence {
 
 fn check(conclusion: CheckConclusion) -> CheckRunSnapshot {
     CheckRunSnapshot {
+        details_url: None,
         id: match conclusion {
             CheckConclusion::Failure => 1,
             _ => 2,

@@ -46,10 +46,13 @@ lifecycle boundary before use.
    records the source-to-published commit binding, then publishes the signed
    commit to the assigned branch and creates/updates one draft PR.
 6. Observe required CI for that exact head.
-   Also wait for every observed check run to finish before releasing reviewers;
+   Also wait for every observed check run (from any app) to finish before releasing reviewers;
    a fast aggregate check cannot stand in for still-running native jobs. Waiting
    leaves case history and remediation counters unchanged. Actual failures enter
    remediation with bounded, exact-head Actions log excerpts when available.
+   The same CI evaluator protects final-review preflight and marking a PR ready.
+   Checks not yet created cannot be observed; named required contexts still
+   protect against missing required CI. Inaccessible logs do not waive failures.
    Confirmed GitHub merge conflicts (`mergeable=false`, state `dirty`) enter the
    existing bounded builder-remediation path even when CI has not started.
    Retain the observed head/base and conflict evidence; unknown mergeability or

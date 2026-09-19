@@ -34,7 +34,7 @@ pub trait PullRequestSource {
         _repository: &str,
         _evidence: &PullRequestEvidence,
     ) -> serde_json::Value {
-        json!({"checks":[],"availability":"unavailable"})
+        json!({"checks":[],"omitted_checks":0})
     }
 }
 
@@ -55,24 +55,22 @@ impl<T: ReadTransport> PullRequestSource for GitHubReader<T> {
         repository: &str,
         evidence: &PullRequestEvidence,
     ) -> serde_json::Value {
-        use pip_github::CheckConclusion as C;
-        let failed = evidence
+        let mut failed = evidence
             .check_runs
             .iter()
             .filter(|check| {
-                matches!(
-                    check.conclusion,
-                    Some(
-                        C::ActionRequired
-                            | C::Cancelled
-                            | C::Failure
-                            | C::StartupFailure
-                            | C::Stale
-                            | C::TimedOut
-                    )
-                )
+                check
+                    .conclusion
+                    .is_some_and(pip_github::CheckConclusion::is_failure)
             })
             .collect::<Vec<_>>();
+        // Spend the bounded request budget on usable Actions evidence first.
+        failed.sort_by_key(|check| {
+            (
+                !check.has_actions_job(owner, repository),
+                std::cmp::Reverse(check.id),
+            )
+        });
         let checks = failed.iter().take(4).map(|check| {
             self.read_check_failure(owner, repository, check.id, &evidence.pull_request.head_sha)
                 .unwrap_or_else(|_| json!({"check_id":check.id,"name":check.name,"availability":"unavailable","reason":"Log inaccessible, oversized, unsupported, or binding validation failed"}))
