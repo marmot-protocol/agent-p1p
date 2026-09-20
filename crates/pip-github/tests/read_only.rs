@@ -166,7 +166,7 @@ fn intake_read_uses_numeric_identity_authentication_and_bounded_pagination() {
         r#"{"id":984321,"full_name":"marmot-protocol/mdk","default_branch":"main"}"#,
     ));
     transport.push(response(
-        r#"{"id":555,"number":1240,"state":"open","pull_request":null,"labels":[{"name":"bug"},{"name":"pip-ok"}],"user":{"id":1000},"title":"Fix exact-head race","body":"Original issue body","created_at":"2026-08-19T00:00:00Z","updated_at":"2026-08-20T00:00:00Z"}"#,
+        r#"{"id":555,"number":1240,"state":"open","pull_request":null,"assignees":[],"labels":[{"name":"bug"},{"name":"pip-ok"}],"user":{"id":1000},"title":"Fix exact-head race","body":"Original issue body","created_at":"2026-08-19T00:00:00Z","updated_at":"2026-08-20T00:00:00Z"}"#,
     ));
     let mut first_events = response(
         r#"[{"id":1,"event":"labeled","actor":{"id":1001},"label":{"name":"pip-ok"},"created_at":"2026-08-20T00:00:00Z"}]"#,
@@ -206,10 +206,143 @@ fn intake_read_uses_numeric_identity_authentication_and_bounded_pagination() {
 }
 
 #[test]
+fn assignment_refuses_other_owners_and_unconfirmed_or_changed_responses() {
+    let expected = pip_github::IssueSnapshot {
+        id: 555,
+        number: 42,
+        open: true,
+        is_pull_request: false,
+        labels: ["pip-ok".into()].into(),
+        assignee_ids: Default::default(),
+    };
+    let unassigned = serde_json::json!({"id":555,"number":42,"state":"open",
+        "labels":[{"name":"pip-ok"}],"assignees":[]});
+    for after_write in [false, true] {
+        for changed in [
+            serde_json::json!({"assignees":[{"id":99}]}),
+            serde_json::json!({"assignees":[{"id":88},{"id":99}]}),
+            serde_json::json!({"state":"closed"}),
+            serde_json::json!({"labels":[]}),
+            serde_json::json!({"id":556}),
+            serde_json::json!({"number":43}),
+            serde_json::json!({"assignees":[{"id":0}]}),
+            serde_json::json!({"assignees":null}),
+        ] {
+            let transport = FakeTransport::default();
+            let mut observed = unassigned.clone();
+            for (key, value) in changed.as_object().unwrap() {
+                observed[key] = value.clone();
+            }
+            if after_write {
+                transport.push(response(&unassigned.to_string()));
+                transport.push(response(r#"{"id":88,"login":"pip"}"#));
+            }
+            transport.push(response(&observed.to_string()));
+            assert!(
+                reader(transport.clone())
+                    .ensure_issue_assignment("org", "repo", &expected, 88)
+                    .is_err()
+            );
+            assert_eq!(
+                transport
+                    .requests
+                    .borrow()
+                    .iter()
+                    .filter(|r| r.method == "POST")
+                    .count(),
+                usize::from(after_write)
+            );
+        }
+    }
+    // GitHub may return 2xx without assigning an ineligible actor.
+    let transport = FakeTransport::default();
+    transport.push(response(&unassigned.to_string()));
+    transport.push(response(r#"{"id":88,"login":"pip"}"#));
+    transport.push(response(&unassigned.to_string()));
+    assert!(
+        reader(transport)
+            .ensure_issue_assignment("org", "repo", &expected, 88)
+            .is_err()
+    );
+}
+
+#[test]
+fn missing_or_malformed_assignees_are_not_treated_as_unassigned() {
+    for assignees in [
+        None,
+        Some(serde_json::json!(null)),
+        Some(serde_json::json!([{"id":0}])),
+        Some(serde_json::json!([{"id":99},{"id":99}])),
+    ] {
+        let transport = FakeTransport::default();
+        let mut issue =
+            serde_json::json!({"id":555,"number":42,"state":"open","labels":[{"name":"pip-ok"}]});
+        if let Some(assignees) = assignees {
+            issue["assignees"] = assignees;
+        }
+        transport.push(response(&serde_json::json!([issue]).to_string()));
+        assert!(
+            reader(transport)
+                .discover_open_issues("org", "repo", "pip-ok")
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn assignment_is_additive_verified_and_retryable() {
+    let transport = FakeTransport::default();
+    let unassigned =
+        r#"{"id":555,"number":42,"state":"open","labels":[{"name":"pip-ok"}],"assignees":[]}"#;
+    let assigned = unassigned.replace("\"assignees\":[]", "\"assignees\":[{\"id\":88}]");
+    transport.push(response(&format!("[{unassigned}]")));
+    let client = reader(transport.clone());
+    let expected = client
+        .discover_open_issues("org", "repo", "pip-ok")
+        .unwrap()
+        .remove(0);
+    transport.push(response(unassigned));
+    transport.push(response(r#"{"id":88,"login":"pip-renamed"}"#));
+    transport.push(response(&assigned));
+    let claimed = client
+        .ensure_issue_assignment("org", "repo", &expected, 88)
+        .unwrap();
+    assert_eq!(claimed.assignee_ids, [88].into());
+    transport.push(response(&assigned));
+    assert_eq!(
+        client
+            .ensure_issue_assignment("org", "repo", &expected, 88)
+            .unwrap(),
+        claimed
+    );
+    let requests = transport.requests.borrow();
+    let writes: Vec<_> = requests.iter().filter(|r| r.method == "POST").collect();
+    assert_eq!(writes.len(), 1);
+    assert!(writes[0].url.ends_with("/issues/42/assignees"));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&writes[0].body).unwrap(),
+        serde_json::json!({"assignees":["pip-renamed"]})
+    );
+}
+
+#[test]
+fn discovery_retains_numeric_issue_assignees() {
+    let transport = FakeTransport::default();
+    transport.push(response(r#"[{"id":555,"number":42,"state":"open","labels":[{"name":"pip-ok"}],"assignees":[{"id":99,"login":"other-person"}]}]"#));
+    let issues = reader(transport)
+        .discover_open_issues("org", "repo", "pip-ok")
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&issues[0]).unwrap()["assignee_ids"],
+        serde_json::json!([99])
+    );
+}
+
+#[test]
 fn generic_intake_discovery_lists_labeled_issues_without_a_canary_constant() {
     let transport = FakeTransport::default();
     transport.push(response(
-        r#"[{"id":555,"number":1240,"state":"open","pull_request":null,"labels":[{"name":"pip-ok"}]},{"id":556,"number":1241,"state":"open","pull_request":{"url":"x"},"labels":[{"name":"pip-ok"}]}]"#,
+        r#"[{"id":555,"number":1240,"state":"open","pull_request":null,"assignees":[],"labels":[{"name":"pip-ok"}]},{"id":556,"number":1241,"state":"open","pull_request":{"url":"x"},"assignees":[],"labels":[{"name":"pip-ok"}]}]"#,
     ));
     let issues = reader(transport.clone())
         .discover_open_issues("marmot-protocol", "mdk", "pip-ok")
@@ -264,7 +397,7 @@ fn pagination_cannot_send_authorization_to_another_origin() {
         r#"{"id":984321,"full_name":"owner/repo","default_branch":"main"}"#,
     ));
     transport.push(response(
-        r#"{"id":555,"number":1,"state":"open","labels":[],"user":{"id":1000},"title":"Issue","body":null,"created_at":"2026-08-19T00:00:00Z","updated_at":"2026-08-20T00:00:00Z"}"#,
+        r#"{"id":555,"number":1,"state":"open","assignees":[],"labels":[],"user":{"id":1000},"title":"Issue","body":null,"created_at":"2026-08-19T00:00:00Z","updated_at":"2026-08-20T00:00:00Z"}"#,
     ));
     let mut events = response("[]");
     events.headers.insert(
@@ -287,7 +420,7 @@ fn pagination_limit_blocks_unbounded_history() {
         r#"{"id":984321,"full_name":"owner/repo","default_branch":"main"}"#,
     ));
     transport.push(response(
-        r#"{"id":555,"number":1,"state":"open","labels":[],"user":{"id":1000},"title":"Issue","body":null,"created_at":"2026-08-19T00:00:00Z","updated_at":"2026-08-20T00:00:00Z"}"#,
+        r#"{"id":555,"number":1,"state":"open","assignees":[],"labels":[],"user":{"id":1000},"title":"Issue","body":null,"created_at":"2026-08-19T00:00:00Z","updated_at":"2026-08-20T00:00:00Z"}"#,
     ));
     for page in 1..=3 {
         let mut events = response("[]");

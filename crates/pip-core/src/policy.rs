@@ -26,6 +26,7 @@ pub struct IssueObservation {
     pub excluded: bool,
     pub held: bool,
     pub already_owned: bool,
+    pub assigned_to_other: bool,
     pub repository_active_cases: u32,
     pub global_active_cases: u32,
 }
@@ -43,12 +44,13 @@ pub enum IntakeBlocker {
     Excluded,
     Held,
     AlreadyOwned,
+    AssignedToOther,
     RepositoryLimitReached,
     GlobalLimitReached,
 }
 
 impl IntakeBlocker {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::IntakeDisabled,
         Self::GlobalPaused,
         Self::RepositoryPaused,
@@ -60,6 +62,7 @@ impl IntakeBlocker {
         Self::Excluded,
         Self::Held,
         Self::AlreadyOwned,
+        Self::AssignedToOther,
         Self::RepositoryLimitReached,
         Self::GlobalLimitReached,
     ];
@@ -79,6 +82,7 @@ impl fmt::Display for IntakeBlocker {
             Self::Excluded => "EXCLUDED",
             Self::Held => "HELD",
             Self::AlreadyOwned => "ALREADY_OWNED",
+            Self::AssignedToOther => "ASSIGNED_TO_OTHER",
             Self::RepositoryLimitReached => "REPOSITORY_LIMIT_REACHED",
             Self::GlobalLimitReached => "GLOBAL_LIMIT_REACHED",
         })
@@ -118,6 +122,10 @@ pub fn evaluate_intake(policy: &IntakePolicy, observation: &IssueObservation) ->
     block_if(observation.excluded, IntakeBlocker::Excluded);
     block_if(observation.held, IntakeBlocker::Held);
     block_if(observation.already_owned, IntakeBlocker::AlreadyOwned);
+    block_if(
+        observation.assigned_to_other,
+        IntakeBlocker::AssignedToOther,
+    );
     block_if(
         observation.repository_active_cases >= policy.repository_active_limit.get(),
         IntakeBlocker::RepositoryLimitReached,

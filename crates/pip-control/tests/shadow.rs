@@ -76,6 +76,7 @@ fn paused_shadow_reconciliation_is_deterministic_and_never_mutates() {
 
 fn issue() -> IssueSnapshot {
     IssueSnapshot {
+        assignee_ids: BTreeSet::new(),
         id: 555,
         number: 1240,
         open: true,

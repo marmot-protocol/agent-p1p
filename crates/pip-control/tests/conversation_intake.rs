@@ -542,6 +542,7 @@ impl IntakeSource for Source {
                 default_branch: "master".into(),
             },
             issue: IssueSnapshot {
+                assignee_ids: Default::default(),
                 id: 123,
                 number: 42,
                 open: true,

@@ -78,6 +78,7 @@ fn evaluate(value: Value) -> IntakeDecision {
         global_active_limit: NonZeroU32::new(input.policy.global_active_limit).unwrap(),
     };
     let observation = IssueObservation {
+        assigned_to_other: false,
         open: input.observation.open,
         is_pull_request: input.observation.is_pull_request,
         labels: input

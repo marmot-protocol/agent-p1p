@@ -318,7 +318,29 @@ that excerpt explicitly with its byte count and digest; do not discard the
 comment or block the spool merely because GitHub supplied a large diff hunk.
 
 Eligibility checks current label, trusted numeric actor, open issue/repository
-identity, exclusions, pause and capacity limits. Label removal and takeover stop
+identity, assignees, exclusions, pause and capacity limits. Any assignee other
+than the policy's numeric automation actor blocks admission, including mixed
+human/Pip assignments. Unassigned issues and issues assigned only to Pip may be
+eligible. Only after all admission checks pass, active intake re-reads the issue,
+adds Pip using GitHub's additive assignee endpoint if needed, and verifies the
+returned assignment before creating a case or planner effect. It never replaces
+or removes another assignee. Missing/malformed assignee evidence, API failures,
+ignored assignments and conflicting reads fail closed. Shadow intake stays
+read-only, and capacity-waiting candidates are not assigned in advance.
+
+The verified assignment is retained in the authorization event's issue context.
+If a response or ledger write is interrupted, a later intake can confirm Pip's
+existing assignment and finish admission without a duplicate assignment or case;
+assignment alone never authorizes work without the trusted label and other gates.
+GitHub does not provide an atomic unassigned-only claim: a concurrent human
+assignment is never removed, and subsequent authorization checks hold further
+work/publication if another assignee appears. This hold preserves history and
+budgets and clears when the conflicting assignment is removed; it does not
+silently discard the case or cancel an already executing model. Existing cases
+are not bulk-assigned during deployment; the new admission requirement applies
+when taking or reauthorizing an issue.
+
+Label removal and takeover stop
 new work and downstream publication; do not promise instant termination of an
 already executing model. Replayed deliveries do not create duplicate cases.
 
