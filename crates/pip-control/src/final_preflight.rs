@@ -191,24 +191,26 @@ pub fn reconcile_final_preflight_once<'a, S: FinalPreflightSource>(
         store.release_effect(&claimed.effect_id, owner)?;
         return Ok(FinalPreflightCycle::AuthorizationBlocked);
     }
-    let blockers = match final_gate_blockers(store, &case, policy, &evidence, &threads, Some(true))
-    {
-        Ok(blockers) => blockers,
-        Err(error) => {
-            store.release_effect(&claimed.effect_id, owner)?;
-            return Err(error);
-        }
-    };
+    let mut blockers =
+        match final_gate_blockers(store, &case, policy, &evidence, &threads, Some(true)) {
+            Ok(blockers) => blockers,
+            Err(error) => {
+                store.release_effect(&claimed.effect_id, owner)?;
+                return Err(error);
+            }
+        };
+    blockers.sort();
     if !blockers.is_empty() {
-        // Only review feedback can authorize this bounded follow-up. Do not
-        // turn CI, ownership, authorization or head failures into builder work.
-        if blockers
+        // Review feedback and missing builder resolution records require work,
+        // not passive waiting. Do not turn CI, ownership, authorization or head
+        // failures into builder work.
+        if blockers.iter().all(|blocker| {
+            blocker.starts_with("UNRESOLVED_REVIEW_THREAD:")
+                || blocker.starts_with("MISSING_FINDING_RESOLUTION:")
+        }) && threads
             .iter()
-            .all(|blocker| blocker.starts_with("UNRESOLVED_REVIEW_THREAD:"))
-            && threads
-                .iter()
-                .filter(|thread| !thread.is_resolved)
-                .all(|thread| !thread.comments.is_empty())
+            .filter(|thread| !thread.is_resolved)
+            .all(|thread| !thread.comments.is_empty())
         {
             let mut feedback = threads
                 .iter()
@@ -227,6 +229,11 @@ pub fn reconcile_final_preflight_once<'a, S: FinalPreflightSource>(
                 .any(|record| {
                     record.kind == "GITHUB_REVIEW_FEEDBACK"
                         && record.payload["threads"] == json!(feedback)
+                        && (record.payload["blockers"] == json!(blockers)
+                            || (record.payload["blockers"].is_null()
+                                && blockers
+                                    .iter()
+                                    .all(|b| b.starts_with("UNRESOLVED_REVIEW_THREAD:"))))
                 });
             let mut command = workflow(
                 &case,
@@ -240,7 +247,7 @@ pub fn reconcile_final_preflight_once<'a, S: FinalPreflightSource>(
                     ),
                     kind: "GITHUB_REVIEW_FEEDBACK".into(),
                     source: format!("github-pr-{pr_number}"),
-                    payload: json!({"head_sha":head_sha,"pull_request_number":pr_number,"threads":feedback}),
+                    payload: json!({"head_sha":head_sha,"pull_request_number":pr_number,"threads":feedback,"blockers":blockers}),
                 },
             )?;
             command.event = if repeated {
@@ -251,7 +258,7 @@ pub fn reconcile_final_preflight_once<'a, S: FinalPreflightSource>(
             command.event_payload = json!({
                 "reason": if repeated { "REVIEW_FEEDBACK_ALREADY_ATTEMPTED" } else { "UNRESOLVED_REVIEW_FEEDBACK" },
                 "head_sha":head_sha,"pull_request_number":pr_number,"blockers":blockers,
-                "summary": if repeated { "Review feedback remains unresolved after a builder pass; human review is required." } else { "Assess the unresolved review threads and reviewer suggestions; address useful in-scope changes and explain any deferrals." },
+                "summary": if repeated { "Review feedback remains unresolved after a builder pass; human review is required." } else { "Assess unresolved review threads and missing finding-resolution records. Repair in-scope defects, explicitly record each historical blocking finding's resolution against the resulting source head with test evidence, and explain deferred suggestions. Fresh exact-head review and origin confirmation remain required." },
             });
             LedgerController::apply(store, &policy.case_policy(), &command)?;
             return Ok(FinalPreflightCycle::FeedbackRouted {

@@ -27,6 +27,20 @@ fn fixture_with_hold(
     PublicationRetryRequest,
     u64,
 ) {
+    fixture_with_stage(builder_blocked, "REVIEWING")
+}
+
+fn fixture_with_stage(
+    builder_blocked: bool,
+    review_state: &str,
+) -> (
+    tempfile::TempDir,
+    Store,
+    RepositoryPolicy,
+    RepositoryPolicy,
+    PublicationRetryRequest,
+    u64,
+) {
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::open(dir.path().join("ledger.db")).unwrap();
     let mut paused = load_repository_policy(include_bytes!(
@@ -68,7 +82,7 @@ fn fixture_with_hold(
         .unwrap();
     for (revision, state, event, role) in [
         (1, "READY_TO_BUILD", "PROCEED", "planner"),
-        (2, "REVIEWING", "CI_ACCEPTED", "builder"),
+        (2, review_state, "CI_ACCEPTED", "builder"),
     ] {
         store
             .apply_transition(
@@ -152,6 +166,61 @@ fn fixture_with_hold(
             .into(),
     };
     (dir, store, paused, active, request, now)
+}
+
+#[test]
+fn elapsed_final_review_can_recover_after_operator_repairs_routing() {
+    let (_dir, mut store, paused, _, request, now) = fixture_with_stage(false, "FINAL_REVIEW");
+    let before = store.immutable_history_for_case(CASE).unwrap();
+    assert_eq!(
+        authorize_infrastructure_recovery(&mut store, &paused, &request, now + 10, 0).unwrap(),
+        ApplyResult::Applied
+    );
+    let after = store.immutable_history_for_case(CASE).unwrap();
+    assert_eq!(
+        &after.events[..before.events.len()],
+        before.events.as_slice()
+    );
+    assert_eq!(before.runs, after.runs);
+    assert_eq!(store.case(CASE).unwrap().unwrap().state, "REMEDIATING");
+}
+
+#[test]
+fn repeated_final_feedback_is_not_infrastructure_recoverable() {
+    let (_dir, mut store, paused, _, mut request, now) = fixture_with_stage(false, "FINAL_REVIEW");
+    for (revision, state, event) in [
+        (4, "FINAL_REVIEW", "FIXTURE_STATE"),
+        (5, "ESCALATED", "REVIEW_FEEDBACK_ALREADY_ATTEMPTED"),
+    ] {
+        store
+            .apply_transition(
+                &TransitionInput {
+                    case_key: CASE.into(),
+                    expected_revision: revision,
+                    next_state: state.into(),
+                    remediation_round: 0,
+                    plan_version: 1,
+                    pr_number: Some(77),
+                    head_sha: Some("b".repeat(40)),
+                    observed_at: now,
+                    event: EventInput {
+                        event_id: event.into(),
+                        event_type: event.into(),
+                        payload: json!({"bound":"ELAPSED_TIME"}),
+                    },
+                    run: None,
+                    evidence: vec![],
+                    findings: vec![],
+                    effects: vec![],
+                },
+                None,
+            )
+            .unwrap();
+    }
+    request.expected_revision = 6;
+    let before = store.immutable_history_for_case(CASE).unwrap();
+    assert!(authorize_infrastructure_recovery(&mut store, &paused, &request, now + 10, 0).is_err());
+    assert_eq!(store.immutable_history_for_case(CASE).unwrap(), before);
 }
 
 #[test]

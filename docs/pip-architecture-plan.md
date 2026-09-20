@@ -66,6 +66,10 @@ lifecycle boundary before use.
    remediation occurred, returning worthwhile in-scope changes to the existing
    build loop. Suggestions alone do not force a new round or expand authority.
 9. Run a fresh final review of the issue, plan, implementation and review history.
+   Missing builder finding-resolution records are actionable feedback, not a
+   passive wait: route one bounded builder pass with the missing IDs and any
+   unresolved threads. Ownership, exact-head CI, ledger approvals and origin
+   confirmations still gate that route. Identical unaddressed feedback escalates.
 10. Revalidate authorization, exact-head CI/reviews and final acceptance; mark the
     draft PR ready for review and publish a human-held readiness recommendation.
     A person reviews and merges. Promotion and notification retry idempotently;

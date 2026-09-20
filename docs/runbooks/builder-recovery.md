@@ -112,6 +112,11 @@ workflow behavior.
 
 ## Recover review or remediation infrastructure
 
+An elapsed-time escalation from `FINAL_REVIEW` can use the same explicit,
+root-authorized infrastructure recovery as `REVIEWING`, after repairing the
+cause. It preserves history and spent budgets and grants one bounded work window;
+it does not waive finding resolutions, CI, or reviewer confirmation.
+
 For a historical builder blocked on stale, in-progress CI evidence, inspect the
 now-completed checks before recovery. The CI barrier waits for all observed check
 runs from any app, not just the configured required contexts. This same barrier
@@ -139,7 +144,7 @@ Supply `--policy`, `--database`, `--direct-queue`, `--case`, `--expected-revisio
 `--expected-head`, `--request-id`, and a bounded human `--reason` explaining the
 repair and required reconciliation. Reuse the request ID after an uncertain response.
 
-An elapsed-time escalation directly from `REVIEWING`, or a builder's explicit
+An elapsed-time escalation directly from `REVIEWING` or `FINAL_REVIEW`, or a builder's explicit
 `BLOCKED` result directly from `REMEDIATING`, with retained plan, build, PR and
 exact head, is eligible. For a blocked builder, the operator must first inspect
 the result and repair the infrastructure cause; a dependency/scope hold is not
