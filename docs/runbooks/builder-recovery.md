@@ -112,6 +112,11 @@ workflow behavior.
 
 ## Recover review or remediation infrastructure
 
+An elapsed-time escalation from `FINAL_REVIEW` can use the same explicit,
+root-authorized infrastructure recovery as `REVIEWING`, after repairing the
+cause. It preserves history and spent budgets and grants one bounded work window;
+it does not waive finding resolutions, CI, or reviewer confirmation.
+
 For a historical builder blocked on stale, in-progress CI evidence, inspect the
 now-completed checks before recovery. The CI barrier waits for all observed check
 runs from any app, not just the configured required contexts. This same barrier

@@ -40,7 +40,7 @@ pub(crate) fn validate(
         "SELECT EXISTS(SELECT 1 FROM events WHERE case_key=?1 AND state_revision=?2
          AND observed_at<=?3 AND (
            (event_type='OPERATIONAL_BOUND_REACHED' AND next_state='ESCALATED'
-            AND previous_state='REVIEWING'
+            AND previous_state IN ('REVIEWING','FINAL_REVIEW')
             AND json_extract(payload_json,'$.bound')='ELAPSED_TIME')
            OR (event_type='BLOCKED' AND next_state='BLOCKED'
                AND previous_state='REMEDIATING'

@@ -27,6 +27,20 @@ fn fixture_with_hold(
     PublicationRetryRequest,
     u64,
 ) {
+    fixture_with_stage(builder_blocked, "REVIEWING")
+}
+
+fn fixture_with_stage(
+    builder_blocked: bool,
+    review_state: &str,
+) -> (
+    tempfile::TempDir,
+    Store,
+    RepositoryPolicy,
+    RepositoryPolicy,
+    PublicationRetryRequest,
+    u64,
+) {
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::open(dir.path().join("ledger.db")).unwrap();
     let mut paused = load_repository_policy(include_bytes!(
@@ -68,7 +82,7 @@ fn fixture_with_hold(
         .unwrap();
     for (revision, state, event, role) in [
         (1, "READY_TO_BUILD", "PROCEED", "planner"),
-        (2, "REVIEWING", "CI_ACCEPTED", "builder"),
+        (2, review_state, "CI_ACCEPTED", "builder"),
     ] {
         store
             .apply_transition(
@@ -152,6 +166,23 @@ fn fixture_with_hold(
             .into(),
     };
     (dir, store, paused, active, request, now)
+}
+
+#[test]
+fn elapsed_final_review_can_recover_after_operator_repairs_routing() {
+    let (_dir, mut store, paused, _, request, now) = fixture_with_stage(false, "FINAL_REVIEW");
+    let before = store.immutable_history_for_case(CASE).unwrap();
+    assert_eq!(
+        authorize_infrastructure_recovery(&mut store, &paused, &request, now + 10, 0).unwrap(),
+        ApplyResult::Applied
+    );
+    let after = store.immutable_history_for_case(CASE).unwrap();
+    assert_eq!(
+        &after.events[..before.events.len()],
+        before.events.as_slice()
+    );
+    assert_eq!(before.runs, after.runs);
+    assert_eq!(store.case(CASE).unwrap().unwrap().state, "REMEDIATING");
 }
 
 #[test]

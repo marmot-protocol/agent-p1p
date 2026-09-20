@@ -369,6 +369,7 @@ fn signed_remediation_maps_source_resolutions_but_still_requires_fresh_origin_co
         &mut source,
         Some(signed_publication("builder-2", "c", "b")),
         false,
+        true,
     );
     let result =
         reconcile_final_preflight_once(&source, &policy, &mut store, 300, "preflight", 30, true)
@@ -390,6 +391,7 @@ fn signed_remediation_passes_with_fresh_published_head_origin_confirmation() {
         &mut source,
         Some(signed_publication("builder-2", "c", "b")),
         true,
+        true,
     );
     let result =
         reconcile_final_preflight_once(&source, &policy, &mut store, 300, "preflight", 30, true)
@@ -405,6 +407,71 @@ fn signed_publication(task: &str, source: &str, parent: &str) -> Value {
         "signing": {"source_head":source.repeat(40), "head":"d".repeat(40), "parent":parent.repeat(40),
             "tree":"e".repeat(40), "signer_fingerprint":"SHA256:fixture"}
     })
+}
+
+#[test]
+fn missing_resolution_records_route_to_builder_with_threads_without_waiving_gates() {
+    for extra_fault in [false, true] {
+        let policy = active_policy();
+        let mut source = accepted_source();
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = remediated_final_review_store_with_publication(
+            temp.path().join("ledger.db"),
+            &policy,
+            &mut source,
+            Some(signed_publication("builder-2", "c", "b")),
+            true,
+            false,
+        );
+        source.threads[0].is_resolved = false;
+        if extra_fault {
+            source.evidence.pull_request.head_sha = "e".repeat(40);
+        }
+        let before = store.case("repo:984321#1240@1").unwrap().unwrap();
+        let result = reconcile_final_preflight_once(
+            &source,
+            &policy,
+            &mut store,
+            300,
+            "preflight",
+            30,
+            true,
+        )
+        .unwrap();
+        let after = store.case("repo:984321#1240@1").unwrap().unwrap();
+        if extra_fault {
+            assert!(matches!(result, FinalPreflightCycle::Pending { .. }));
+            assert_eq!(before, after);
+        } else {
+            assert_eq!(after.state, "REMEDIATING", "{result:?}");
+            assert_eq!(after.remediation_round, before.remediation_round + 1);
+            let history = store.immutable_history_for_case(&after.case_key).unwrap();
+            let feedback = history
+                .evidence
+                .iter()
+                .find(|e| e.kind == "GITHUB_REVIEW_FEEDBACK")
+                .unwrap();
+            assert!(
+                feedback.payload["blockers"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("MISSING_FINDING_RESOLUTION:GENERAL-R1-001"))
+            );
+            assert_eq!(
+                reconcile_final_preflight_once(
+                    &source,
+                    &policy,
+                    &mut store,
+                    301,
+                    "preflight",
+                    30,
+                    true
+                )
+                .unwrap(),
+                FinalPreflightCycle::Idle
+            );
+        }
+    }
 }
 
 #[test]
@@ -850,7 +917,7 @@ fn remediated_final_review_store(
     policy: &pip_control::RepositoryPolicy,
     source: &mut FixtureSource,
 ) -> Store {
-    remediated_final_review_store_with_publication(path, policy, source, None, false)
+    remediated_final_review_store_with_publication(path, policy, source, None, false, true)
 }
 
 fn remediated_final_review_store_with_publication(
@@ -859,6 +926,7 @@ fn remediated_final_review_store_with_publication(
     source: &mut FixtureSource,
     publication: Option<Value>,
     confirm_resolution: bool,
+    include_resolutions: bool,
 ) -> Store {
     let mut store = planning_store(path);
     let mut results = results();
@@ -906,6 +974,9 @@ fn remediated_final_review_store_with_publication(
         "resolution_summary": "validated edge",
         "tests": ["edge regression"]
     }]);
+    if !include_resolutions {
+        builder["finding_resolutions"] = json!([]);
+    }
     let builder: WorkerResult = serde_json::from_value(builder).unwrap();
     ingest_worker_result(
         &mut store,
