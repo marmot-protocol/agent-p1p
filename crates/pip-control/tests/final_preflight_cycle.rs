@@ -411,7 +411,7 @@ fn signed_publication(task: &str, source: &str, parent: &str) -> Value {
 
 #[test]
 fn missing_resolution_records_route_to_builder_with_threads_without_waiving_gates() {
-    for extra_fault in [false, true] {
+    for (extra_fault, unresolved) in [(false, false), (false, true), (true, false), (true, true)] {
         let policy = active_policy();
         let mut source = accepted_source();
         let temp = tempfile::tempdir().unwrap();
@@ -423,7 +423,7 @@ fn missing_resolution_records_route_to_builder_with_threads_without_waiving_gate
             true,
             false,
         );
-        source.threads[0].is_resolved = false;
+        source.threads[0].is_resolved = !unresolved;
         if extra_fault {
             source.evidence.pull_request.head_sha = "e".repeat(40);
         }
@@ -624,15 +624,20 @@ fn review_feedback_routing_preserves_other_gates_and_requires_comment_content() 
 
 #[test]
 fn unchanged_feedback_or_exhausted_remediation_escalates_instead_of_building_again() {
-    for repeat in [true, false] {
+    for (repeat, legacy) in [(true, true), (true, false), (false, true)] {
         let directory = tempfile::tempdir().unwrap();
         let policy = active_policy();
         let mut source = accepted_source();
         source.threads[0].is_resolved = false;
+        if !legacy {
+            let mut other = source.threads[0].clone();
+            other.id = "ZZZ-second-thread".into();
+            source.threads.insert(0, other);
+        }
         let mut store = final_review_store(directory.path().join("ledger.db"), &policy, &source);
         let case = store.case("repo:984321#1240@1").unwrap().unwrap();
         // Seed a previous feedback pass, or the policy's exhausted round count.
-        let prior_feedback = EvidenceInput {
+        let mut prior_feedback = EvidenceInput {
             evidence_id: "previous-feedback".into(),
             kind: "GITHUB_REVIEW_FEEDBACK".into(),
             source: "github-pr-77".into(),
@@ -645,6 +650,26 @@ fn unchanged_feedback_or_exhausted_remediation_escalates_instead_of_building_aga
                 }],
             }),
         };
+        if !legacy {
+            let mut threads = source
+                .threads
+                .iter()
+                .map(|thread| {
+                    json!({
+                        "id":thread.id, "path":thread.path, "comments":thread.comments
+                    })
+                })
+                .collect::<Vec<_>>();
+            threads.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+            let mut blockers = source
+                .threads
+                .iter()
+                .map(|t| format!("UNRESOLVED_REVIEW_THREAD:{}", t.id))
+                .collect::<Vec<_>>();
+            blockers.sort();
+            prior_feedback.payload["threads"] = json!(threads);
+            prior_feedback.payload["blockers"] = json!(blockers);
+        }
         store
             .apply_transition(
                 &TransitionInput {

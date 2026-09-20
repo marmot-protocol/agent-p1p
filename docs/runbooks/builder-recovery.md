@@ -144,7 +144,7 @@ Supply `--policy`, `--database`, `--direct-queue`, `--case`, `--expected-revisio
 `--expected-head`, `--request-id`, and a bounded human `--reason` explaining the
 repair and required reconciliation. Reuse the request ID after an uncertain response.
 
-An elapsed-time escalation directly from `REVIEWING`, or a builder's explicit
+An elapsed-time escalation directly from `REVIEWING` or `FINAL_REVIEW`, or a builder's explicit
 `BLOCKED` result directly from `REMEDIATING`, with retained plan, build, PR and
 exact head, is eligible. For a blocked builder, the operator must first inspect
 the result and repair the infrastructure cause; a dependency/scope hold is not

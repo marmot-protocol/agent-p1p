@@ -191,18 +191,19 @@ pub fn reconcile_final_preflight_once<'a, S: FinalPreflightSource>(
         store.release_effect(&claimed.effect_id, owner)?;
         return Ok(FinalPreflightCycle::AuthorizationBlocked);
     }
-    let blockers = match final_gate_blockers(store, &case, policy, &evidence, &threads, Some(true))
-    {
-        Ok(blockers) => blockers,
-        Err(error) => {
-            store.release_effect(&claimed.effect_id, owner)?;
-            return Err(error);
-        }
-    };
+    let mut blockers =
+        match final_gate_blockers(store, &case, policy, &evidence, &threads, Some(true)) {
+            Ok(blockers) => blockers,
+            Err(error) => {
+                store.release_effect(&claimed.effect_id, owner)?;
+                return Err(error);
+            }
+        };
+    blockers.sort();
     if !blockers.is_empty() {
         // Review feedback and missing builder resolution records require work,
-        // not passive waiting. Do not
-        // turn CI, ownership, authorization or head failures into builder work.
+        // not passive waiting. Do not turn CI, ownership, authorization or head
+        // failures into builder work.
         if blockers.iter().all(|blocker| {
             blocker.starts_with("UNRESOLVED_REVIEW_THREAD:")
                 || blocker.starts_with("MISSING_FINDING_RESOLUTION:")
