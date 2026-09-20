@@ -165,6 +165,14 @@ fn observe_authorization<S: IntakeSource>(
         if evidence.issue.is_pull_request {
             blockers.push("ISSUE_BECAME_PULL_REQUEST".into());
         }
+        if evidence
+            .issue
+            .assigned_to_other(policy.github.automation_actor_id)
+        {
+            // A human assignment is an ownership hold, not evidence that the
+            // trusted label was withdrawn. Preserve the case and spent budgets.
+            blockers.push("ASSIGNED_TO_OTHER".into());
+        }
         if policy
             .intake
             .excluded_issue_numbers

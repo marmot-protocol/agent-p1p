@@ -1,4 +1,4 @@
-//! Token-free, non-dispatching reconciliation over read-only evidence.
+//! Non-dispatching shadow reconciliation; shared intake evidence interface.
 
 use std::fmt;
 
@@ -9,6 +9,16 @@ use serde::Serialize;
 use crate::RepositoryPolicy;
 
 pub trait IntakeSource {
+    /// Active intake only; shadow reconciliation never calls this mutation.
+    fn claim_issue(
+        &self,
+        _owner: &str,
+        _repository: &str,
+        _expected: &IssueSnapshot,
+        _actor_id: u64,
+    ) -> Result<IssueSnapshot, GitHubError> {
+        Err(GitHubError::MutationDisabled)
+    }
     fn actor_login(&self, _id: u64) -> Result<String, GitHubError> {
         Err(GitHubError::InvalidIdentity)
     }
@@ -39,6 +49,15 @@ pub trait IntakeSource {
 }
 
 impl<T: ReadTransport> IntakeSource for GitHubReader<T> {
+    fn claim_issue(
+        &self,
+        owner: &str,
+        repository: &str,
+        expected: &IssueSnapshot,
+        actor_id: u64,
+    ) -> Result<IssueSnapshot, GitHubError> {
+        self.ensure_issue_assignment(owner, repository, expected, actor_id)
+    }
     fn actor_login(&self, id: u64) -> Result<String, GitHubError> {
         self.read_actor_login(id)
     }
@@ -153,7 +172,7 @@ pub fn reconcile_read_only<S: IntakeSource>(
         {
             return Err(ShadowError::RepositoryDrift);
         }
-        if evidence.issue != issue {
+        if !evidence.issue.matches_discovery(&issue) {
             return Err(ShadowError::DiscoveryDrift);
         }
         let latest_label_actor_id = evidence
@@ -164,6 +183,9 @@ pub fn reconcile_read_only<S: IntakeSource>(
             .filter(|event| event.labeled)
             .map(|event| event.actor_id);
         let observation = IssueObservation {
+            assigned_to_other: evidence
+                .issue
+                .assigned_to_other(policy.github.automation_actor_id),
             open: evidence.issue.open,
             is_pull_request: evidence.issue.is_pull_request,
             labels: evidence.issue.labels.clone(),

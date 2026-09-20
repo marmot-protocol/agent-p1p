@@ -88,6 +88,7 @@ impl IntakeSource for FixtureSource {
 
 fn issue_snapshot(authorized: bool) -> IssueSnapshot {
     IssueSnapshot {
+        assignee_ids: BTreeSet::new(),
         id: 555,
         number: 1240,
         open: authorized,

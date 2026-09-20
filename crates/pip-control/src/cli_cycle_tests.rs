@@ -124,7 +124,7 @@ impl pip_github::ReadTransport for OfflineGitHub {
             let body = if request.url == root {
                 json!({"id":policy.repository.id,"full_name":policy.repository.full_name(),"default_branch":policy.repository.default_branch})
             } else if request.url == format!("{root}/issues/78") {
-                json!({"id":78,"number":78,"state":"open","labels":[{"name":policy.intake.label}],
+                json!({"id":78,"number":78,"state":"open","assignees":[],"labels":[{"name":policy.intake.label}],
                     "user":{"id":1001},"title":"Healthy issue","body":"Fixture","created_at":"2026-09-07T00:00:00Z","updated_at":"2026-09-07T00:00:00Z"})
             } else if request.url == format!("{root}/issues/78/events?per_page=100&page=1") {
                 json!([{"id":1,"event":"labeled","actor":{"id":policy.intake.trusted_actor_ids.first().unwrap()},

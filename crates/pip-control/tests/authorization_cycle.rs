@@ -44,6 +44,34 @@ impl IntakeSource for FakeSource {
 }
 
 #[test]
+fn assignment_to_another_person_blocks_active_work_without_rewriting_history() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    let policy = active_policy();
+    seed_case_with_dispatch(&mut store, 1240, policy.revision);
+    let before = store
+        .immutable_history_for_case("repo:1055628515#1240@2")
+        .unwrap();
+    let source = FakeSource::default();
+    let mut issue = authorized_snapshot(1240);
+    issue.issue.assignee_ids = [202880, 99].into();
+    source.snapshots.borrow_mut().insert(1240, issue);
+    let result = reconcile_active_authorization(&source, &policy, &mut store, 100).unwrap();
+    assert!(!result.is_authorized());
+    assert!(
+        serde_json::to_string(&result)
+            .unwrap()
+            .contains("ASSIGNED_TO_OTHER")
+    );
+    assert_eq!(
+        store
+            .immutable_history_for_case("repo:1055628515#1240@2")
+            .unwrap(),
+        before
+    );
+}
+
+#[test]
 fn case_scope_does_not_fetch_or_block_on_a_peer_issue() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
@@ -368,6 +396,7 @@ fn authorized_snapshot(issue_number: u64) -> IntakeSnapshot {
             default_branch: "master".into(),
         },
         issue: IssueSnapshot {
+            assignee_ids: BTreeSet::new(),
             id: 5_000_000_000 + issue_number,
             number: issue_number,
             open: true,

@@ -143,12 +143,13 @@ pub fn reconcile_intake_with_quiescence<S: IntakeSource>(
         {
             return Err(ActiveIntakeError::Evidence(ShadowError::RepositoryDrift));
         }
-        if evidence.issue != issue {
+        if !evidence.issue.matches_discovery(&issue) {
             return Err(ActiveIntakeError::Evidence(ShadowError::DiscoveryDrift));
         }
         validated_evidence.push(evidence);
     }
     reconcile_validated_evidence(
+        source,
         policy,
         store,
         observed_at,
@@ -261,6 +262,7 @@ pub fn ingest_webhook<S: IntakeSource>(
         return Err(ActiveIntakeError::Evidence(ShadowError::DiscoveryDrift));
     }
     let report = reconcile_validated_evidence(
+        source,
         policy,
         store,
         observed_at,
@@ -315,7 +317,8 @@ struct WebhookSender {
     id: u64,
 }
 
-fn reconcile_validated_evidence(
+fn reconcile_validated_evidence<S: IntakeSource>(
+    source: &S,
     policy: &RepositoryPolicy,
     store: &mut Store,
     observed_at: u64,
@@ -354,7 +357,7 @@ fn reconcile_validated_evidence(
     })?;
     let mut mutation_count = u64::from(policy_result == ApplyResult::Applied);
     let mut candidates = Vec::with_capacity(validated_evidence.len());
-    for evidence in validated_evidence {
+    for mut evidence in validated_evidence {
         let issue = evidence.issue.clone();
         let latest_event = evidence
             .label_events
@@ -408,6 +411,9 @@ fn reconcile_validated_evidence(
             excluded: policy.intake.excluded_issue_numbers.contains(&issue.number),
             held: policy.intake.held_issue_numbers.contains(&issue.number),
             already_owned: existing.is_some() && !reauthorize,
+            assigned_to_other: evidence
+                .issue
+                .assigned_to_other(policy.github.automation_actor_id),
             repository_active_cases: u32::try_from(repository_active_cases).unwrap_or(u32::MAX),
             global_active_cases: u32::try_from(global_active_cases).unwrap_or(u32::MAX),
         };
@@ -471,6 +477,46 @@ fn reconcile_validated_evidence(
                         "issue context exceeds worker evidence bound",
                     ));
                 }
+                // Claim only after authorization, capacity, quiescence and
+                // context bounds pass, while poll and webhook share admission
+                // exclusion. No case/planner effect exists until confirmed.
+                let claimed = policy
+                    .github
+                    .automation_actor_id
+                    .filter(|id| *id > 0)
+                    .ok_or(pip_github::GitHubError::InvalidIdentity)
+                    .and_then(|actor| {
+                        source.claim_issue(
+                            &policy.repository.owner,
+                            &policy.repository.name,
+                            &issue,
+                            actor,
+                        )
+                    });
+                let Ok(claimed) = claimed else {
+                    candidates.push(IntakeCandidateResult {
+                        issue_number: issue.number,
+                        issue_id: issue.id,
+                        decision: "INELIGIBLE".into(),
+                        blockers: vec!["ISSUE_ASSIGNMENT_UNCONFIRMED".into()],
+                        case_key: None,
+                    });
+                    continue;
+                };
+                let mut comparable = claimed.clone();
+                comparable.assignee_ids = issue.assignee_ids.clone();
+                if comparable != issue
+                    || claimed.assigned_to_other(policy.github.automation_actor_id)
+                    || !policy
+                        .github
+                        .automation_actor_id
+                        .is_some_and(|id| claimed.assignee_ids.contains(&id))
+                {
+                    return Err(ActiveIntakeError::InvalidIdentity);
+                }
+                evidence.issue = claimed;
+                let mut issue_context = issue_context;
+                issue_context["issue"] = json!(evidence.issue);
                 let label_event = latest_event
                     .filter(|event| event.labeled)
                     .ok_or(ActiveIntakeError::InvalidIdentity)?;

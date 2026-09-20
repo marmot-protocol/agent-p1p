@@ -1,8 +1,9 @@
-//! Read-only GitHub evidence adapter.
+//! GitHub evidence and narrowly scoped publication adapters.
 
 #![forbid(unsafe_code)]
 
 mod app_auth;
+mod assignment;
 mod ci_diagnostics;
 mod discussion;
 pub use discussion::DiscussionComment;
@@ -218,6 +219,26 @@ pub struct IssueSnapshot {
     pub open: bool,
     pub is_pull_request: bool,
     pub labels: BTreeSet<String>,
+    pub assignee_ids: BTreeSet<u64>,
+}
+
+impl IssueSnapshot {
+    /// Discovery is a candidate hint. Assignment changes between list and
+    /// detail reads use the fresher detail evidence, not a repository-wide error.
+    #[must_use]
+    pub fn matches_discovery(&self, discovery: &Self) -> bool {
+        self.id == discovery.id
+            && self.number == discovery.number
+            && self.open == discovery.open
+            && self.is_pull_request == discovery.is_pull_request
+            && self.labels == discovery.labels
+    }
+    #[must_use]
+    pub fn assigned_to_other(&self, automation_actor_id: Option<u64>) -> bool {
+        self.assignee_ids
+            .iter()
+            .any(|id| Some(*id) != automation_actor_id)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -560,6 +581,7 @@ struct IssueDto {
     #[serde(default)]
     pull_request: Option<Value>,
     labels: Vec<LabelDto>,
+    assignees: Vec<ActorDto>,
     #[serde(default)]
     user: Option<UserDto>,
     #[serde(default)]
@@ -575,6 +597,16 @@ struct IssueDto {
 #[derive(Deserialize)]
 struct ActorDto {
     id: u64,
+}
+
+impl IssueDto {
+    fn assignee_ids(&self) -> Result<BTreeSet<u64>, GitHubError> {
+        let ids: BTreeSet<_> = self.assignees.iter().map(|actor| actor.id).collect();
+        if ids.contains(&0) || ids.len() != self.assignees.len() {
+            return Err(GitHubError::InvalidIdentity);
+        }
+        Ok(ids)
+    }
 }
 
 #[derive(Deserialize)]
@@ -801,6 +833,7 @@ impl<T: ReadTransport> GitHubReader<T> {
         issues
             .into_iter()
             .map(|issue| {
+                let assignee_ids = issue.assignee_ids()?;
                 let labels = issue
                     .labels
                     .into_iter()
@@ -822,6 +855,7 @@ impl<T: ReadTransport> GitHubReader<T> {
                     open: true,
                     is_pull_request: issue.pull_request.is_some(),
                     labels,
+                    assignee_ids,
                 })
             })
             .collect()
@@ -849,6 +883,7 @@ impl<T: ReadTransport> GitHubReader<T> {
             return Err(GitHubError::InvalidIdentity);
         }
         let issue_dto: IssueDto = self.get_json(&format!("{root}/issues/{issue_number}"))?;
+        let assignee_ids = issue_dto.assignee_ids()?;
         if issue_dto.id == 0
             || issue_dto.number != issue_number
             || !matches!(issue_dto.state.as_str(), "open" | "closed")
@@ -934,6 +969,7 @@ impl<T: ReadTransport> GitHubReader<T> {
                 default_branch: repository_dto.default_branch,
             },
             issue: IssueSnapshot {
+                assignee_ids,
                 id: issue_dto.id,
                 number: issue_dto.number,
                 open: issue_dto.state == "open",
@@ -1270,9 +1306,13 @@ impl<T: ReadTransport> GitHubReader<T> {
     }
 
     fn graphql(&self, body: Vec<u8>) -> Result<ReadResponse, GitHubError> {
+        self.post_json("/graphql", body)
+    }
+
+    fn post_json(&self, path: &str, body: Vec<u8>) -> Result<ReadResponse, GitHubError> {
         let response = self.transport.post(ReadRequest {
             method: "POST",
-            url: format!("{}/graphql", self.base_url),
+            url: format!("{}{path}", self.base_url),
             headers: BTreeMap::from([
                 ("accept".into(), "application/vnd.github+json".into()),
                 ("authorization".into(), format!("Bearer {}", self.token)),

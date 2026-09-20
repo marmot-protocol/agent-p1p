@@ -22,6 +22,18 @@ struct FixtureSource {
 }
 
 impl IntakeSource for FixtureSource {
+    fn claim_issue(
+        &self,
+        _: &str,
+        _: &str,
+        expected: &IssueSnapshot,
+        actor: u64,
+    ) -> Result<IssueSnapshot, GitHubError> {
+        let mut snapshots = self.snapshots.borrow_mut();
+        let issue = &mut snapshots.get_mut(&expected.number).unwrap().issue;
+        issue.assignee_ids.insert(actor);
+        Ok(issue.clone())
+    }
     fn discover(
         &self,
         _owner: &str,
@@ -441,6 +453,7 @@ fn inactive_policy() -> RepositoryPolicy {
 
 fn source(fail: bool) -> FixtureSource {
     let issue = IssueSnapshot {
+        assignee_ids: BTreeSet::new(),
         id: 542,
         number: 42,
         open: true,

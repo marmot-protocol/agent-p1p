@@ -20,6 +20,137 @@ struct FixtureSource {
 }
 
 #[test]
+fn failed_assignment_does_not_admit_or_block_the_next_candidate() {
+    struct FailingClaim(FixtureSource);
+    impl IntakeSource for FailingClaim {
+        fn discover(
+            &self,
+            owner: &str,
+            repo: &str,
+            label: &str,
+        ) -> Result<Vec<IssueSnapshot>, GitHubError> {
+            self.0.discover(owner, repo, label)
+        }
+        fn intake(
+            &self,
+            owner: &str,
+            repo: &str,
+            issue: u64,
+        ) -> Result<IntakeSnapshot, GitHubError> {
+            self.0.intake(owner, repo, issue)
+        }
+        fn claim_issue(
+            &self,
+            owner: &str,
+            repo: &str,
+            issue: &IssueSnapshot,
+            actor: u64,
+        ) -> Result<IssueSnapshot, GitHubError> {
+            if issue.number == 42 {
+                return Err(GitHubError::HttpStatus(403));
+            }
+            self.0.claim_issue(owner, repo, issue, actor)
+        }
+    }
+    let directory = tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    let source = FailingClaim(source(&[42, 43, 44]));
+    let report = reconcile_intake(&source, &active_policy(1, 1), &mut store, 100, false).unwrap();
+    assert_eq!(
+        report.candidates[0].blockers,
+        ["ISSUE_ASSIGNMENT_UNCONFIRMED"]
+    );
+    assert_eq!(report.candidates[1].decision, "ELIGIBLE");
+    assert!(store.case("repo:1055628515#42@3").unwrap().is_none());
+    assert!(
+        source.0.snapshots.borrow()[&44]
+            .issue
+            .assignee_ids
+            .is_empty(),
+        "capacity waiting must not reserve an issue"
+    );
+}
+
+#[test]
+fn webhook_and_fresh_detail_read_respect_assignment_over_discovery() {
+    let directory = tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    let source = source(&[42]);
+    source
+        .snapshots
+        .borrow_mut()
+        .get_mut(&42)
+        .unwrap()
+        .issue
+        .assignee_ids
+        .insert(99);
+    let policy = active_policy(1, 1);
+    let report = reconcile_intake(&source, &policy, &mut store, 100, false).unwrap();
+    assert_eq!(report.candidates[0].blockers, ["ASSIGNED_TO_OTHER"]);
+    let payload = webhook_payload(42, "pip-ok", policy.repository.id);
+    let secret = b"webhook-secret";
+    let signature = signature(secret, &payload);
+    let report = ingest_webhook(
+        &source,
+        &policy,
+        &mut store,
+        WebhookEnvelope {
+            delivery_id: "assigned-event",
+            event_name: "issues",
+            signature: &signature,
+            payload: &payload,
+            received_at: 100,
+        },
+        secret,
+        101,
+        false,
+    )
+    .unwrap();
+    assert_eq!(report.candidate.unwrap().blockers, ["ASSIGNED_TO_OTHER"]);
+    assert!(store.status(101).unwrap().cases.is_empty());
+}
+
+#[test]
+fn admission_requires_confirmed_self_assignment() {
+    let directory = tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    let source = source(&[42]);
+    reconcile_intake(&source, &active_policy(1, 1), &mut store, 100, false).unwrap();
+    assert_eq!(
+        source.snapshots.borrow()[&42].issue.assignee_ids,
+        BTreeSet::from([202_880])
+    );
+    let history = store
+        .immutable_history_for_case("repo:1055628515#42@3")
+        .unwrap();
+    assert_eq!(
+        history.events[0].payload["issue_context"]["issue"]["assignee_ids"],
+        serde_json::json!([202_880])
+    );
+}
+
+#[test]
+fn another_assignee_blocks_intake_even_alongside_pip() {
+    for assignees in [BTreeSet::from([99]), BTreeSet::from([99, 202_880])] {
+        let directory = tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+        let mut source = source(&[42]);
+        source.discovered[0].assignee_ids = assignees.clone();
+        source
+            .snapshots
+            .borrow_mut()
+            .get_mut(&42)
+            .unwrap()
+            .issue
+            .assignee_ids = assignees;
+        let report =
+            reconcile_intake(&source, &active_policy(1, 1), &mut store, 100, false).unwrap();
+        assert_eq!(report.candidates[0].blockers, ["ASSIGNED_TO_OTHER"]);
+        assert!(store.status(100).unwrap().cases.is_empty());
+    }
+}
+
+#[test]
 fn human_review_ready_releases_admission_but_other_nonterminal_states_do_not() {
     for state in [
         "SHADOW_READY",
@@ -76,6 +207,15 @@ fn human_review_ready_releases_admission_but_other_nonterminal_states_do_not() {
 fn simultaneous_intake_respects_the_shared_issue_capacity() {
     struct ConcurrentSource<'a>(FixtureSource, &'a std::sync::Barrier);
     impl IntakeSource for ConcurrentSource<'_> {
+        fn claim_issue(
+            &self,
+            owner: &str,
+            repo: &str,
+            issue: &IssueSnapshot,
+            actor: u64,
+        ) -> Result<IssueSnapshot, GitHubError> {
+            self.0.claim_issue(owner, repo, issue, actor)
+        }
         fn discover(
             &self,
             owner: &str,
@@ -150,6 +290,19 @@ fn planning_lookahead_is_bounded_separately_from_total_issues() {
 }
 
 impl IntakeSource for FixtureSource {
+    fn claim_issue(
+        &self,
+        _: &str,
+        _: &str,
+        expected: &IssueSnapshot,
+        actor: u64,
+    ) -> Result<IssueSnapshot, GitHubError> {
+        let mut snapshots = self.snapshots.borrow_mut();
+        let issue = &mut snapshots.get_mut(&expected.number).unwrap().issue;
+        assert!(!issue.assigned_to_other(Some(actor)));
+        issue.assignee_ids.insert(actor);
+        Ok(issue.clone())
+    }
     fn discover(
         &self,
         _owner: &str,
@@ -861,6 +1014,7 @@ fn source(issue_numbers: &[u64]) -> FixtureSource {
 
 fn issue(number: u64) -> IssueSnapshot {
     IssueSnapshot {
+        assignee_ids: BTreeSet::new(),
         id: 500 + number,
         number,
         open: true,
