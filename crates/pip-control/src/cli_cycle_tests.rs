@@ -25,6 +25,28 @@ impl pip_hermes::CommandRunner for QueueSnapshot {
     }
 }
 
+struct MatureBoardSnapshot;
+
+impl pip_hermes::CommandRunner for MatureBoardSnapshot {
+    fn run(
+        &self,
+        spec: &pip_hermes::CommandSpec,
+    ) -> Result<pip_hermes::CommandOutput, pip_hermes::HermesError> {
+        if spec.max_output_bytes < 8 * 1024 * 1024 {
+            return Err(pip_hermes::HermesError::OutputTooLarge);
+        }
+        Ok(pip_hermes::CommandOutput {
+            status: 0,
+            stdout: serde_json::to_vec(&json!([
+                {"id":"previous-plan","title":"Plan","body":"{}","status":"archived"}
+            ]))
+            .unwrap(),
+            stderr: vec![],
+            timed_out: false,
+        })
+    }
+}
+
 fn queue_snapshot(tasks: Value) -> QueueSnapshot {
     QueueSnapshot(pip_hermes::CommandOutput {
         status: 0,
@@ -56,6 +78,16 @@ fn reauthorization_queue_accepts_archived_and_other_terminal_tasks() {
         "fixture-hermes",
         "fixture-board",
         &["removed-plan".into()]
+    ));
+}
+
+#[test]
+fn reauthorization_queue_supports_a_mature_bounded_board_snapshot() {
+    assert!(prior_tasks_quiescent(
+        MatureBoardSnapshot,
+        "fixture-hermes",
+        "fixture-board",
+        &["previous-plan".into()]
     ));
 }
 

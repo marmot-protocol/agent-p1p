@@ -1531,15 +1531,22 @@ fn prior_tasks_quiescent(
     board: &str,
     task_ids: &[String],
 ) -> bool {
-    pip_hermes::HermesReader::new(runner, hermes, Duration::from_secs(30), 4 * 1024 * 1024)
-        .and_then(|reader| reader.list_tasks(board))
-        .is_ok_and(|tasks| {
-            tasks
-                .iter()
-                .filter(|task| task_ids.contains(&task.id))
-                .all(|task| matches!(task.status.as_str(), "done" | "cancelled" | "archived"))
-        })
+    pip_hermes::HermesReader::new(
+        runner,
+        hermes,
+        Duration::from_secs(30),
+        HERMES_BOARD_SNAPSHOT_MAX_BYTES,
+    )
+    .and_then(|reader| reader.list_tasks(board))
+    .is_ok_and(|tasks| {
+        tasks
+            .iter()
+            .filter(|task| task_ids.contains(&task.id))
+            .all(|task| matches!(task.status.as_str(), "done" | "cancelled" | "archived"))
+    })
 }
+
+const HERMES_BOARD_SNAPSHOT_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 fn current_time() -> Result<u64, CliError> {
     SystemTime::now()
