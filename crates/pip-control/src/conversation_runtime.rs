@@ -73,7 +73,6 @@ pub fn reconcile_conversation_once<
         Duration::from_secs(20),
         4 * 1024 * 1024,
     )?;
-    let tasks = queue.list_tasks(&policy.board)?;
     // Slotted replies wait only for their own case. Unbound questions are read-only.
     let slotted = policy.execution_capacity.is_some();
     let case_key = message.input.case_key.as_deref();
@@ -86,23 +85,29 @@ pub fn reconcile_conversation_once<
     } else {
         store.status(now)?.direct_attempts_running > 0
     };
-    if direct_busy
-        || tasks.iter().any(|task| {
-            Some(&task.id) != message.task_id.as_ref()
-            && !matches!(task.status.as_str(), "done" | "cancelled" | "archived")
-            // A create with an uncertain response must still be reconciled.
-            && !(message.state == "CREATING" && task.body.contains(&key))
-            && (!slotted || native_conflicts(&task.body, case_key))
-        })
-    {
+    let native_busy = if slotted {
+        case_key
+            .map(|case_key| -> Result<bool> {
+                for projection in
+                    store.unconsumed_task_projections_in(policy.repository.id, Some(case_key))?
+                {
+                    if message.task_id.as_deref() == Some(projection.task_id.as_str()) {
+                        continue;
+                    }
+                    let task = queue.show_task(&policy.board, &projection.task_id)?;
+                    if !matches!(task.status.as_str(), "done" | "cancelled" | "archived") {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            })
+            .transpose()?
+            .unwrap_or(false)
+    } else {
+        false
+    };
+    if direct_busy || native_busy {
         return Ok(json!({"result":"waiting_for_workers","message_key":key}));
-    }
-    if let Some(id) = &message.task_id
-        && tasks
-            .iter()
-            .any(|t| &t.id == id && t.status != "done" && t.status != "cancelled")
-    {
-        return Ok(json!({"result":"waiting","message_key":key}));
     }
     let actor = policy
         .github
@@ -206,8 +211,11 @@ pub fn reconcile_conversation_once<
             return Err("discussion context exceeds bounded task size".into());
         }
         if store.reserve_conversation(&key, &serde_json::to_value(&spec)?)? {
+            // A newly granted durable reservation proves that no earlier create
+            // attempt exists for this immutable conversation. Avoid enumerating
+            // the growing historical board before the first bounded create.
             let (ProjectionResult::Created(id) | ProjectionResult::Existing(id)) =
-                projector.project(&spec, &tasks)?;
+                projector.project(&spec, &[])?;
             store.bind_conversation_task(&key, &id)?;
             return Ok(json!({"result":"queued","message_key":key,"task_id":id}));
         }
@@ -219,8 +227,18 @@ pub fn reconcile_conversation_once<
             .clone()
             .ok_or("missing frozen conversation task")?,
     )?;
+    // Only an interrupted create lacks a task id and requires a board-wide
+    // identity reconciliation. Normal queued and completed tasks are addressed
+    // directly by their durable id, so retained Hermes history cannot exhaust
+    // the controller's output bound.
+    let observed = if message.state == "CREATING" {
+        queue.list_tasks(&policy.board)?
+    } else {
+        Vec::new()
+    };
     let id = projector
-        .reconcile(&spec, &tasks)?
+        .reconcile(&spec, &observed)?
+        .or_else(|| message.task_id.clone())
         .ok_or("conversation task creation uncertain; operator recovery required")?;
     if message.state == "CREATING" {
         store.bind_conversation_task(&key, &id)?;
@@ -229,10 +247,18 @@ pub fn reconcile_conversation_once<
     if message.task_id.as_deref() != Some(&id) {
         return Err("conversation task binding changed".into());
     }
-    if tasks
-        .iter()
-        .any(|t| t.id == id && t.status != "done" && t.status != "cancelled")
+    let detail = queue.show_task_detail(&policy.board, &id)?;
+    if projector
+        .reconcile(&spec, std::slice::from_ref(&detail.task))?
+        .as_deref()
+        != Some(id.as_str())
     {
+        return Err("conversation task differs from frozen definition".into());
+    }
+    if !matches!(
+        detail.task.status.as_str(),
+        "done" | "cancelled" | "archived"
+    ) {
         return Ok(json!({"result":"waiting","message_key":key}));
     }
     if message.state == "QUEUED" {
@@ -281,19 +307,6 @@ pub fn reconcile_conversation_once<
     };
     store.finish_conversation(&key, "PUBLISHED", Some(reply))?;
     Ok(json!({"result":"published","message_key":key,"reply_id":reply}))
-}
-
-fn native_conflicts(body: &str, case_key: Option<&str>) -> bool {
-    let Some(case_key) = case_key else {
-        return false;
-    };
-    let Ok(body) = serde_json::from_str::<Value>(body) else {
-        return true;
-    };
-    body["case_key"]
-        .as_str()
-        .or_else(|| body["case"]["case_key"].as_str())
-        .is_none_or(|key| key == case_key)
 }
 
 /// A frozen, case-scoped explanation input, never permission to retry work.

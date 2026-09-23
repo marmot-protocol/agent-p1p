@@ -8,12 +8,19 @@ use sha2::Sha256;
 use std::{cell::RefCell, rc::Rc};
 
 #[derive(Clone, Default)]
-struct Queue(Rc<RefCell<Vec<TaskSnapshot>>>, Rc<std::cell::Cell<bool>>);
+struct Queue(
+    Rc<RefCell<Vec<TaskSnapshot>>>,
+    Rc<std::cell::Cell<bool>>,
+    Rc<std::cell::Cell<u32>>,
+);
 impl CommandRunner for Queue {
     fn run(&self, command: &CommandSpec) -> Result<CommandOutput, HermesError> {
         let args = &command.args;
         let value = match args[3].as_str() {
-            "list" => serde_json::to_value(&*self.0.borrow()).unwrap(),
+            "list" => {
+                self.2.set(self.2.get() + 1);
+                serde_json::to_value(&*self.0.borrow()).unwrap()
+            }
             "create" => {
                 let arg = |name| args[args.iter().position(|s| s == name).unwrap() + 1].clone();
                 let task: TaskSnapshot = serde_json::from_value(json!({
@@ -411,6 +418,11 @@ fn conversation_roundtrip_with_capacity(
     now.set(now.get() + 10);
     assert_eq!(run(&mut store).unwrap()["result"], "published");
     assert_eq!(run(&mut store).unwrap()["result"], "idle");
+    assert_eq!(
+        queue.2.get(),
+        u32::from(state.is_none()),
+        "ordinary conversation reconciliation must not enumerate retained board history"
+    );
     assert_eq!(writer.0.borrow().len(), 1);
     assert!(writer.0.borrow()[0].contains("Here is the explanation."));
     if bounded {
