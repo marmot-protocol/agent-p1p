@@ -238,6 +238,14 @@ fn planner_dispatch_freezes_intent_and_projects_only_worker_then_acks_outbox() {
     assert_eq!(status.task_projections, 1);
     assert_eq!(status.outbox_delivered, 1);
     assert!(
+        runner
+            .commands
+            .borrow()
+            .iter()
+            .all(|command| command.args[3] != "list"),
+        "a fresh durable create reservation must not enumerate retained board history"
+    );
+    assert!(
         !runner
             .commands
             .borrow()

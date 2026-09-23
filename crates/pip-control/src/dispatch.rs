@@ -286,17 +286,20 @@ fn dispatch_once_inner<'a, R: CommandRunner + Clone>(
         // Reservation is durable BEFORE any create. It is never recycled:
         // another controller may reconcile but cannot compete with a still-live
         // subprocess, even if the originating controller died or its lease expired.
-        let observed = reader.list_tasks(&policy.board)?;
-        let existing = projector.reconcile(&worker_spec, &observed)?;
+        // A newly granted reservation proves that no prior create attempt exists,
+        // so ordinary dispatch must not enumerate the board's retained history.
+        // Only an uncertain interrupted create needs projection-key discovery.
         let reservation = store.reserve_dispatch_create(&claimed, &intent.intent_id, now())?;
-        let worker_id = match existing {
-            Some(id) => id,
-            None if reservation == CreateReservation::Granted => {
-                match projector.project(&worker_spec, &observed)? {
-                    ProjectionResult::Created(id) | ProjectionResult::Existing(id) => id,
-                }
+        let worker_id = match reservation {
+            CreateReservation::Granted => match projector.project(&worker_spec, &[])? {
+                ProjectionResult::Created(id) | ProjectionResult::Existing(id) => id,
+            },
+            CreateReservation::Uncertain => {
+                let observed = reader.list_tasks(&policy.board)?;
+                projector
+                    .reconcile(&worker_spec, &observed)?
+                    .ok_or(DispatchCycleError::UncertainCreate(intent.intent_id))?
             }
-            None => return Err(DispatchCycleError::UncertainCreate(intent.intent_id)),
         };
         // Hermes show returns an envelope, not a bare task. Verify identity and
         // dependencies again: the task can already be running or done here.
