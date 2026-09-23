@@ -1307,10 +1307,7 @@ fn completed_result_survives_controller_restart_without_rerunning_provider() {
         }
     );
     assert_eq!(runtime.tasks.borrow().len(), 1);
-    assert_eq!(
-        runtime.tasks.borrow()[0].0.model,
-        "cursor-grok-4.6-high-fast"
-    );
+    assert_eq!(runtime.tasks.borrow()[0].0.model, "grok-4.7-high-fast");
     assert_eq!(store.status(103).unwrap().direct_attempts_complete, 1);
 }
 
@@ -1542,8 +1539,8 @@ fn direct_task() -> DirectTaskSpec {
             "assigned_worktree": "/var/lib/pip/worktrees/mdk/repo-1055628515-issue-1240-workflow-3",
             "execution": "direct",
             "provider": "cursor",
-            "model": "cursor-grok-4.6-high-fast",
-            "requested_model": "cursor/cursor-grok-4.6-high-fast",
+            "model": "grok-4.7-high-fast",
+            "requested_model": "cursor/grok-4.7-high-fast",
             "skills_repository_commit": "a".repeat(40),
             "immutable_evidence_bundle": {"schema_version": 1, "sha256": "b".repeat(64)},
         }),
@@ -1552,7 +1549,7 @@ fn direct_task() -> DirectTaskSpec {
         workspace: "/var/lib/pip/worktrees/mdk/repo-1055628515-issue-1240-workflow-3".into(),
         skills: vec!["workflow-contract".into(), "builder-grok".into()],
         provider: "cursor".into(),
-        model: "cursor-grok-4.6-high-fast".into(),
+        model: "grok-4.7-high-fast".into(),
         max_runtime: "PT45M".into(),
         priority: 50,
     }
@@ -1644,8 +1641,8 @@ fn shadow_task() -> DirectTaskSpec {
             "expected_head_sha": "b".repeat(40),
             "execution": "direct",
             "provider": "cursor",
-            "model": "claude-opus-5-thinking-high",
-            "requested_model": "cursor/claude-opus-5-thinking-high",
+            "model": "claude-opus-5-5-high",
+            "requested_model": "cursor/claude-opus-5-5-high",
             "skills_repository_commit": "a".repeat(40),
             "immutable_evidence_bundle": {"schema_version": 1, "sha256": "b".repeat(64)},
         }),
@@ -1654,7 +1651,7 @@ fn shadow_task() -> DirectTaskSpec {
         workspace: "/var/lib/pip/worktrees/mdk/repo-1055628515-issue-1240-workflow-3".into(),
         skills: vec!["workflow-contract".into(), "reviewer-secperf".into()],
         provider: "cursor".into(),
-        model: "claude-opus-5-thinking-high".into(),
+        model: "claude-opus-5-5-high".into(),
         max_runtime: "PT30M".into(),
         priority: 40,
     }
@@ -1671,8 +1668,8 @@ fn shadow_review_result() -> WorkerResult {
     value["case"]["workflow_version"] = json!(3);
     value["task_id"] = json!(shadow_task_id());
     value["reviewer_id"] = json!("secperf-opus");
-    value["requested_model"] = json!("cursor/claude-opus-5-thinking-high");
-    value["actual_model"] = json!("cursor/claude-opus-5-thinking-high");
+    value["requested_model"] = json!("cursor/claude-opus-5-5-high");
+    value["actual_model"] = json!("cursor/claude-opus-5-5-high");
     serde_json::from_value(value).unwrap()
 }
 
@@ -1686,8 +1683,8 @@ fn builder_result() -> WorkerResult {
     value["case"]["repository_id"] = json!(1_055_628_515_u64);
     value["case"]["workflow_version"] = json!(3);
     value["task_id"] = json!(task_id());
-    value["requested_model"] = json!("cursor/cursor-grok-4.6-high-fast");
-    value["actual_model"] = json!("cursor/cursor-grok-4.6-high-fast");
+    value["requested_model"] = json!("cursor/grok-4.7-high-fast");
+    value["actual_model"] = json!("cursor/grok-4.7-high-fast");
     serde_json::from_value(value).unwrap()
 }
 

@@ -96,7 +96,7 @@ fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
     let bytes = include_bytes!("../../../config/target/repositories/mdk.json");
     let policy = load_repository_policy(bytes).unwrap();
     assert_eq!(policy.policy_format, 2);
-    assert_eq!(policy.revision, 9);
+    assert_eq!(policy.revision, 10);
     assert_eq!(policy.workflow_version, 3);
     assert_eq!(policy.repository.id, 1_055_628_515);
     assert_eq!(policy.repository.full_name(), "marmot-protocol/mdk");
@@ -150,7 +150,7 @@ fn phase9_mdk_policy_preserves_historical_sol_activation() {
     let target = load_repository_policy(target_bytes).unwrap();
     let active = load_repository_policy(active_bytes).unwrap();
 
-    assert_eq!(target.revision, 9);
+    assert_eq!(target.revision, 10);
     assert_eq!(active.revision, 4);
     assert_eq!(active.max_remediation_rounds, 3);
     assert!(active.intake.enabled);
@@ -178,8 +178,13 @@ fn phase9_mdk_policy_preserves_historical_sol_activation() {
         .remove("hermes_scratch_root");
     for role in target["roles"].as_array_mut().unwrap() {
         if role["provider"] == "openai-codex" {
-            assert_eq!(role["model"], "gpt-6-astra");
             role["model"] = serde_json::json!("gpt-5.6-sol");
+        }
+        if role["role"] == "builder" {
+            role["model"] = serde_json::json!("cursor-grok-4.6-high-fast");
+        }
+        if role["reviewer_id"] == "secperf-opus" {
+            role["model"] = serde_json::json!("claude-opus-5-thinking-high");
         }
     }
     assert_eq!(active, target);
@@ -206,7 +211,7 @@ fn hermes_attempt_limit_is_optional_for_old_policies_and_rejects_zero() {
 }
 
 #[test]
-fn astra_policy_preserves_effort_other_providers_and_inert_boundaries() {
+fn current_model_policy_preserves_role_specific_models_and_inert_boundaries() {
     let policy = load_repository_policy(include_bytes!(
         "../../../config/target/repositories/mdk.json"
     ))
@@ -217,8 +222,12 @@ fn astra_policy_preserves_effort_other_providers_and_inert_boundaries() {
         .filter(|role| role.provider == "openai-codex")
         .collect();
     assert_eq!(openai.len(), 3);
-    for (role, effort) in openai.iter().zip(["xhigh", "high", "xhigh"]) {
-        assert_eq!(role.model, "gpt-6-astra");
+    for (role, (model, effort)) in openai.iter().zip([
+        ("gpt-6-astra", "xhigh"),
+        ("gpt-6-sol", "high"),
+        ("gpt-6-astra", "xhigh"),
+    ]) {
+        assert_eq!(role.model, model);
         assert_eq!(role.reasoning_effort.as_deref(), Some(effort));
     }
     let direct: Vec<_> = policy
@@ -229,11 +238,7 @@ fn astra_policy_preserves_effort_other_providers_and_inert_boundaries() {
         .collect();
     assert_eq!(
         direct,
-        [
-            "cursor-grok-4.6-high-fast",
-            "kimi-k3-max",
-            "claude-opus-5-thinking-high"
-        ]
+        ["grok-4.7-high-fast", "kimi-k3-max", "claude-opus-5-5-high"]
     );
     assert!(!policy.intake.enabled && policy.intake.paused && !policy.dispatch_enabled);
     assert!(policy.merge.is_shadow() && !policy.merge.autonomous);

@@ -92,7 +92,7 @@ fn native_retry_is_exact_once_preserves_history_and_all_budgets() {
                 .unwrap();
         }
         let effect = store.claim_effect("dispatcher", 103, 30).unwrap().unwrap();
-        let desired = json!({"assignee":"reviewer-general","provider":"openai-codex","model":"gpt-6-astra","max_retries":1,"body":{"role":"reviewer-general","review_mode":"required","state_revision":3,"expected_head_sha":head,"plan_version":1}});
+        let desired = json!({"assignee":"reviewer-general","provider":"openai-codex","model":"gpt-6-sol","max_retries":1,"body":{"role":"reviewer-general","review_mode":"required","state_revision":3,"expected_head_sha":head,"plan_version":1}});
         store
             .freeze_dispatch_intents(
                 &effect,
@@ -124,7 +124,7 @@ fn native_retry_is_exact_once_preserves_history_and_all_budgets() {
                 .retain_task_result("task", &json!({"completed":true}), 104)
                 .unwrap();
         }
-        store.apply_transition(&TransitionInput{case_key:case.into(),expected_revision:3,next_state:"ESCALATED".into(),remediation_round:10,plan_version:1,pr_number:Some(77),head_sha:Some(head.clone()),observed_at:105,event:EventInput{event_id:"stopped".into(),event_type:"OPERATIONAL_BOUND_REACHED".into(),payload:json!({"bound":if variant=="bound"{"ELAPSED_TIME"}else{"PROVIDER_FAILURES"},"observed":1,"limit":1,"details":{"source":if variant=="source"{"direct-worker"}else{"hermes-circuit-breaker"},"task_id":if variant=="task"{"foreign"}else{"task"},"profile":if variant=="profile"{"planner"}else{"reviewer-general"},"provider":"openai-codex","model":"gpt-6-astra"}})},run:None,evidence:vec![],findings:vec![],effects:vec![]},None).unwrap();
+        store.apply_transition(&TransitionInput{case_key:case.into(),expected_revision:3,next_state:"ESCALATED".into(),remediation_round:10,plan_version:1,pr_number:Some(77),head_sha:Some(head.clone()),observed_at:105,event:EventInput{event_id:"stopped".into(),event_type:"OPERATIONAL_BOUND_REACHED".into(),payload:json!({"bound":if variant=="bound"{"ELAPSED_TIME"}else{"PROVIDER_FAILURES"},"observed":1,"limit":1,"details":{"source":if variant=="source"{"direct-worker"}else{"hermes-circuit-breaker"},"task_id":if variant=="task"{"foreign"}else{"task"},"profile":if variant=="profile"{"planner"}else{"reviewer-general"},"provider":"openai-codex","model":"gpt-6-sol"}})},run:None,evidence:vec![],findings:vec![],effects:vec![]},None).unwrap();
         let mut request = PublicationRetryRequest {
             case_key: case.into(),
             expected_revision: 4,

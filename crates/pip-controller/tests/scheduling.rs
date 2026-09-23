@@ -80,7 +80,7 @@ fn policy() -> WorkflowPolicy {
                 "builder-grok",
                 ExecutionKind::Direct,
                 "cursor",
-                "cursor-grok-4.6-high-fast",
+                "grok-4.7-high-fast",
                 "60m",
             ),
             reviewer(
@@ -107,7 +107,7 @@ fn policy() -> WorkflowPolicy {
                 "reviewer-secperf-opus",
                 ExecutionKind::Direct,
                 "cursor",
-                "claude-opus-5-thinking-high",
+                "claude-opus-5-5-high",
                 ReviewMode::Shadow,
             ),
             role(
@@ -398,7 +398,7 @@ fn planner_and_builder_use_ledger_authorized_workspaces_without_gate_dependencie
     assert_eq!(direct.role, WorkerRole::Builder);
     assert_eq!(direct.task_id, builder[0].worker_projection_key);
     assert_eq!(direct.provider, "cursor");
-    assert_eq!(direct.model, "cursor-grok-4.6-high-fast");
+    assert_eq!(direct.model, "grok-4.7-high-fast");
     assert_eq!(
         direct.workspace,
         "/var/lib/pip/worktrees/mdk/repo-984321-issue-1240-workflow-1"
@@ -414,7 +414,7 @@ fn planner_and_builder_use_ledger_authorized_workspaces_without_gate_dependencie
     );
     assert_eq!(
         builder[0].worker_body["requested_model"],
-        "cursor/cursor-grok-4.6-high-fast"
+        "cursor/grok-4.7-high-fast"
     );
     assert!(builder[0].worker_projection_key.contains("round:3"));
 }

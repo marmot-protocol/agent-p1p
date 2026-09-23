@@ -371,7 +371,7 @@ fn direct_builder_is_durably_queued_without_any_hermes_command() {
     );
     assert_eq!(job.payload["role"], "builder");
     assert_eq!(job.payload["provider"], "cursor");
-    assert_eq!(job.payload["model"], "cursor-grok-4.6-high-fast");
+    assert_eq!(job.payload["model"], "grok-4.7-high-fast");
     assert_eq!(
         job.payload["workspace"],
         "/var/lib/pip/worktrees/mdk/repo-1055628515-issue-1240-workflow-3"
@@ -483,7 +483,7 @@ fn independent_review_dispatch_splits_hermes_and_direct_work_without_model_subst
         .unwrap()
         .unwrap();
     assert_eq!(shadow.payload["body"]["reviewer_id"], "secperf-opus");
-    assert_eq!(shadow.payload["model"], "claude-opus-5-thinking-high");
+    assert_eq!(shadow.payload["model"], "claude-opus-5-5-high");
 }
 
 fn projected_worker_body(runner: &FakeRunner) -> Value {

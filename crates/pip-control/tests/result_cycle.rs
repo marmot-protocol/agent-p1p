@@ -785,12 +785,14 @@ fn project_native_task(
         desired.assignee = "reviewer-general".into();
         desired.skills = vec!["workflow-contract".into(), "reviewer-general".into()];
         desired.body["role"] = json!("reviewer-general");
+        desired.body["requested_model"] = json!("openai-codex/gpt-6-sol");
         desired.body["reviewer_id"] = json!("general-sol");
         desired.body["review_mode"] = json!("required");
         desired.body["pr_number"] = json!(77);
         desired.body["expected_head_sha"] = json!("b".repeat(40));
         desired.body["state_revision"] = json!(2);
         desired.body["remediation_round"] = json!(0);
+        desired.model = "gpt-6-sol".into();
     }
     let observed = TaskSnapshot {
         configuration: Default::default(),
@@ -862,8 +864,8 @@ fn peer_review_records_do_not_supersede_the_other_native_reviewer() {
             )
             .unwrap();
         let mut result = fixture["results"][2].clone();
-        result["requested_model"] = json!("openai-codex/gpt-6-astra");
-        result["actual_model"] = json!("openai-codex/gpt-6-astra");
+        result["requested_model"] = json!("openai-codex/gpt-6-sol");
+        result["actual_model"] = json!("openai-codex/gpt-6-sol");
         let mut completed = completed_planner("reviewer-general", result);
         completed["task"]["id"] = json!("review-general-1");
         completed["task"]["assignee"] = json!("reviewer-general");

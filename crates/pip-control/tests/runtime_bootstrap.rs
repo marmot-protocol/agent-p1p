@@ -61,12 +61,18 @@ fn bootstrap(conversations: bool) {
     runner.output(r#"[{"slug":"pip-mdk","name":"Pip - marmot-protocol/mdk"}]"#);
     runner.output("--workspace --idempotency-key --created-by --max-runtime --max-retries --skill --model --provider --initial-status\n");
     runner.output("gateway run --external-supervisor\n");
-    let mut efforts = vec!["xhigh", "high", "xhigh"];
+    let mut profiles = vec![
+        ("gpt-6-astra", "xhigh"),
+        ("gpt-6-sol", "high"),
+        ("gpt-6-astra", "xhigh"),
+    ];
     if conversations {
-        efforts.push("xhigh");
+        profiles.push(("gpt-6-astra", "xhigh"));
     }
-    for reasoning in efforts {
-        runner.output(r#"{"default":"gpt-6-astra","provider":"openai-codex"}"#);
+    for (model, reasoning) in profiles {
+        runner.output(&format!(
+            r#"{{"default":"{model}","provider":"openai-codex"}}"#
+        ));
         runner.output(&format!("\"{reasoning}\"\n"));
         runner.output("\"profile\"\n");
     }

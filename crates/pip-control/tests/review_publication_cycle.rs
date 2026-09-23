@@ -388,8 +388,8 @@ fn review_store_with_policy(
     let mut opus = fixture_reviews()[1].clone();
     opus["task_id"] = json!("review-secperf-opus-1");
     opus["reviewer_id"] = json!("secperf-opus");
-    opus["requested_model"] = json!("cursor/claude-opus-5-thinking-high");
-    opus["actual_model"] = json!("cursor/claude-opus-5-thinking-high");
+    opus["requested_model"] = json!("cursor/claude-opus-5-5-high");
+    opus["actual_model"] = json!("cursor/claude-opus-5-5-high");
     let current = store.case("repo:984321#1240@1").unwrap().unwrap();
     store
         .apply_transition(

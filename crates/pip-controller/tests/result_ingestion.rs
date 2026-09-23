@@ -104,8 +104,8 @@ fn policy_defined_required_reviewers_all_join_by_instance_id() {
     let mut opus = serde_json::to_value(&results[3]).unwrap();
     opus["task_id"] = json!("review-secperf-opus-1");
     opus["reviewer_id"] = json!("secperf-opus");
-    opus["requested_model"] = json!("cursor/claude-opus-5-thinking-high");
-    opus["actual_model"] = json!("cursor/claude-opus-5-thinking-high");
+    opus["requested_model"] = json!("cursor/claude-opus-5-5-high");
+    opus["actual_model"] = json!("cursor/claude-opus-5-5-high");
     let opus: WorkerResult = serde_json::from_value(opus).unwrap();
     let workflow = three_required_reviewer_policy();
 
@@ -538,7 +538,7 @@ fn three_required_reviewer_policy() -> WorkflowPolicy {
                 "builder-grok",
                 ExecutionKind::Direct,
                 "cursor",
-                "cursor-grok-4.6-high-fast",
+                "grok-4.7-high-fast",
             ),
             reviewer(
                 pip_contracts::WorkerRole::ReviewerGeneral,
@@ -562,7 +562,7 @@ fn three_required_reviewer_policy() -> WorkflowPolicy {
                 "reviewer-secperf-opus",
                 ExecutionKind::Direct,
                 "cursor",
-                "claude-opus-5-thinking-high",
+                "claude-opus-5-5-high",
             ),
             role(
                 pip_contracts::WorkerRole::FinalReviewer,
