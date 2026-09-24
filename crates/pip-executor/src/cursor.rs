@@ -3,10 +3,12 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Duration;
 
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
@@ -45,6 +47,8 @@ pub enum CursorExecutionError {
     InvalidUtf8,
     MalformedEnvelope(String),
     InvalidResult(String),
+    InvalidResultArtifact(String),
+    ResultConflict,
     ReviewerDirtyBaseline,
     ReviewerHeadMismatch,
     ReviewerMutation,
@@ -85,6 +89,12 @@ impl fmt::Display for CursorExecutionError {
                 write!(formatter, "malformed Cursor result envelope: {error}")
             }
             Self::InvalidResult(error) => write!(formatter, "invalid bound worker result: {error}"),
+            Self::InvalidResultArtifact(error) => {
+                write!(formatter, "invalid durable worker result artifact: {error}")
+            }
+            Self::ResultConflict => {
+                formatter.write_str("Cursor stdout and durable worker result artifact disagree")
+            }
             Self::ReviewerDirtyBaseline => {
                 formatter.write_str("reviewer worktree was dirty before execution")
             }
@@ -254,6 +264,8 @@ impl<R: ProcessRunner> CursorExecutor<R> {
                 "stdin": "prompt.md",
                 "environment_keys": environment.keys().collect::<Vec<_>>(),
                 "temporary_directory": temporary.path(),
+                "timeout_seconds": self.timeout.as_secs(),
+                "max_output_bytes": self.max_output_bytes,
             }),
         )?;
         write_json(
@@ -310,7 +322,6 @@ impl<R: ProcessRunner> CursorExecutor<R> {
         }
         write_artifact(artifact_dir, "stdout.log", &output.stdout)?;
         write_artifact(artifact_dir, "stderr.log", &output.stderr)?;
-        validate_output(&output, self.max_output_bytes)?;
 
         if let Some(before) = reviewer_before {
             let after = self.git_snapshot(&worktree)?;
@@ -318,12 +329,88 @@ impl<R: ProcessRunner> CursorExecutor<R> {
                 return Err(CursorExecutionError::ReviewerMutation);
             }
         }
-        let (result, envelope) = parse_envelope(&output.stdout)?;
-        result
-            .validate_binding(&task.binding)
-            .map_err(|error| CursorExecutionError::InvalidResult(error.to_string()))?;
-        write_json(artifact_dir, "cursor-envelope.json", &envelope)?;
+
+        let transport_error = validate_output(&output, self.max_output_bytes).err();
+        let stdout_result = if output.stdout.len() <= self.max_output_bytes
+            && output.stderr.len() <= self.max_output_bytes
+        {
+            parse_envelope(&output.stdout).and_then(|(result, envelope)| {
+                result
+                    .validate_binding(&task.binding)
+                    .map_err(|error| CursorExecutionError::InvalidResult(error.to_string()))?;
+                Ok((result, envelope))
+            })
+        } else {
+            Err(CursorExecutionError::OutputTooLarge)
+        };
+        let artifact_result =
+            match read_result_artifact(artifact_dir, self.max_output_bytes, &task.binding) {
+                Ok(result) => result,
+                Err(error) => {
+                    write_execution_outcome(artifact_dir, "INVALID_RESULT_ARTIFACT", &output)?;
+                    return Err(error);
+                }
+            };
+
+        let (result, envelope, classification) = match (stdout_result, artifact_result) {
+            (Ok((stdout, _envelope)), Some(artifact)) if stdout != artifact => {
+                write_execution_outcome(artifact_dir, "RESULT_CONFLICT", &output)?;
+                return Err(CursorExecutionError::ResultConflict);
+            }
+            (Ok((stdout, envelope)), Some(_)) => {
+                let classification = match transport_error {
+                    Some(CursorExecutionError::TimedOut) => "ARTIFACT_RECOVERY_AFTER_TIMEOUT",
+                    Some(CursorExecutionError::CommandFailed(_)) => {
+                        "ARTIFACT_RECOVERY_AFTER_PROVIDER_FAILURE"
+                    }
+                    Some(_) => "ARTIFACT_RECOVERY_AFTER_TRANSPORT_FAILURE",
+                    None => "STDOUT_AND_ARTIFACT_RESULT",
+                };
+                (stdout, Some(envelope), classification)
+            }
+            (Err(_), Some(artifact)) => {
+                let classification = match transport_error {
+                    Some(CursorExecutionError::TimedOut) => "ARTIFACT_RECOVERY_AFTER_TIMEOUT",
+                    Some(CursorExecutionError::CommandFailed(_)) => {
+                        "ARTIFACT_RECOVERY_AFTER_PROVIDER_FAILURE"
+                    }
+                    Some(_) => "ARTIFACT_RECOVERY_AFTER_TRANSPORT_FAILURE",
+                    None => "ARTIFACT_RECOVERY_AFTER_INVALID_STDOUT",
+                };
+                (artifact, None, classification)
+            }
+            (Ok((stdout, envelope)), None) => {
+                if let Some(error) = transport_error {
+                    let classification = match error {
+                        CursorExecutionError::TimedOut => "TIMEOUT_WITHOUT_DURABLE_RESULT",
+                        CursorExecutionError::CommandFailed(_) => {
+                            "PROVIDER_FAILURE_WITHOUT_DURABLE_RESULT"
+                        }
+                        _ => "TRANSPORT_FAILURE_WITHOUT_DURABLE_RESULT",
+                    };
+                    write_execution_outcome(artifact_dir, classification, &output)?;
+                    return Err(error);
+                }
+                (stdout, Some(envelope), "STDOUT_RESULT")
+            }
+            (Err(stdout_error), None) => {
+                let error = transport_error.unwrap_or(stdout_error);
+                let classification = match error {
+                    CursorExecutionError::TimedOut => "TIMEOUT_NO_RESULT",
+                    CursorExecutionError::CommandFailed(_) => "PROVIDER_FAILURE_NO_RESULT",
+                    CursorExecutionError::OutputTooLarge => "OUTPUT_TOO_LARGE_NO_RESULT",
+                    _ => "INVALID_STDOUT_NO_RESULT",
+                };
+                write_execution_outcome(artifact_dir, classification, &output)?;
+                return Err(error);
+            }
+        };
+
+        if let Some(envelope) = envelope {
+            write_json(artifact_dir, "cursor-envelope.json", &envelope)?;
+        }
         write_json(artifact_dir, "result.json", &result)?;
+        write_execution_outcome(artifact_dir, classification, &output)?;
         write_json(
             artifact_dir,
             "run-status.json",
@@ -382,6 +469,87 @@ impl<R: ProcessRunner> CursorExecutor<R> {
         validate_output(&output, self.max_output_bytes.min(1_048_576))?;
         Ok(output)
     }
+}
+
+fn read_result_artifact(
+    artifact_dir: &Path,
+    max_bytes: usize,
+    binding: &WorkerBinding,
+) -> Result<Option<WorkerResult>, CursorExecutionError> {
+    let path = artifact_dir.join("worker-result.json");
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(CursorExecutionError::InvalidResultArtifact(
+                error.to_string(),
+            ));
+        }
+    };
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err(CursorExecutionError::InvalidResultArtifact(
+            "worker-result.json is not a regular non-symlink file".into(),
+        ));
+    }
+    if metadata.len() == 0 || metadata.len() > max_bytes as u64 {
+        return Err(CursorExecutionError::InvalidResultArtifact(
+            "worker-result.json has an invalid size".into(),
+        ));
+    }
+    let file = File::open(&path)
+        .map_err(|error| CursorExecutionError::InvalidResultArtifact(error.to_string()))?;
+    let opened = file
+        .metadata()
+        .map_err(|error| CursorExecutionError::InvalidResultArtifact(error.to_string()))?;
+    #[cfg(unix)]
+    if metadata.dev() != opened.dev()
+        || metadata.ino() != opened.ino()
+        || metadata.len() != opened.len()
+    {
+        return Err(CursorExecutionError::InvalidResultArtifact(
+            "worker-result.json changed while it was opened".into(),
+        ));
+    }
+    let mut bytes = Vec::with_capacity(opened.len() as usize);
+    file.take(max_bytes as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| CursorExecutionError::InvalidResultArtifact(error.to_string()))?;
+    if bytes.len() != opened.len() as usize || bytes.len() > max_bytes {
+        return Err(CursorExecutionError::InvalidResultArtifact(
+            "worker-result.json changed while it was read".into(),
+        ));
+    }
+    if contains_secret(&String::from_utf8_lossy(&bytes)) {
+        return Err(CursorExecutionError::InvalidResultArtifact(
+            "worker-result.json contains credential-like material".into(),
+        ));
+    }
+    let value: Value = serde_json::from_slice(&bytes)
+        .map_err(|error| CursorExecutionError::InvalidResultArtifact(error.to_string()))?;
+    let result = WorkerResult::decode(value)
+        .map_err(|error| CursorExecutionError::InvalidResultArtifact(error.to_string()))?;
+    result
+        .validate_binding(binding)
+        .map_err(|error| CursorExecutionError::InvalidResultArtifact(error.to_string()))?;
+    Ok(Some(result))
+}
+
+fn write_execution_outcome(
+    artifact_dir: &Path,
+    classification: &str,
+    output: &ProcessOutput,
+) -> Result<(), CursorExecutionError> {
+    write_json(
+        artifact_dir,
+        "execution-outcome.json",
+        &json!({
+            "classification": classification,
+            "process_status": output.status,
+            "timed_out": output.timed_out,
+            "stdout_bytes": output.stdout.len(),
+            "stderr_bytes": output.stderr.len(),
+        }),
+    )
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

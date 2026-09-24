@@ -223,5 +223,9 @@ object as the entire final response, without prose or a code fence. Hermes may
 store its own run envelope fields outside `metadata`; do not add those fields
 to the contract object.
 
-For direct Cursor tasks, return the contract as the final JSON object. The direct
-runtime captures it; do not look for Hermes tools or update Kanban yourself.
+For direct Cursor tasks, first save the validated contract as
+`worker-result.json` in the supplied run artifact directory, then return the
+same contract as the final JSON object. The durable file is the fail-closed
+recovery path if Cursor finishes the work but its response transport times out
+or returns an unusable envelope. If both transports are readable, Pip requires
+them to agree exactly. Do not look for Hermes tools or update Kanban yourself.

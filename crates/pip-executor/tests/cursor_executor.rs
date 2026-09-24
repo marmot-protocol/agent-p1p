@@ -95,6 +95,39 @@ impl ProcessRunner for FakeRunner {
     }
 }
 
+#[derive(Clone)]
+struct ResultArtifactRunner {
+    output: ProcessOutput,
+    result: Vec<u8>,
+}
+
+impl ProcessRunner for ResultArtifactRunner {
+    fn run(&self, spec: &ProcessSpec) -> Result<ProcessOutput, ProcessError> {
+        let artifact_dir = spec
+            .stdin_file
+            .as_ref()
+            .and_then(|path| path.parent())
+            .unwrap();
+        fs::write(artifact_dir.join("worker-result.json"), &self.result).unwrap();
+        Ok(self.output.clone())
+    }
+}
+
+fn artifact_executor(runner: ResultArtifactRunner) -> CursorExecutor<ResultArtifactRunner> {
+    CursorExecutor::new(
+        runner,
+        "/opt/pip/bin/agent",
+        "/usr/bin/git",
+        BTreeMap::from([
+            ("HOME".into(), "/var/lib/pip-provider".into()),
+            ("PATH".into(), "/usr/bin:/bin".into()),
+        ]),
+        Duration::from_secs(60),
+        1_048_576,
+    )
+    .unwrap()
+}
+
 #[cfg(unix)]
 #[test]
 fn direct_runs_get_private_short_socket_capable_temp_dirs_and_clean_them_on_exit() {
@@ -567,4 +600,153 @@ fn secret_input_is_rejected_before_artifacts_and_timeout_remains_incomplete() {
         .unwrap(),
         json!({"status": "INCOMPLETE"})
     );
+}
+
+#[test]
+fn valid_durable_result_recovers_a_cursor_timeout() {
+    let tmp = tempfile::tempdir().unwrap();
+    let worktree = tmp.path().join("worktree");
+    fs::create_dir(&worktree).unwrap();
+    let artifacts = tmp.path().join("artifacts");
+    let expected = results()[1].clone();
+    let runner = ResultArtifactRunner {
+        output: ProcessOutput {
+            status: -9,
+            stdout: Vec::new(),
+            stderr: b"provider transport did not return".to_vec(),
+            timed_out: true,
+        },
+        result: serde_json::to_vec_pretty(&expected).unwrap(),
+    };
+
+    let result = artifact_executor(runner)
+        .execute(
+            &health("composer-2.5"),
+            &task(WorkerRole::Builder, "composer-2.5", 1),
+            &worktree,
+            &artifacts,
+        )
+        .unwrap();
+
+    assert!(matches!(result, WorkerResult::Builder(_)));
+    assert_eq!(
+        serde_json::from_slice::<Value>(
+            &fs::read(artifacts.join("execution-outcome.json")).unwrap()
+        )
+        .unwrap(),
+        json!({
+            "classification": "ARTIFACT_RECOVERY_AFTER_TIMEOUT",
+            "process_status": -9,
+            "timed_out": true,
+            "stdout_bytes": 0,
+            "stderr_bytes": 33
+        })
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(artifacts.join("run-status.json")).unwrap())
+            .unwrap(),
+        json!({"status": "COMPLETE"})
+    );
+}
+
+#[test]
+fn valid_durable_result_recovers_empty_success_stdout() {
+    let tmp = tempfile::tempdir().unwrap();
+    let worktree = tmp.path().join("worktree");
+    fs::create_dir(&worktree).unwrap();
+    let artifacts = tmp.path().join("artifacts");
+    let runner = ResultArtifactRunner {
+        output: ProcessOutput {
+            status: 0,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            timed_out: false,
+        },
+        result: serde_json::to_vec_pretty(&results()[1]).unwrap(),
+    };
+
+    assert!(matches!(
+        artifact_executor(runner)
+            .execute(
+                &health("composer-2.5"),
+                &task(WorkerRole::Builder, "composer-2.5", 1),
+                &worktree,
+                &artifacts,
+            )
+            .unwrap(),
+        WorkerResult::Builder(_)
+    ));
+    assert_eq!(
+        serde_json::from_slice::<Value>(
+            &fs::read(artifacts.join("execution-outcome.json")).unwrap()
+        )
+        .unwrap()["classification"],
+        "ARTIFACT_RECOVERY_AFTER_INVALID_STDOUT"
+    );
+}
+
+#[test]
+fn stdout_and_durable_result_must_agree_exactly() {
+    let tmp = tempfile::tempdir().unwrap();
+    let worktree = tmp.path().join("worktree");
+    fs::create_dir(&worktree).unwrap();
+    let artifacts = tmp.path().join("artifacts");
+    let stdout_result = results()[1].clone();
+    let mut artifact_result = stdout_result.clone();
+    artifact_result["evidence"]["fixture"] = json!(false);
+    let runner = ResultArtifactRunner {
+        output: ProcessOutput {
+            status: 0,
+            stdout: envelope(&stdout_result),
+            stderr: Vec::new(),
+            timed_out: false,
+        },
+        result: serde_json::to_vec_pretty(&artifact_result).unwrap(),
+    };
+
+    assert!(matches!(
+        artifact_executor(runner).execute(
+            &health("composer-2.5"),
+            &task(WorkerRole::Builder, "composer-2.5", 1),
+            &worktree,
+            &artifacts,
+        ),
+        Err(CursorExecutionError::ResultConflict)
+    ));
+    assert_eq!(
+        serde_json::from_slice::<Value>(
+            &fs::read(artifacts.join("execution-outcome.json")).unwrap()
+        )
+        .unwrap()["classification"],
+        "RESULT_CONFLICT"
+    );
+    assert!(!artifacts.join("result.json").exists());
+}
+
+#[test]
+fn malformed_durable_result_never_converts_a_timeout_to_success() {
+    let tmp = tempfile::tempdir().unwrap();
+    let worktree = tmp.path().join("worktree");
+    fs::create_dir(&worktree).unwrap();
+    let artifacts = tmp.path().join("artifacts");
+    let runner = ResultArtifactRunner {
+        output: ProcessOutput {
+            status: -9,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            timed_out: true,
+        },
+        result: b"{not-json".to_vec(),
+    };
+
+    assert!(matches!(
+        artifact_executor(runner).execute(
+            &health("composer-2.5"),
+            &task(WorkerRole::Builder, "composer-2.5", 1),
+            &worktree,
+            &artifacts,
+        ),
+        Err(CursorExecutionError::InvalidResultArtifact(_))
+    ));
+    assert!(!artifacts.join("result.json").exists());
 }
