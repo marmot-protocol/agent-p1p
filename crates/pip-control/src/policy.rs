@@ -170,8 +170,9 @@ pub struct RepositoryPolicy {
 }
 
 impl RepositoryPolicy {
-    /// Capacity-only rollouts may change execution scheduling, never the accepted
-    /// authority, models, retry budgets or paths of an existing case.
+    /// Capacity changes and a longer builder ceiling may apply to new cases.
+    /// Existing cases retain their accepted builder duration and every other
+    /// authority binding, including the exact model, retry budgets and paths.
     pub fn execution_policy_for(&self, accepted: &Self) -> Option<Self> {
         let normalize = |policy: &Self| {
             let mut policy = policy.clone();
@@ -182,12 +183,34 @@ impl RepositoryPolicy {
             policy.conversations_enabled = false;
             serde_json::to_value(policy).ok()
         };
-        if normalize(self)? != normalize(accepted)? {
+        let mut compatible = self.clone();
+        if compatible.roles.len() != accepted.roles.len() {
             return None;
         }
-        let mut effective = self.clone();
-        effective.revision = accepted.revision;
-        Some(effective)
+        for (role, old) in compatible.roles.iter_mut().zip(&accepted.roles) {
+            if role.role == WorkerRole::Builder
+                && old.role == WorkerRole::Builder
+                && role.max_runtime != old.max_runtime
+            {
+                let minutes = |value: &str| {
+                    value
+                        .strip_prefix("PT")?
+                        .strip_suffix('M')?
+                        .parse::<u64>()
+                        .ok()
+                        .filter(|minutes| (1..=240).contains(minutes))
+                };
+                if minutes(&role.max_runtime)? <= minutes(&old.max_runtime)? {
+                    return None;
+                }
+                role.max_runtime.clone_from(&old.max_runtime);
+            }
+        }
+        if normalize(&compatible)? != normalize(accepted)? {
+            return None;
+        }
+        compatible.revision = accepted.revision;
+        Some(compatible)
     }
 
     pub fn intake_policy(&self, global_paused: bool) -> IntakePolicy {

@@ -67,6 +67,31 @@ fn capacity_rollout_preserves_case_authority_but_never_substitutes_models_or_sco
 }
 
 #[test]
+fn longer_builder_window_applies_only_to_new_cases() {
+    let current = load_repository_policy(include_bytes!(
+        "../../../config/activation/repositories/mdk-rev11.json"
+    ))
+    .unwrap();
+    let mut accepted = current.clone();
+    accepted.revision = 10;
+    accepted.roles[1].max_runtime = "PT45M".into();
+    accepted.execution_capacity.as_mut().unwrap().builders = 1;
+
+    let effective = current.execution_policy_for(&accepted).unwrap();
+    assert_eq!(effective.revision, 10);
+    assert_eq!(effective.roles[1].max_runtime, "PT45M");
+    assert_eq!(effective.execution_capacity.unwrap().builders, 2);
+    assert_eq!(current.roles[1].max_runtime, "PT120M");
+
+    let mut shortened = current.clone();
+    shortened.roles[1].max_runtime = "PT30M".into();
+    assert!(shortened.execution_policy_for(&accepted).is_none());
+    let mut changed_reviewer = current;
+    changed_reviewer.roles[3].max_runtime = "PT60M".into();
+    assert!(changed_reviewer.execution_policy_for(&accepted).is_none());
+}
+
+#[test]
 fn execution_capacity_is_explicit_bounded_and_independent_of_issue_admission() {
     let mut raw: serde_json::Value = serde_json::from_slice(include_bytes!(
         "../../../config/target/repositories/mdk.json"
