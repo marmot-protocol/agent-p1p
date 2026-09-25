@@ -81,12 +81,6 @@ fn bootstrap(conversations: bool) {
     ))
     .unwrap();
     policy.conversations_enabled = conversations;
-    if conversations {
-        let mut raw = serde_json::to_value(&policy).unwrap();
-        raw["execution_capacity"] = serde_json::json!({"native_sessions":2,"builders":1,
-            "direct_reviewers":1,"ready_plans":2,"cargo_jobs":2});
-        policy = load_repository_policy(&serde_json::to_vec(&raw).unwrap()).unwrap();
-    }
 
     let outcome = bootstrap_hermes_runtime_with(
         &policy,
@@ -110,9 +104,6 @@ fn bootstrap(conversations: bool) {
     assert_eq!(planner["agent"]["reasoning_effort"], "xhigh");
     let root_config: serde_json::Value =
         serde_json::from_slice(&fs::read(root.join("config.yaml")).unwrap()).unwrap();
-    assert_eq!(
-        root_config["kanban"]["max_in_progress"],
-        if conversations { 2 } else { 1 }
-    );
+    assert_eq!(root_config["kanban"]["max_in_progress"], 2);
     assert_eq!(root_config["kanban"]["max_in_progress_per_profile"], 1);
 }

@@ -200,6 +200,9 @@ fn capability_failures_are_reported_without_aborting_unrelated_controller_phases
             "../../../config/target/repositories/mdk.json"
         ))
         .unwrap();
+        // This fixture exercises the serial compatibility path; stage-slot
+        // behavior has separate queue and intake tests.
+        policy.execution_capacity = None;
         policy.intake.enabled = fault == "intake";
         policy.intake.paused = false;
         policy.dispatch_enabled = true;

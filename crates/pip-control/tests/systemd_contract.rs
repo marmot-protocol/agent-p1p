@@ -127,6 +127,20 @@ fn direct_worker_template_has_provider_state_but_no_controller_credentials() {
 }
 
 #[test]
+fn mdk_two_builder_stage_cap_matches_the_pilot_policy() {
+    let policy = include_str!("../../../config/target/repositories/mdk.json");
+    let policy: serde_json::Value = serde_json::from_str(policy).unwrap();
+    assert_eq!(policy["execution_capacity"]["builders"], 2);
+    assert_eq!(policy["execution_capacity"]["cargo_jobs"], 2);
+    let drop_in = include_str!(
+        "../../../config/target/systemd/pip-direct-worker@mdk.service.d/30-stage-capacity.conf"
+    );
+    assert!(drop_in.lines().any(|line| line == "CPUQuota=800%"));
+    assert!(drop_in.lines().any(|line| line == "MemoryHigh=48G"));
+    assert!(drop_in.lines().any(|line| line == "MemoryMax=52G"));
+}
+
+#[test]
 fn hermes_gateway_owns_dispatch_without_controller_credentials_or_ledger_access() {
     let service = include_str!("../../../packaging/systemd/pip-hermes-gateway.service");
 

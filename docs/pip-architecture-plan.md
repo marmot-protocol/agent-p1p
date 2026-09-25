@@ -126,7 +126,7 @@ for CI or review does not reserve a builder. Optional policy `execution_capacity
 enables bounded stage slots; its absence retains the serial execution default:
 
 ```json
-{"native_sessions":2,"builders":1,"direct_reviewers":1,"ready_plans":2,"cargo_jobs":2}
+{"native_sessions":2,"builders":2,"direct_reviewers":1,"ready_plans":2,"cargo_jobs":2}
 ```
 
 `native_sessions` caps active Kanban tasks in the dedicated Hermes runtime, while Hermes's existing
@@ -154,6 +154,12 @@ full, its validated conversation answer remains queued durably; retrying does
 not rerun the model or bypass the two-issue policy limit.
 `cargo_jobs` is the per-task Cargo budget; host CPU/memory limits are a separate
 operational safeguard and must be measured under real workloads.
+The MDK builder has a 120-minute hard ceiling so an unresponsive provider cannot
+hold a slot indefinitely. That duration is not a CI acceptance shortcut: broader
+checks still run before publication and on the exact PR head. Two concurrent
+builders require the matching Pirate worker service resource drop-in under
+`config/target/systemd/`; a slot-count change alone is unsafe under the former
+28G shared memory cap. Existing accepted jobs retain their frozen runtime.
 
 Each newly dispatched review/final review under this policy gets an independent
 detached exact-head Git copy, keyed by its immutable projection. Builders keep

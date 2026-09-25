@@ -14,6 +14,15 @@ fn direct_job_lease_covers_the_longest_policy_runtime_plus_recovery_margin() {
         2_820
     );
 }
+
+#[test]
+fn mdk_two_hour_builder_lease_includes_recovery_margin() {
+    let policy = pip_control::load_repository_policy(include_bytes!(
+        "../../../config/target/repositories/mdk.json"
+    ))
+    .unwrap();
+    assert_eq!(recommended_direct_lease_seconds(&policy).unwrap(), 7_320);
+}
 use pip_controller::DirectTaskSpec;
 use pip_store::{EffectInput, EventInput, NewCase, PolicyInput, Store, TransitionInput};
 use serde_json::{Value, json};
@@ -995,6 +1004,86 @@ fn bounded_pool_overlaps_builder_and_review_but_never_duplicates_execution() {
     assert_eq!(*runtime.arrivals.lock().unwrap(), 2);
 }
 
+#[test]
+fn two_builder_slots_execute_independent_cases_concurrently() {
+    use std::sync::{Condvar, Mutex};
+    struct Overlap {
+        arrivals: Mutex<usize>,
+        wake: Condvar,
+    }
+    impl DirectWorkerRuntime for Overlap {
+        fn execute(
+            &self,
+            _: &DirectTaskSpec,
+            _: u64,
+        ) -> Result<WorkerResult, DirectWorkerRuntimeError> {
+            let mut count = self.arrivals.lock().unwrap();
+            *count += 1;
+            self.wake.notify_all();
+            let (_count, wait) = self
+                .wake
+                .wait_timeout_while(count, std::time::Duration::from_secs(3), |n| *n < 2)
+                .unwrap();
+            assert!(!wait.timed_out(), "independent builders did not overlap");
+            Err(DirectWorkerRuntimeError::Failed("fixture complete".into()))
+        }
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let queue = queue(directory.path());
+    let source = tempfile::tempdir().unwrap();
+    let mut store = queued_builder(source.path());
+    pip_control::schedule_direct_queue_once(
+        &mut store,
+        &active_policy(),
+        &[case_key().into()],
+        &queue_for_fixture(source.path()),
+        "controller",
+        100,
+        30,
+    )
+    .unwrap();
+    let original: Value = serde_json::from_slice(
+        &std::fs::read(source.path().join("direct-queue/inbox/attempt-1.json")).unwrap(),
+    )
+    .unwrap();
+    for attempt_id in [1, 2] {
+        let mut envelope = original.clone();
+        envelope["attempt_id"] = json!(attempt_id);
+        if attempt_id == 2 {
+            envelope["claimed"]["case_key"] = json!("repo:1055628515#1241@3");
+            envelope["task"]["body"]["case_key"] = json!("repo:1055628515#1241@3");
+            envelope["task"]["task_id"] = json!("second-builder");
+            envelope["task"]["workspace"] = json!("/second-case-worktree");
+        }
+        std::fs::write(
+            directory
+                .path()
+                .join(format!("direct-queue/inbox/attempt-{attempt_id}.json")),
+            serde_json::to_vec(&envelope).unwrap(),
+        )
+        .unwrap();
+    }
+    let runtime = Overlap {
+        arrivals: Mutex::new(0),
+        wake: Condvar::new(),
+    };
+    let policy = pip_control::load_repository_policy(include_bytes!(
+        "../../../config/target/repositories/mdk.json"
+    ))
+    .unwrap();
+    let result = pip_control::execute_direct_queue_pool(
+        &runtime,
+        &queue,
+        &policy,
+        policy.execution_capacity.unwrap(),
+        101,
+    )
+    .unwrap();
+    assert_eq!(result.len(), 2);
+    assert_eq!(*runtime.arrivals.lock().unwrap(), 2);
+}
+
 fn queue_for_fixture(root: &std::path::Path) -> DirectQueue {
     queue(root)
 }
@@ -1442,6 +1531,12 @@ fn active_policy() -> pip_control::RepositoryPolicy {
     value["intake"]["enabled"] = json!(true);
     value["intake"]["paused"] = json!(false);
     value["dispatch_enabled"] = json!(true);
+    // Legacy serial queue fixtures deliberately retain their original frozen
+    // builder binding; the current two-slot policy is checked separately.
+    value["roles"][1]["max_runtime"] = json!("PT45M");
+    value.as_object_mut().unwrap().remove("execution_capacity");
+    value["intake"]["repository_active_limit"] = json!(1);
+    value["intake"]["global_active_limit"] = json!(1);
     value["github"]["automation_actor_id"] = json!(202880);
     value["github"]["reviewer_general_actor_id"] = json!(202881);
     value["github"]["reviewer_secperf_actor_id"] = json!(202882);

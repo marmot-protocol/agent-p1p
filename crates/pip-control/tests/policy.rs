@@ -32,10 +32,11 @@ fn ten_round_policy_allows_corrections_until_ten_and_completion_at_the_limit() {
 
 #[test]
 fn capacity_rollout_preserves_case_authority_but_never_substitutes_models_or_scope() {
-    let accepted = load_repository_policy(include_bytes!(
+    let mut accepted = load_repository_policy(include_bytes!(
         "../../../config/target/repositories/mdk.json"
     ))
     .unwrap();
+    accepted.execution_capacity = None;
     let mut current = accepted.clone();
     current.revision += 1;
     current.intake.repository_active_limit = 2;
@@ -96,7 +97,7 @@ fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
     let bytes = include_bytes!("../../../config/target/repositories/mdk.json");
     let policy = load_repository_policy(bytes).unwrap();
     assert_eq!(policy.policy_format, 2);
-    assert_eq!(policy.revision, 10);
+    assert_eq!(policy.revision, 11);
     assert_eq!(policy.workflow_version, 3);
     assert_eq!(policy.repository.id, 1_055_628_515);
     assert_eq!(policy.repository.full_name(), "marmot-protocol/mdk");
@@ -110,6 +111,8 @@ fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
     assert!(!policy.intake.enabled);
     assert!(policy.intake.paused);
     assert!(!policy.dispatch_enabled);
+    assert_eq!(policy.intake.repository_active_limit, 2);
+    assert_eq!(policy.intake.global_active_limit, 2);
     assert_eq!(policy.github.automation_actor_id, Some(292_420_120));
     assert_eq!(policy.github.reviewer_general_actor_id, Some(323_997_422));
     assert_eq!(policy.github.reviewer_secperf_actor_id, Some(323_998_100));
@@ -138,6 +141,8 @@ fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
     assert_eq!(workflow.reviewers().count(), 3);
     assert_eq!(policy.roles[0].reasoning_effort.as_deref(), Some("xhigh"));
     assert_eq!(policy.roles[1].reasoning_effort, None);
+    assert_eq!(policy.roles[1].max_runtime, "PT120M");
+    assert_eq!(policy.execution_capacity.unwrap().builders, 2);
     assert_eq!(policy.intake_policy(false).trusted_actor_ids.len(), 3);
     let raw: serde_json::Value = serde_json::from_slice(bytes).unwrap();
     assert!(raw.get("canary_issue").is_none());
@@ -150,7 +155,7 @@ fn phase9_mdk_policy_preserves_historical_sol_activation() {
     let target = load_repository_policy(target_bytes).unwrap();
     let active = load_repository_policy(active_bytes).unwrap();
 
-    assert_eq!(target.revision, 10);
+    assert_eq!(target.revision, 11);
     assert_eq!(active.revision, 4);
     assert_eq!(active.max_remediation_rounds, 3);
     assert!(active.intake.enabled);
@@ -167,7 +172,11 @@ fn phase9_mdk_policy_preserves_historical_sol_activation() {
     target["max_remediation_rounds"] = active["max_remediation_rounds"].clone();
     target["intake"]["enabled"] = active["intake"]["enabled"].clone();
     target["intake"]["paused"] = active["intake"]["paused"].clone();
+    target["intake"]["repository_active_limit"] =
+        active["intake"]["repository_active_limit"].clone();
+    target["intake"]["global_active_limit"] = active["intake"]["global_active_limit"].clone();
     target["dispatch_enabled"] = active["dispatch_enabled"].clone();
+    target.as_object_mut().unwrap().remove("execution_capacity");
     target
         .as_object_mut()
         .unwrap()
@@ -182,6 +191,7 @@ fn phase9_mdk_policy_preserves_historical_sol_activation() {
         }
         if role["role"] == "builder" {
             role["model"] = serde_json::json!("cursor-grok-4.6-high-fast");
+            role["max_runtime"] = serde_json::json!("PT45M");
         }
         if role["reviewer_id"] == "secperf-opus" {
             role["model"] = serde_json::json!("claude-opus-5-thinking-high");
@@ -189,6 +199,28 @@ fn phase9_mdk_policy_preserves_historical_sol_activation() {
     }
     assert_eq!(active, target);
     assert!(active.get("canary_issue").is_none());
+}
+
+#[test]
+fn current_mdk_activation_changes_only_live_switches_from_target() {
+    let target: serde_json::Value = serde_json::from_slice(include_bytes!(
+        "../../../config/target/repositories/mdk.json"
+    ))
+    .unwrap();
+    let active_bytes = include_bytes!("../../../config/activation/repositories/mdk-rev11.json");
+    let active = load_repository_policy(active_bytes).unwrap();
+    assert_eq!(active.revision, 11);
+    assert!(active.intake.enabled);
+    assert!(!active.intake.paused);
+    assert!(active.dispatch_enabled);
+    assert_eq!(active.roles[1].max_runtime, "PT120M");
+    assert_eq!(active.execution_capacity.unwrap().builders, 2);
+    let mut expected = target;
+    expected["intake"]["enabled"] = serde_json::json!(true);
+    expected["intake"]["paused"] = serde_json::json!(false);
+    expected["dispatch_enabled"] = serde_json::json!(true);
+    expected["conversations_enabled"] = serde_json::json!(true);
+    assert_eq!(serde_json::to_value(active).unwrap(), expected);
 }
 
 #[test]
