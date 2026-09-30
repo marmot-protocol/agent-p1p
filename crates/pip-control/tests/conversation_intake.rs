@@ -12,6 +12,7 @@ struct Queue(
     Rc<RefCell<Vec<TaskSnapshot>>>,
     Rc<std::cell::Cell<bool>>,
     Rc<std::cell::Cell<u32>>,
+    Rc<std::cell::Cell<bool>>,
 );
 impl CommandRunner for Queue {
     fn run(&self, command: &CommandSpec) -> Result<CommandOutput, HermesError> {
@@ -36,11 +37,16 @@ impl CommandRunner for Queue {
             "show" => {
                 let task = self.0.borrow()[0].clone();
                 let body: serde_json::Value = serde_json::from_str(&task.body).unwrap();
-                json!({"task":task,"parents":[],"runs":[{"outcome":"completed","profile":"conversation",
+                if self.3.get() {
+                    json!({"task":task,"parents":[],"runs":[{"outcome":"crashed","profile":"conversation"}],
+                        "events":[{"kind":"gave_up","payload":{"limit_source":"task","trigger_outcome":"crashed","effective_limit":1,"failures":1}}]})
+                } else {
+                    json!({"task":task,"parents":[],"runs":[{"outcome":"completed","profile":"conversation",
                     "metadata":{"schema_version":1,"message_key":body["message_key"],"reply":"Here is the explanation.","follow_up":if self.1.get() {"REPLAN"} else {"NONE"},
                     "requested_model":format!("{}/{}",body["provider"].as_str().unwrap(),body["model"].as_str().unwrap()),
                     "actual_model":format!("{}/{}",body["provider"].as_str().unwrap(),body["model"].as_str().unwrap()),
                     "skills_repository_commit":body["skills_repository_commit"]}}]})
+                }
             }
             other => panic!("unexpected Hermes command: {other}"),
         };
@@ -171,13 +177,26 @@ fn conversation_roundtrip_with_capacity(
     bounded: bool,
     full: bool,
 ) {
+    conversation_roundtrip_with_crash(follow_up, state, peer, bounded, full, false);
+}
+
+#[test]
+fn crashed_conversation_with_exhausted_native_retries_is_terminal_not_waiting() {
+    conversation_roundtrip_with_crash(false, None, false, false, false, true);
+}
+
+fn conversation_roundtrip_with_crash(
+    follow_up: bool,
+    state: Option<&str>,
+    peer: bool,
+    bounded: bool,
+    full: bool,
+    crash: bool,
+) {
     let dir = tempfile::tempdir().unwrap();
     let mut path = dir.path().join("ledger.db");
     let mut store = Store::open(&path).unwrap();
-    let mut policy = load_repository_policy(include_bytes!(
-        "../../../config/target/repositories/mdk.json"
-    ))
-    .unwrap();
+    let mut policy = load_repository_policy(include_bytes!("fixtures/mdk-rev11.json")).unwrap();
     policy.conversations_enabled = true;
     policy.dispatch_enabled = true;
     policy.intake.paused = false;
@@ -340,6 +359,15 @@ fn conversation_roundtrip_with_capacity(
         store = recovered;
     }
     assert_eq!(run(&mut store).unwrap()["result"], "waiting");
+    if crash {
+        queue.3.set(true);
+        queue.0.borrow_mut()[0].status = "blocked".into();
+        assert_eq!(run(&mut store).unwrap()["result"], "failed");
+        assert_eq!(store.conversation(key).unwrap().unwrap().state, "FAILED");
+        assert_eq!(run(&mut store).unwrap()["result"], "idle");
+        assert!(writer.0.borrow().is_empty());
+        return;
+    }
     queue.0.borrow_mut()[0].status = "done".into();
     queue.0.borrow_mut()[0].configuration.workspace_path =
         Some("/runtime/kanban/boards/pip-mdk/workspaces/task-conversation".into());
@@ -604,10 +632,7 @@ fn signed_mentions_route_without_a_label_or_workflow_and_ignore_untrusted_bots()
     ] {
         let directory = tempfile::tempdir().unwrap();
         let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
-        let mut policy = load_repository_policy(include_bytes!(
-            "../../../config/target/repositories/mdk.json"
-        ))
-        .unwrap();
+        let mut policy = load_repository_policy(include_bytes!("fixtures/mdk-rev11.json")).unwrap();
         policy.conversations_enabled = true;
         policy.github.automation_actor_id = Some(88);
         policy.intake.trusted_actor_ids = vec![99];

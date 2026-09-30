@@ -128,7 +128,7 @@ fn direct_worker_template_has_provider_state_but_no_controller_credentials() {
 
 #[test]
 fn mdk_two_builder_stage_cap_matches_the_pilot_policy() {
-    let policy = include_str!("../../../config/target/repositories/mdk.json");
+    let policy = include_str!("fixtures/mdk-rev11.json");
     let policy: serde_json::Value = serde_json::from_str(policy).unwrap();
     assert_eq!(policy["execution_capacity"]["builders"], 2);
     assert_eq!(policy["execution_capacity"]["cargo_jobs"], 2);

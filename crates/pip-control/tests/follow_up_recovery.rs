@@ -21,10 +21,7 @@ fn only_proven_false_follow_up_takeover_can_be_recovered_once_without_resetting_
     ] {
         let dir = tempfile::tempdir().unwrap();
         let mut store = Store::open(dir.path().join("db")).unwrap();
-        let mut paused = load_repository_policy(include_bytes!(
-            "../../../config/target/repositories/mdk.json"
-        ))
-        .unwrap();
+        let mut paused = load_repository_policy(include_bytes!("fixtures/mdk-rev11.json")).unwrap();
         paused.github.automation_actor_id = Some(88);
         let mut active = paused.clone();
         active.intake.enabled = true;

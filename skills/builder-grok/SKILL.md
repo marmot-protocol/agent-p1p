@@ -1,6 +1,6 @@
 ---
 name: builder-grok
-description: Use when implementing an approved Pip plan with Grok.
+description: Use when implementing an approved Pip plan with the policy-bound Cursor model.
 version: 0.18.0
 author: agent-p1p
 license: MIT
@@ -10,7 +10,7 @@ metadata:
     related_skills: [workflow-contract]
 ---
 
-# Builder Grok
+# Cursor Builder
 
 ## Overview
 

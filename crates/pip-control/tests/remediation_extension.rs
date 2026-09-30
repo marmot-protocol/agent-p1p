@@ -17,10 +17,7 @@ fn fixture(
 ) {
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::open(dir.path().join("ledger.db")).unwrap();
-    let mut policy = load_repository_policy(include_bytes!(
-        "../../../config/target/repositories/mdk.json"
-    ))
-    .unwrap();
+    let mut policy = load_repository_policy(include_bytes!("fixtures/mdk-rev11.json")).unwrap();
     policy.repository.id = 42;
     policy.revision = 8;
     policy.max_remediation_rounds = 3;

@@ -30,10 +30,8 @@ fn isolated_real_planner_contract() {
     let home = root.join("hermes");
     if phase == "prepare" {
         assert!(!root.join("policy.json").exists());
-        let mut policy: serde_json::Value = serde_json::from_slice(include_bytes!(
-            "../../../config/target/repositories/mdk.json"
-        ))
-        .unwrap();
+        let mut policy: serde_json::Value =
+            serde_json::from_slice(include_bytes!("fixtures/mdk-rev11.json")).unwrap();
         policy["repository"] = json!({"id": 17, "owner": "pip-fixture", "name": "local-only", "default_branch": "master"});
         policy["board"] = json!("pip-isolated-planner-probe");
         policy["workspace"] = json!(root.join("workspaces"));

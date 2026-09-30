@@ -66,9 +66,7 @@ pub fn bootstrap_hermes_runtime_with<R: CommandRunner + Clone>(
     }
     if policy.conversations_enabled {
         let planner = policy
-            .roles
-            .iter()
-            .find(|role| role.role == pip_contracts::WorkerRole::Planner && role.is_hermes())
+            .conversation_binding()
             .ok_or(RuntimeBootstrapError::InvalidPolicy)?;
         profiles.push(ProfileBootstrapSpec {
             name: "conversation".into(),

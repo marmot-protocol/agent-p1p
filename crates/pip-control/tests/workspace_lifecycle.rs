@@ -44,10 +44,8 @@ fn policy(directory: &tempfile::TempDir, minimum_free_bytes: u64) -> RepositoryP
     std::fs::create_dir_all(&checkout).unwrap();
     std::fs::create_dir_all(&workspace).unwrap();
     std::fs::create_dir_all(&artifacts).unwrap();
-    let mut value: serde_json::Value = serde_json::from_slice(include_bytes!(
-        "../../../config/target/repositories/mdk.json"
-    ))
-    .unwrap();
+    let mut value: serde_json::Value =
+        serde_json::from_slice(include_bytes!("fixtures/mdk-rev11.json")).unwrap();
     value["checkout"] = json!(checkout);
     value["workspace"] = json!(workspace);
     value["artifacts"] = json!(artifacts);

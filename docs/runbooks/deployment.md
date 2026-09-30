@@ -125,6 +125,36 @@ and exact-result replay does not insert another observation. A saved review
 blocked by the former case-global key can be accepted by normal reconciliation
 after upgrade; no result edit, attempt reset or new model call is needed.
 
+## Revision-12 model and inbox rollout
+
+For a maintenance drain, `controller-cycle --admit-new-cases false` suppresses
+only new issue admission while collecting and reconciling existing authorized
+work. It does not change policy or pause existing dispatch. Stop execution
+timers and prove workers quiescent first; keep the gateway stopped if the drain
+must not start newly queued native jobs. Omission preserves normal admission.
+
+The active template `config/activation/repositories/mdk-rev12.json` keeps Astra
+for planning and final review, uses Cursor Opus 5.5 for builders, Sol 6.1 for
+general reviews and GitHub replies, and retains the Kimi required / Opus shadow
+security-performance reviewers. The builder skill's legacy directory name is
+not a model binding: the frozen policy/task supplies the exact Cursor model.
+
+`conversation_model` is an optional operational binding; older policies fall
+back to the planner. It is excluded from accepted case snapshots, just like the
+inbox enable switch. New messages use the current reply binding; existing jobs
+retain their saved model. Updating worker models still requires quiescence and
+an explicit disposition for incompatible old-policy cases, never rewriting jobs.
+
+The conversation collector recognizes Hermes's current terminal crash breaker
+and retains an exhausted reply as FAILED rather than waiting forever. Cancelled
+or archived unanswered tasks likewise become FAILED. Incomplete running tasks
+remain waiting; no successful reply or new retry budget is fabricated.
+
+Pre-PR RETURN_TO_PLANNING may retain descendant builder commits and unfinished
+edits. It must still have the exact case-owned branch and planned-base ancestry.
+Initial planning and published-head/review checks remain strict. Do not reset
+the worktree to make replanning proceed.
+
 ## First-install prerequisites
 
 - Compatible Linux/systemd, architecture and libc for the actual artifact.

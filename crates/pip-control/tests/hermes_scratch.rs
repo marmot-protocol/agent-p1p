@@ -88,10 +88,7 @@ fn setup(state: &str) -> (tempfile::TempDir, RepositoryPolicy, Store, Value) {
         fs::create_dir(base.join(child)).unwrap();
     }
     fs::set_permissions(base.join("scratch"), fs::Permissions::from_mode(0o700)).unwrap();
-    let mut policy = load_repository_policy(include_bytes!(
-        "../../../config/target/repositories/mdk.json"
-    ))
-    .unwrap();
+    let mut policy = load_repository_policy(include_bytes!("fixtures/mdk-rev11.json")).unwrap();
     policy.workspace = base.join("worktrees").display().to_string();
     policy.hermes_scratch_root = Some(base.join("scratch").display().to_string());
     policy.workspace_storage.minimum_free_bytes = 1;

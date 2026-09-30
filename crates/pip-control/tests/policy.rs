@@ -122,7 +122,7 @@ fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
     let bytes = include_bytes!("../../../config/target/repositories/mdk.json");
     let policy = load_repository_policy(bytes).unwrap();
     assert_eq!(policy.policy_format, 2);
-    assert_eq!(policy.revision, 11);
+    assert_eq!(policy.revision, 12);
     assert_eq!(policy.workflow_version, 3);
     assert_eq!(policy.repository.id, 1_055_628_515);
     assert_eq!(policy.repository.full_name(), "marmot-protocol/mdk");
@@ -175,7 +175,7 @@ fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
 
 #[test]
 fn phase9_mdk_policy_preserves_historical_sol_activation() {
-    let target_bytes = include_bytes!("../../../config/target/repositories/mdk.json");
+    let target_bytes = include_bytes!("fixtures/mdk-rev11.json");
     let active_bytes = include_bytes!("../../../config/activation/repositories/mdk-phase9.json");
     let target = load_repository_policy(target_bytes).unwrap();
     let active = load_repository_policy(active_bytes).unwrap();
@@ -232,9 +232,9 @@ fn current_mdk_activation_changes_only_live_switches_from_target() {
         "../../../config/target/repositories/mdk.json"
     ))
     .unwrap();
-    let active_bytes = include_bytes!("../../../config/activation/repositories/mdk-rev11.json");
+    let active_bytes = include_bytes!("../../../config/activation/repositories/mdk-rev12.json");
     let active = load_repository_policy(active_bytes).unwrap();
-    assert_eq!(active.revision, 11);
+    assert_eq!(active.revision, 12);
     assert!(active.intake.enabled);
     assert!(!active.intake.paused);
     assert!(active.dispatch_enabled);
@@ -281,7 +281,7 @@ fn current_model_policy_preserves_role_specific_models_and_inert_boundaries() {
     assert_eq!(openai.len(), 3);
     for (role, (model, effort)) in openai.iter().zip([
         ("gpt-6-astra", "xhigh"),
-        ("gpt-6-sol", "high"),
+        ("gpt-6.1-sol", "high"),
         ("gpt-6-astra", "xhigh"),
     ]) {
         assert_eq!(role.model, model);
@@ -295,7 +295,11 @@ fn current_model_policy_preserves_role_specific_models_and_inert_boundaries() {
         .collect();
     assert_eq!(
         direct,
-        ["grok-4.7-high-fast", "kimi-k3-max", "claude-opus-5-5-high"]
+        [
+            "claude-opus-5-5-high",
+            "kimi-k3-max",
+            "claude-opus-5-5-high"
+        ]
     );
     assert!(!policy.intake.enabled && policy.intake.paused && !policy.dispatch_enabled);
     assert!(policy.merge.is_shadow() && !policy.merge.autonomous);

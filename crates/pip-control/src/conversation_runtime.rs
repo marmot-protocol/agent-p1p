@@ -1,7 +1,6 @@
 //! One bounded conversation step using the existing queue and publication adapter.
 use std::time::Duration;
 
-use pip_contracts::WorkerRole;
 use pip_github::{CommentSpec, DiscussionComment, GitHubError, MutationResult};
 use pip_hermes::{CommandRunner, HermesProjector, HermesReader, ProjectionResult, TaskCreateSpec};
 use pip_store::Store;
@@ -43,6 +42,7 @@ pub fn reconcile_conversation_once<
         return Ok(json!({"result":"disabled"}));
     }
     let (hermes, skills_commit) = runtime;
+    let conversation_binding = policy.conversation_binding();
     if skills_commit.len() != 40
         || !skills_commit
             .bytes()
@@ -153,10 +153,10 @@ pub fn reconcile_conversation_once<
         {
             return Err("discussion identity changed".into());
         }
-        let role = policy
-            .roles
-            .iter()
-            .find(|r| r.role == WorkerRole::Planner && r.is_hermes())
+        let role = policy.conversation_binding();
+        let role = conversation_binding
+            .as_ref()
+            .or(role.as_ref())
             .ok_or("conversation requires configured native planner model")?;
         let case = message
             .input
@@ -254,6 +254,15 @@ pub fn reconcile_conversation_once<
         != Some(id.as_str())
     {
         return Err("conversation task differs from frozen definition".into());
+    }
+    if message.state == "QUEUED"
+        && (detail.retry_limit_reached()
+            || matches!(detail.task.status.as_str(), "cancelled" | "archived"))
+    {
+        // Preserve the frozen job and Hermes crash evidence. An exhausted or
+        // cancelled reply is not active work and must not pin the entire inbox.
+        store.finish_conversation(&key, "FAILED", None)?;
+        return Ok(json!({"result":"failed","message_key":key,"task_id":id}));
     }
     if !matches!(
         detail.task.status.as_str(),

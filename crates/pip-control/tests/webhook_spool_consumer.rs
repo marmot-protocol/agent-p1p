@@ -427,10 +427,7 @@ fn prepare_spool(root: &std::path::Path) {
 }
 
 fn active_policy() -> RepositoryPolicy {
-    let mut policy = load_repository_policy(include_bytes!(
-        "../../../config/target/repositories/mdk.json"
-    ))
-    .unwrap();
+    let mut policy = load_repository_policy(include_bytes!("fixtures/mdk-rev11.json")).unwrap();
     policy.intake.enabled = true;
     policy.intake.paused = false;
     policy.dispatch_enabled = true;
@@ -441,10 +438,7 @@ fn active_policy() -> RepositoryPolicy {
 }
 
 fn inactive_policy() -> RepositoryPolicy {
-    let mut policy = load_repository_policy(include_bytes!(
-        "../../../config/target/repositories/mdk.json"
-    ))
-    .unwrap();
+    let mut policy = load_repository_policy(include_bytes!("fixtures/mdk-rev11.json")).unwrap();
     policy.github.automation_actor_id = Some(202_880);
     policy.intake.trusted_actor_ids = vec![202_880];
     policy.intake.excluded_issue_numbers.clear();

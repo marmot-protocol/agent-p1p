@@ -957,10 +957,7 @@ fn webhook_fails_closed_before_recording_or_fetching_on_bad_signature_or_reposit
 }
 
 fn active_policy(repository_limit: u32, global_limit: u32) -> RepositoryPolicy {
-    let mut policy = load_repository_policy(include_bytes!(
-        "../../../config/target/repositories/mdk.json"
-    ))
-    .unwrap();
+    let mut policy = load_repository_policy(include_bytes!("fixtures/mdk-rev11.json")).unwrap();
     policy.intake.enabled = true;
     policy.intake.paused = false;
     policy.dispatch_enabled = true;

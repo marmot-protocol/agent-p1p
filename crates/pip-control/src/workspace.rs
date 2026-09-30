@@ -171,8 +171,15 @@ impl WorkspacePreparer for GitWorkspacePreparer {
             4 * 1024 * 1024,
         )?;
         allocator.allocate(&spec, &expected_remote)?;
-        if claimed.effect_type == "DISPATCH_BUILDER"
-            && store.failed_direct_attempt_count_for_case(&case.case_key)? > 0
+        if (claimed.effect_type == "DISPATCH_BUILDER"
+            && store.failed_direct_attempt_count_for_case(&case.case_key)? > 0)
+            || preserve_for_replanning(
+                &claimed.effect_type,
+                &case.state,
+                case.plan_version,
+                case.head_sha.is_some(),
+                store.latest_event_type(&case.case_key)?.as_deref(),
+            )
         {
             reconciler.verify_builder_retry(spec.path(), spec.branch(), expected_head)?;
         } else {
@@ -180,6 +187,23 @@ impl WorkspacePreparer for GitWorkspacePreparer {
         }
         Ok(())
     }
+}
+
+fn preserve_for_replanning(
+    effect: &str,
+    state: &str,
+    plan_version: u32,
+    has_head: bool,
+    event: Option<&str>,
+) -> bool {
+    // The builder may have committed or left edits before asking to replan.
+    // Reuse the recovery check: exact case branch and descendant ancestry are
+    // mandatory, but retained edits are not grounds for discarding its work.
+    effect == "DISPATCH_PLANNER"
+        && state == "PLANNING"
+        && plan_version > 0
+        && !has_head
+        && event == Some("RETURN_TO_PLANNING")
 }
 
 fn expected_worktree_head(
@@ -221,4 +245,46 @@ fn case_id(case: &StoredCase) -> Result<CaseId, WorkspaceError> {
         return Err(WorkspaceError::InvalidCase);
     }
     Ok(id)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn pre_pr_return_to_planning_preserves_builder_progress_only_at_that_boundary() {
+        assert!(super::preserve_for_replanning(
+            "DISPATCH_PLANNER",
+            "PLANNING",
+            1,
+            false,
+            Some("RETURN_TO_PLANNING")
+        ));
+        for (effect, state, plan, head, event) in [
+            (
+                "DISPATCH_PLANNER",
+                "PLANNING",
+                0,
+                false,
+                Some("ISSUE_AUTHORIZED"),
+            ),
+            ("DISPATCH_PLANNER", "PLANNING", 1, false, Some("PROCEED")),
+            (
+                "DISPATCH_BUILDER",
+                "BUILDING",
+                1,
+                false,
+                Some("RETURN_TO_PLANNING"),
+            ),
+            (
+                "DISPATCH_PLANNER",
+                "PLANNING",
+                1,
+                true,
+                Some("RETURN_TO_PLANNING"),
+            ),
+        ] {
+            assert!(!super::preserve_for_replanning(
+                effect, state, plan, head, event
+            ));
+        }
+    }
 }

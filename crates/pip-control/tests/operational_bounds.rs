@@ -178,10 +178,7 @@ fn repeated_finding_fingerprints_and_provider_failures_are_bounded() {
 }
 
 fn policy() -> pip_control::RepositoryPolicy {
-    load_repository_policy(include_bytes!(
-        "../../../config/target/repositories/mdk.json"
-    ))
-    .unwrap()
+    load_repository_policy(include_bytes!("fixtures/mdk-rev11.json")).unwrap()
 }
 
 fn create_case(store: &mut Store, observed_at: u64) {

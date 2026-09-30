@@ -711,10 +711,8 @@ fn context(owner: &str, now: u64) -> DispatchCycleContext<'_> {
 }
 
 fn active_policy() -> pip_control::RepositoryPolicy {
-    let mut value: Value = serde_json::from_slice(include_bytes!(
-        "../../../config/target/repositories/mdk.json"
-    ))
-    .unwrap();
+    let mut value: Value =
+        serde_json::from_slice(include_bytes!("fixtures/mdk-rev11.json")).unwrap();
     value["intake"]["enabled"] = json!(true);
     value["intake"]["paused"] = json!(false);
     value["dispatch_enabled"] = json!(true);

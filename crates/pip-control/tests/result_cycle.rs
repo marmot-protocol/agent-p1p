@@ -923,10 +923,8 @@ fn completed_planner(profile: &str, metadata: Value) -> Value {
 }
 
 fn active_policy() -> pip_control::RepositoryPolicy {
-    let mut value: Value = serde_json::from_slice(include_bytes!(
-        "../../../config/target/repositories/mdk.json"
-    ))
-    .unwrap();
+    let mut value: Value =
+        serde_json::from_slice(include_bytes!("fixtures/mdk-rev11.json")).unwrap();
     value["repository"]["id"] = json!(984321);
     value["workflow_version"] = json!(1);
     value["intake"]["enabled"] = json!(true);

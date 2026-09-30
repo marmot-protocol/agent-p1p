@@ -1456,10 +1456,8 @@ fn readiness_rechecks_authorization_head_ci_reviews_and_threads_before_any_write
 }
 
 fn active_policy() -> pip_control::RepositoryPolicy {
-    let mut value: Value = serde_json::from_slice(include_bytes!(
-        "../../../config/target/repositories/mdk.json"
-    ))
-    .unwrap();
+    let mut value: Value =
+        serde_json::from_slice(include_bytes!("fixtures/mdk-rev11.json")).unwrap();
     value["repository"]["id"] = json!(984321);
     value["workflow_version"] = json!(1);
     value["intake"]["enabled"] = json!(true);

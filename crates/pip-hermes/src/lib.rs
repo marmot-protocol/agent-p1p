@@ -262,6 +262,13 @@ pub struct TaskEventSnapshot {
 }
 
 impl TaskDetail {
+    #[must_use]
+    pub fn retry_limit_reached(&self) -> bool {
+        self.task.status == "blocked"
+            && (self.runs.last().and_then(|run| run.outcome.as_deref()) == Some("gave_up")
+                || self.has_crash_circuit_breaker())
+    }
+
     fn has_crash_circuit_breaker(&self) -> bool {
         let Some(run) = self.runs.last() else {
             return false;
@@ -455,10 +462,7 @@ impl<R: CommandRunner> HermesReader<R> {
         if detail.task.id != task_id {
             return Err(HermesError::IncompleteTask);
         }
-        if detail.task.status == "blocked"
-            && (detail.runs.last().and_then(|run| run.outcome.as_deref()) == Some("gave_up")
-                || detail.has_crash_circuit_breaker())
-        {
+        if detail.retry_limit_reached() {
             return Err(HermesError::RetryLimitReached);
         }
         if detail.task.status != "done" {

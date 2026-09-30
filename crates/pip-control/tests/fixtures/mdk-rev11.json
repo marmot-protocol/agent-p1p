@@ -1,11 +1,6 @@
 {
   "policy_format": 2,
-  "revision": 12,
-  "conversation_model": {
-    "provider": "openai-codex",
-    "model": "gpt-6.1-sol",
-    "reasoning_effort": "high"
-  },
+  "revision": 11,
   "repository": {
     "id": 1055628515,
     "owner": "marmot-protocol",
@@ -74,10 +69,10 @@
     },
     {
       "role": "builder",
-      "profile": "builder-opus",
+      "profile": "builder-grok",
       "execution": "direct",
       "provider": "cursor",
-      "model": "claude-opus-5-5-high",
+      "model": "grok-4.7-high-fast",
       "reasoning_effort": null,
       "max_runtime": "PT120M",
       "priority": 50,
@@ -90,7 +85,7 @@
       "profile": "reviewer-general",
       "execution": "hermes",
       "provider": "openai-codex",
-      "model": "gpt-6.1-sol",
+      "model": "gpt-6-sol",
       "reasoning_effort": "high",
       "max_runtime": "PT30M",
       "priority": 50,

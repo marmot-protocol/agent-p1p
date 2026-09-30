@@ -547,6 +547,7 @@ where
             "--now",
             "--lease-seconds",
             "--global-paused",
+            "--admit-new-cases",
             "--commit-signing-identity",
             "--commit-signing-key",
         ],
@@ -679,7 +680,7 @@ where
     let workspace_lifecycle = crate::reconcile_workspace_lifecycle_once(&mut store, &policy, now);
     let workspace_ready = workspace_lifecycle.as_ref().is_ok_and(|state| state.ready);
     let workspace_lifecycle = cycle_observation(workspace_lifecycle);
-    let intake = if policy.intake.enabled && workspace_ready {
+    let intake = if policy.intake.enabled && workspace_ready && admit_new_cases(&options)? {
         cycle_observation(crate::reconcile_intake_with_quiescence(
             &reader,
             &policy,
@@ -1583,6 +1584,38 @@ fn read_secret(path: &Path, max_bytes: usize) -> Result<Vec<u8>, CliError> {
         return Err(CliError::UnsafeInput(path.to_owned()));
     }
     read_bounded(path, max_bytes)
+}
+
+fn admit_new_cases(options: &BTreeMap<String, String>) -> Result<bool, CliError> {
+    options
+        .get("--admit-new-cases")
+        .map(|value| parse_bool(value, "--admit-new-cases"))
+        .transpose()
+        .map(|value| value.unwrap_or(true))
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+
+    #[test]
+    fn maintenance_can_suppress_only_new_admission_without_rewriting_policy() {
+        assert!(admit_new_cases(&BTreeMap::new()).unwrap());
+        assert!(
+            !admit_new_cases(&BTreeMap::from([(
+                "--admit-new-cases".into(),
+                "false".into()
+            )]))
+            .unwrap()
+        );
+        assert!(
+            admit_new_cases(&BTreeMap::from([(
+                "--admit-new-cases".into(),
+                "maybe".into()
+            )]))
+            .is_err()
+        );
+    }
 }
 
 fn write_new(path: &Path, bytes: &[u8], mode: u32) -> Result<(), CliError> {

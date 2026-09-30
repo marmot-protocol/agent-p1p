@@ -347,6 +347,7 @@ fn reconcile_validated_evidence<S: IntakeSource>(
         .map_err(|e| ActiveIntakeError::Coordination(e.to_string()))?;
     let mut case_policy = policy.clone();
     case_policy.conversations_enabled = false;
+    case_policy.conversation_model = None;
     let policy_value = serde_json::to_value(&case_policy)
         .map_err(|error| ActiveIntakeError::Serialization(error.to_string()))?;
     let policy_result = store.record_policy(&PolicyInput {

@@ -17,10 +17,8 @@ fn direct_job_lease_covers_the_longest_policy_runtime_plus_recovery_margin() {
 
 #[test]
 fn mdk_two_hour_builder_lease_includes_recovery_margin() {
-    let policy = pip_control::load_repository_policy(include_bytes!(
-        "../../../config/target/repositories/mdk.json"
-    ))
-    .unwrap();
+    let policy =
+        pip_control::load_repository_policy(include_bytes!("fixtures/mdk-rev11.json")).unwrap();
     assert_eq!(recommended_direct_lease_seconds(&policy).unwrap(), 7_320);
 }
 use pip_controller::DirectTaskSpec;
@@ -1068,10 +1066,8 @@ fn two_builder_slots_execute_independent_cases_concurrently() {
         arrivals: Mutex::new(0),
         wake: Condvar::new(),
     };
-    let policy = pip_control::load_repository_policy(include_bytes!(
-        "../../../config/target/repositories/mdk.json"
-    ))
-    .unwrap();
+    let policy =
+        pip_control::load_repository_policy(include_bytes!("fixtures/mdk-rev11.json")).unwrap();
     let result = pip_control::execute_direct_queue_pool(
         &runtime,
         &queue,
@@ -1524,10 +1520,8 @@ fn runtime(result: Result<WorkerResult, DirectWorkerRuntimeError>) -> FakeRuntim
 }
 
 fn active_policy() -> pip_control::RepositoryPolicy {
-    let mut value: Value = serde_json::from_slice(include_bytes!(
-        "../../../config/target/repositories/mdk.json"
-    ))
-    .unwrap();
+    let mut value: Value =
+        serde_json::from_slice(include_bytes!("fixtures/mdk-rev11.json")).unwrap();
     value["intake"]["enabled"] = json!(true);
     value["intake"]["paused"] = json!(false);
     value["dispatch_enabled"] = json!(true);

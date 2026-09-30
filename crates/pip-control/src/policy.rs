@@ -136,10 +136,20 @@ impl RoleConfiguration {
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct ConversationModel {
+    pub provider: String,
+    pub model: String,
+    pub reasoning_effort: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct RepositoryPolicy {
     /// Operational inbox switch, excluded only from the immutable case-policy snapshot.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub conversations_enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_model: Option<ConversationModel>,
     pub policy_format: u32,
     pub revision: u64,
     pub repository: RepositoryIdentity,
@@ -170,6 +180,21 @@ pub struct RepositoryPolicy {
 }
 
 impl RepositoryPolicy {
+    /// Old policies retain their planner binding; new replies may opt into an
+    /// independent native model without changing accepted workflow jobs.
+    pub fn conversation_binding(&self) -> Option<RoleConfiguration> {
+        let mut role = self
+            .roles
+            .iter()
+            .find(|role| role.role == WorkerRole::Planner && role.is_hermes())?
+            .clone();
+        if let Some(binding) = &self.conversation_model {
+            role.provider.clone_from(&binding.provider);
+            role.model.clone_from(&binding.model);
+            role.reasoning_effort = Some(binding.reasoning_effort.clone());
+        }
+        Some(role)
+    }
     /// Capacity changes and a longer builder ceiling may apply to new cases.
     /// Existing cases retain their accepted builder duration and every other
     /// authority binding, including the exact model, retry budgets and paths.
@@ -181,6 +206,7 @@ impl RepositoryPolicy {
             policy.intake.repository_active_limit = 1;
             policy.intake.global_active_limit = 1;
             policy.conversations_enabled = false;
+            policy.conversation_model = None;
             serde_json::to_value(policy).ok()
         };
         let mut compatible = self.clone();
@@ -370,6 +396,16 @@ fn validate_policy(policy: &RepositoryPolicy) -> Result<(), PolicyError> {
         ExecutionConfiguration::Direct => role.reasoning_effort.is_none(),
     });
     let valid = policy.policy_format == 2
+        && policy.conversation_model.as_ref().is_none_or(|binding| {
+            valid_segment(&binding.provider)
+                && !binding.model.trim().is_empty()
+                && binding.model.len() <= 200
+                && binding
+                    .model
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-._/".contains(&b))
+                && valid_reasoning_effort(&binding.reasoning_effort)
+        })
         && policy.revision > 0
         && policy.repository.id > 0
         && valid_segment(&policy.repository.owner)

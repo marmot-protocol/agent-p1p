@@ -1,11 +1,6 @@
 {
   "policy_format": 2,
   "revision": 12,
-  "conversation_model": {
-    "provider": "openai-codex",
-    "model": "gpt-6.1-sol",
-    "reasoning_effort": "high"
-  },
   "repository": {
     "id": 1055628515,
     "owner": "marmot-protocol",
@@ -29,16 +24,23 @@
     "reviewer_secperf_actor_id": 323998100
   },
   "intake": {
-    "enabled": false,
-    "paused": true,
+    "enabled": true,
+    "paused": false,
     "label": "pip-ok",
-    "trusted_actor_ids": [202880, 258432291, 292420120],
-    "excluded_issue_numbers": [1366, 1384],
+    "trusted_actor_ids": [
+      202880,
+      258432291,
+      292420120
+    ],
+    "excluded_issue_numbers": [
+      1366,
+      1384
+    ],
     "held_issue_numbers": [],
     "repository_active_limit": 2,
     "global_active_limit": 2
   },
-  "dispatch_enabled": false,
+  "dispatch_enabled": true,
   "merge": {
     "mode": "shadow",
     "autonomous": false,
@@ -59,7 +61,9 @@
     "ADMIN_AUTHORIZATION",
     "PUSH_PAYLOAD_CONTEXT"
   ],
-  "required_ci_contexts": ["Required CI"],
+  "required_ci_contexts": [
+    "Required CI"
+  ],
   "roles": [
     {
       "role": "planner",
@@ -70,7 +74,10 @@
       "reasoning_effort": "xhigh",
       "max_runtime": "PT30M",
       "priority": 50,
-      "skills": ["workflow-contract", "planner"]
+      "skills": [
+        "workflow-contract",
+        "planner"
+      ]
     },
     {
       "role": "builder",
@@ -81,7 +88,10 @@
       "reasoning_effort": null,
       "max_runtime": "PT120M",
       "priority": 50,
-      "skills": ["workflow-contract", "builder-grok"]
+      "skills": [
+        "workflow-contract",
+        "builder-grok"
+      ]
     },
     {
       "role": "reviewer-general",
@@ -94,7 +104,10 @@
       "reasoning_effort": "high",
       "max_runtime": "PT30M",
       "priority": 50,
-      "skills": ["workflow-contract", "reviewer-general"]
+      "skills": [
+        "workflow-contract",
+        "reviewer-general"
+      ]
     },
     {
       "role": "reviewer-secperf",
@@ -107,7 +120,10 @@
       "reasoning_effort": null,
       "max_runtime": "PT30M",
       "priority": 50,
-      "skills": ["workflow-contract", "reviewer-secperf"]
+      "skills": [
+        "workflow-contract",
+        "reviewer-secperf"
+      ]
     },
     {
       "role": "reviewer-secperf",
@@ -120,7 +136,10 @@
       "reasoning_effort": null,
       "max_runtime": "PT30M",
       "priority": 40,
-      "skills": ["workflow-contract", "reviewer-secperf"]
+      "skills": [
+        "workflow-contract",
+        "reviewer-secperf"
+      ]
     },
     {
       "role": "final-reviewer",
@@ -131,7 +150,10 @@
       "reasoning_effort": "xhigh",
       "max_runtime": "PT30M",
       "priority": 50,
-      "skills": ["workflow-contract", "final-reviewer"]
+      "skills": [
+        "workflow-contract",
+        "final-reviewer"
+      ]
     }
   ],
   "execution_capacity": {
@@ -140,5 +162,11 @@
     "direct_reviewers": 1,
     "ready_plans": 2,
     "cargo_jobs": 2
+  },
+  "conversations_enabled": true,
+  "conversation_model": {
+    "provider": "openai-codex",
+    "model": "gpt-6.1-sol",
+    "reasoning_effort": "high"
   }
 }

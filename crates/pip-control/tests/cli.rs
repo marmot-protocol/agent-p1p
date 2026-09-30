@@ -307,11 +307,7 @@ fn paused_controller_reports_collection_failures_without_reading_credentials() {
     for initialized in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let policy = directory.path().join("policy.json");
-        fs::write(
-            &policy,
-            include_bytes!("../../../config/target/repositories/mdk.json"),
-        )
-        .unwrap();
+        fs::write(&policy, include_bytes!("fixtures/mdk-rev11.json")).unwrap();
         let database = directory.path().join("must-not-exist.db");
         if initialized {
             Store::open(&database).unwrap();
@@ -386,10 +382,8 @@ fn paused_controller_reports_collection_failures_without_reading_credentials() {
 fn webhook_intake_rejects_an_invalid_signature_without_recording_a_delivery() {
     let directory = tempfile::tempdir().unwrap();
     let policy_path = directory.path().join("policy.json");
-    let mut policy: serde_json::Value = serde_json::from_slice(include_bytes!(
-        "../../../config/target/repositories/mdk.json"
-    ))
-    .unwrap();
+    let mut policy: serde_json::Value =
+        serde_json::from_slice(include_bytes!("fixtures/mdk-rev11.json")).unwrap();
     policy["intake"]["enabled"] = serde_json::json!(true);
     policy["intake"]["paused"] = serde_json::json!(false);
     policy["dispatch_enabled"] = serde_json::json!(true);

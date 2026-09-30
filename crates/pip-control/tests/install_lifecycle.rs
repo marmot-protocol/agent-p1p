@@ -541,7 +541,7 @@ fn cohort(parent: &Path, name: &str, binary: &[u8], source: &str, key: &str) -> 
     fs::write(root.join("bin/pip-control"), binary).unwrap();
     fs::write(
         root.join("share/pip/config/repositories/mdk.json"),
-        include_bytes!("../../../config/target/repositories/mdk.json"),
+        include_bytes!("fixtures/mdk-rev11.json"),
     )
     .unwrap();
     fs::write(

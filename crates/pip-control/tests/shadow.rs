@@ -55,10 +55,7 @@ impl IntakeSource for FixtureSource {
 
 #[test]
 fn paused_shadow_reconciliation_is_deterministic_and_never_mutates() {
-    let policy = load_repository_policy(include_bytes!(
-        "../../../config/target/repositories/mdk.json"
-    ))
-    .unwrap();
+    let policy = load_repository_policy(include_bytes!("fixtures/mdk-rev11.json")).unwrap();
     let source = FixtureSource {
         writes: Cell::new(0),
     };

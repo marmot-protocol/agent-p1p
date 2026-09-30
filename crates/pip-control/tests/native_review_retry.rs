@@ -13,10 +13,7 @@ fn native_retry_is_exact_once_preserves_history_and_all_budgets() {
     ] {
         let dir = tempfile::tempdir().unwrap();
         let mut store = Store::open(dir.path().join("ledger.db")).unwrap();
-        let mut paused = load_repository_policy(include_bytes!(
-            "../../../config/target/repositories/mdk.json"
-        ))
-        .unwrap();
+        let mut paused = load_repository_policy(include_bytes!("fixtures/mdk-rev11.json")).unwrap();
         paused.repository.id = 42;
         let mut active = paused.clone();
         active.intake.enabled = true;

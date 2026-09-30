@@ -35,8 +35,24 @@ fn policy_bootstrap_manages_only_hermes_roles_with_exact_reasoning() {
 }
 
 #[test]
-fn conversation_opt_in_uses_the_exact_planner_model_and_reasoning() {
+fn conversation_opt_in_uses_the_configured_reply_model_and_reasoning() {
     bootstrap(true);
+}
+
+#[test]
+fn conversation_model_is_independent_of_the_planner() {
+    let mut value: serde_json::Value = serde_json::from_slice(include_bytes!(
+        "../../../config/target/repositories/mdk.json"
+    ))
+    .unwrap();
+    value["conversation_model"] = serde_json::json!({
+        "provider":"openai-codex", "model":"gpt-6.1-sol", "reasoning_effort":"high"
+    });
+    let policy = load_repository_policy(&serde_json::to_vec(&value).unwrap()).unwrap();
+    let binding = policy.conversation_binding().unwrap();
+    assert_eq!(binding.model, "gpt-6.1-sol");
+    assert_eq!(binding.reasoning_effort.as_deref(), Some("high"));
+    assert_eq!(policy.roles[0].model, "gpt-6-astra");
 }
 
 fn bootstrap(conversations: bool) {
@@ -63,11 +79,11 @@ fn bootstrap(conversations: bool) {
     runner.output("gateway run --external-supervisor\n");
     let mut profiles = vec![
         ("gpt-6-astra", "xhigh"),
-        ("gpt-6-sol", "high"),
+        ("gpt-6.1-sol", "high"),
         ("gpt-6-astra", "xhigh"),
     ];
     if conversations {
-        profiles.push(("gpt-6-astra", "xhigh"));
+        profiles.push(("gpt-6.1-sol", "high"));
     }
     for (model, reasoning) in profiles {
         runner.output(&format!(
@@ -93,6 +109,14 @@ fn bootstrap(conversations: bool) {
     .unwrap();
     assert_eq!(outcome.profiles_created, if conversations { 4 } else { 3 });
     assert_eq!(root.join("profiles/conversation").is_dir(), conversations);
+    if conversations {
+        let reply: serde_json::Value = serde_json::from_slice(
+            &fs::read(root.join("profiles/conversation/config.yaml")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(reply["model"], "gpt-6.1-sol");
+        assert_eq!(reply["agent"]["reasoning_effort"], "high");
+    }
     assert!(root.join("profiles/planner").is_dir());
     assert!(root.join("profiles/reviewer-general").is_dir());
     assert!(root.join("profiles/final-reviewer").is_dir());
