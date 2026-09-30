@@ -659,7 +659,7 @@ def test_cursor_adapter_renders_both_skills_and_validates_fixture_output(
     assert result["outcome"] == "REVIEW_READY"
     prompt = (tmp_path / "artifacts/prompt.md").read_text()
     assert "# Pip Workflow Contract" in prompt
-    assert "# Builder Grok" in prompt
+    assert "# Cursor Builder" in prompt
     invocation = json.loads((tmp_path / "artifacts/invocation.json").read_text())
     assert invocation["model"] == "composer-2.5"
     assert invocation["worktree"] == str((tmp_path / "worktree").resolve())
