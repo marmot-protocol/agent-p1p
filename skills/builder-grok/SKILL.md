@@ -71,7 +71,11 @@ per suggestion, with `reviewer_id`, the original suggestion text, `disposition`
 or reason. Include verification for addressed code changes. Retain prior
 dispositions when still applicable; reassess them if the facts change. These
 are evidence fields, not new top-level result fields or mandatory finding IDs.
-For GitHub thread feedback, also include its `thread_id` so the disposition can
-be traced to the supplied snapshot.
+For GitHub thread feedback, include both `thread_id` and `comment_id` for each
+supplied comment so the disposition can be traced to the unchanged snapshot.
+Use `addressed`, `not_applicable`, or `deferred`; always give a substantive
+`summary` and include a nonempty `verification` array for addressed findings.
+Retain the comment IDs exactly. A new or edited comment needs a new assessment.
+Do not treat a still-open GitHub checkbox as proof that a defect remains.
 
 A build result is ready for controller publication only when local checks pass, the assigned local branch contains the exact reported commit, the worktree is clean, and no visible model mismatch occurred. The controller publishes the branch; remote branch identity, draft-PR identity, and GitHub CI are later controller gates. Provider-side Cursor routing is requested and recorded, not cryptographically attested.

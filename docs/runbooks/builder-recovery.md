@@ -21,6 +21,17 @@ stopped/disabled-unit, drained-queue and exact revision/head arguments as
   addressed threads resolved on GitHub. A builder's disposition alone is not
   authority to resolve them.
 
+Normal final preflight no longer treats an unresolved bot checkbox as a blocker
+when the current published builder supplied an explicit disposition for every
+unchanged comment in the retained feedback snapshot. Addressed findings require
+verification; deferred or inapplicable findings require reasons. Human or unknown
+authors, new or edited comments, missing evidence, required reviews and CI remain
+blocking. After final acceptance, readiness publication explains the dispositions
+and resolves those bot-only threads with fresh ownership/head/content checks.
+Unhandled repeated feedback uses the normal remediation budget rather than a
+one-pass escalation. This does not reopen historical escalations: the exceptional
+recovery prerequisites above still apply.
+
 Verify fresh label authorization and the same owned, open draft PR/head before
 recovery. One immutable `REVIEW_COORDINATION_RECOVERY_AUTHORIZED` event per case
 returns to `WAITING_CI`. Fresh CI, required reviews, thread preflight and final

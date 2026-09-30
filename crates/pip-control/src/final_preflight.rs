@@ -29,6 +29,72 @@ const REVIEW_ROLES: [(WorkerRole, &str); 2] = [
     (WorkerRole::ReviewerSecperf, "reviewer-secperf"),
 ];
 
+#[cfg(test)]
+mod thread_disposition_tests {
+    use super::*;
+
+    fn sample_thread(actor: &str) -> ReviewThreadSnapshot {
+        ReviewThreadSnapshot {
+            id: "thread".into(),
+            is_resolved: false,
+            is_outdated: false,
+            path: "src/lib.rs".into(),
+            comments: vec![
+                serde_json::from_value(json!({
+                    "id":"comment", "body":"Fix the retry path", "updatedAt":"now",
+                    "url":"https://github.test/comment", "author":{"__typename":actor}
+                }))
+                .unwrap(),
+            ],
+        }
+    }
+
+    #[test]
+    fn bot_checkbox_is_not_a_blocker_after_bound_verified_disposition() {
+        let thread = sample_thread("Bot");
+        let feedback =
+            json!({"threads":[{"id":thread.id,"path":thread.path,"comments":thread.comments}]});
+        let dispositions = json!([{"thread_id":"thread","comment_id":"comment",
+            "disposition":"addressed","summary":"Fixed retry path", "verification":["retry regression passed"]}]);
+        assert!(thread_has_disposition(&thread, &dispositions, &feedback));
+        assert!(!thread_has_disposition(
+            &sample_thread("User"),
+            &dispositions,
+            &feedback
+        ));
+    }
+
+    #[test]
+    fn changed_comment_or_missing_verification_cannot_reuse_disposition() {
+        let mut thread = sample_thread("Bot");
+        let feedback =
+            json!({"threads":[{"id":thread.id,"path":thread.path,"comments":thread.comments}]});
+        let mut dispositions = json!([{"thread_id":"thread","comment_id":"comment",
+            "disposition":"addressed","summary":"Fixed", "verification":["test passed"]}]);
+        thread.comments[0].body = "New defect".into();
+        assert!(!thread_has_disposition(&thread, &dispositions, &feedback));
+        thread.comments[0].body = "Fix the retry path".into();
+        dispositions[0]["verification"] = json!([]);
+        assert!(!thread_has_disposition(&thread, &dispositions, &feedback));
+    }
+
+    #[test]
+    fn reasoned_deferral_is_allowed_but_unknown_authors_and_duplicate_records_are_not() {
+        let mut thread = sample_thread("Bot");
+        let feedback =
+            json!({"threads":[{"id":thread.id,"path":thread.path,"comments":thread.comments}]});
+        let mut dispositions = json!([{"thread_id":"thread","comment_id":"comment",
+            "disposition":"deferred","summary":"Would violate the accepted fail-closed plan"}]);
+        assert!(thread_has_disposition(&thread, &dispositions, &feedback));
+        thread.comments[0].author = None;
+        assert!(!thread_has_disposition(&thread, &dispositions, &feedback));
+        thread = sample_thread("Bot");
+        let duplicate = dispositions[0].clone();
+        dispositions.as_array_mut().unwrap().push(duplicate);
+        assert!(!thread_has_disposition(&thread, &dispositions, &feedback));
+    }
+}
+
 pub trait FinalPreflightSource: PullRequestSource + IntakeSource {
     fn review_threads(
         &self,
@@ -250,15 +316,14 @@ pub fn reconcile_final_preflight_once<'a, S: FinalPreflightSource>(
                     payload: json!({"head_sha":head_sha,"pull_request_number":pr_number,"threads":feedback,"blockers":blockers}),
                 },
             )?;
-            command.event = if repeated {
-                Event::OperationalBoundReached
-            } else {
-                Event::ReturnToBuild
-            };
+            // Unchanged GitHub checkboxes are not a one-pass operational bound.
+            // Unhandled feedback uses the normal policy-bounded repair loop.
+            command.event = Event::ReturnToBuild;
             command.event_payload = json!({
-                "reason": if repeated { "REVIEW_FEEDBACK_ALREADY_ATTEMPTED" } else { "UNRESOLVED_REVIEW_FEEDBACK" },
+                "reason": "UNRESOLVED_REVIEW_FEEDBACK",
+                "previously_observed": repeated,
                 "head_sha":head_sha,"pull_request_number":pr_number,"blockers":blockers,
-                "summary": if repeated { "Review feedback remains unresolved after a builder pass; human review is required." } else { "Assess unresolved review threads and missing finding-resolution records. Repair in-scope defects, explicitly record each historical blocking finding's resolution against the resulting source head with test evidence, and explain deferred suggestions. Fresh exact-head review and origin confirmation remain required." },
+                "summary": "Assess unresolved review threads and missing finding-resolution records. Repair in-scope defects, explicitly record each historical blocking finding's resolution against the resulting source head with test evidence, and explain deferred suggestions. Record each supplied thread_id and comment_id in suggestion_dispositions with its disposition, summary and verification. Fresh exact-head review and origin confirmation remain required.",
             });
             LedgerController::apply(store, &policy.case_policy(), &command)?;
             return Ok(FinalPreflightCycle::FeedbackRouted {
@@ -427,7 +492,8 @@ pub(crate) fn final_gate_blockers(
         .ok_or(FinalPreflightError::InvalidCase)?;
     validate_published_reviews(&review_actors, head, evidence, &mut blockers);
     for thread in threads {
-        if !thread.is_resolved {
+        let handled = assessed_thread_dispositions(store, case, thread)?.is_some();
+        if !thread.is_resolved && !handled {
             push_unique(
                 &mut blockers,
                 format!("UNRESOLVED_REVIEW_THREAD:{}", thread.id),
@@ -435,6 +501,104 @@ pub(crate) fn final_gate_blockers(
         }
     }
     Ok(blockers)
+}
+
+pub(crate) fn assessed_thread_dispositions(
+    store: &Store,
+    case: &StoredCase,
+    thread: &ReviewThreadSnapshot,
+) -> Result<Option<Vec<serde_json::Value>>, FinalPreflightError> {
+    let history = store.immutable_history_for_case(&case.case_key)?;
+    let build = crate::draft_pr::published_builder(&history, case)
+        .map_err(|error| FinalPreflightError::InvalidWorkerEvidence(error.to_string()))?;
+    let Some(dispositions) = build
+        .as_ref()
+        .and_then(|build| build.common.evidence.get("suggestion_dispositions"))
+    else {
+        return Ok(None);
+    };
+    if !history.evidence.iter().any(|record| {
+        record.kind == "GITHUB_REVIEW_FEEDBACK"
+            && thread_has_disposition(thread, dispositions, &record.payload)
+    }) {
+        return Ok(None);
+    }
+    Ok(Some(
+        dispositions
+            .as_array()
+            .expect("validated array")
+            .iter()
+            .filter(|entry| entry["thread_id"] == thread.id)
+            .cloned()
+            .collect(),
+    ))
+}
+
+/// A disposition covers only the unchanged supplied comments, never a new human
+/// blocker or a newly edited bot finding. The caller binds the accepted builder
+/// and independent approvals to the current published head.
+fn thread_has_disposition(
+    thread: &ReviewThreadSnapshot,
+    dispositions: &serde_json::Value,
+    feedback: &serde_json::Value,
+) -> bool {
+    if thread.comments.is_empty()
+        || thread.comments.iter().any(|comment| {
+            comment
+                .author
+                .as_ref()
+                .is_none_or(|author| author.kind != "Bot")
+        })
+    {
+        return false;
+    }
+    let Some(bound) = feedback["threads"].as_array().and_then(|threads| {
+        threads
+            .iter()
+            .find(|bound| bound["id"] == thread.id && bound["path"] == thread.path)
+    }) else {
+        return false;
+    };
+    let Some(bound_comments) = bound["comments"].as_array() else {
+        return false;
+    };
+    if bound_comments.len() != thread.comments.len()
+        || thread.comments.iter().any(|comment| {
+            !bound_comments.iter().any(|bound| {
+                bound["id"] == comment.id
+                    && bound["body"] == comment.body
+                    && bound["updatedAt"] == comment.updated_at
+                    && bound["url"] == comment.url
+            })
+        })
+    {
+        return false;
+    }
+    let Some(dispositions) = dispositions.as_array() else {
+        return false;
+    };
+    thread.comments.iter().all(|comment| {
+        let matching = dispositions
+            .iter()
+            .filter(|entry| entry["thread_id"] == thread.id && entry["comment_id"] == comment.id)
+            .collect::<Vec<_>>();
+        matching.len() == 1
+            && matching[0]["summary"]
+                .as_str()
+                .is_some_and(|text| !text.trim().is_empty())
+            && match matching[0]["disposition"].as_str() {
+                Some("addressed") => matching[0]["verification"]
+                    .as_array()
+                    .is_some_and(|checks| {
+                        !checks.is_empty()
+                            && checks.iter().all(|check| {
+                                check.as_str().is_some_and(|text| !text.trim().is_empty())
+                            })
+                    }),
+                Some("deferred" | "not_applicable") => true,
+                _ => false,
+            }
+    })
 }
 
 fn validate_ledger_join(

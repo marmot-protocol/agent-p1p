@@ -23,6 +23,13 @@ pub trait DispositionWriter {
     fn mark_draft(&self, _spec: &PullRequestReadySpec) -> Result<MutationResult, GitHubError> {
         Err(GitHubError::InvalidMutation)
     }
+    fn resolve_thread(
+        &self,
+        _spec: &PullRequestReadySpec,
+        _thread: &pip_github::ReviewThreadSnapshot,
+    ) -> Result<MutationResult, GitHubError> {
+        Err(GitHubError::InvalidMutation)
+    }
 }
 
 impl<T: MutationTransport> DispositionWriter for GitHubWriter<T> {
@@ -34,6 +41,13 @@ impl<T: MutationTransport> DispositionWriter for GitHubWriter<T> {
     }
     fn mark_draft(&self, spec: &PullRequestReadySpec) -> Result<MutationResult, GitHubError> {
         self.mark_pull_request_draft(spec)
+    }
+    fn resolve_thread(
+        &self,
+        spec: &PullRequestReadySpec,
+        thread: &pip_github::ReviewThreadSnapshot,
+    ) -> Result<MutationResult, GitHubError> {
+        self.resolve_bot_review_thread(spec, thread)
     }
 }
 
@@ -335,7 +349,7 @@ fn publish_ready<S: crate::FinalPreflightSource, W: DispositionWriter>(
     if !blockers.is_empty() {
         return Err(DispositionError::ReadinessBlocked(blockers));
     }
-    let result = writer.mark_ready(&PullRequestReadySpec {
+    let ready = PullRequestReadySpec {
         owner: policy.repository.owner.clone(),
         repository: policy.repository.name.clone(),
         repository_id: policy.repository.id,
@@ -348,7 +362,48 @@ fn publish_ready<S: crate::FinalPreflightSource, W: DispositionWriter>(
         expected_head_sha: head.into(),
         expected_base_branch: policy.repository.default_branch.clone(),
         client_mutation_id: format!("{effect_id}:ready"),
-    })?;
+    };
+    // The existing durable readiness intent owns these replay-safe mutations.
+    // No thread is resolved until the final reviewer and exact-head gates pass.
+    for thread in threads.iter().filter(|thread| !thread.is_resolved) {
+        let dispositions =
+            crate::final_preflight::assessed_thread_dispositions(store, case, thread)
+                .map_err(DispositionError::Preflight)?
+                .ok_or(DispositionError::InvalidCase)?;
+        let mut body = format!(
+            "Assessed [this review thread]({}) on `{head}`.\n",
+            thread.comments[0].url
+        );
+        for disposition in dispositions {
+            body.push_str(&format!(
+                "\n{}: {}\n",
+                disposition["disposition"].as_str().unwrap_or("assessed"),
+                disposition["summary"].as_str().unwrap_or("")
+            ));
+            if let Some(checks) = disposition["verification"].as_array() {
+                for check in checks {
+                    body.push_str(&format!("\n- {}", check.as_str().unwrap_or("")));
+                }
+                body.push('\n');
+            }
+        }
+        body.push_str("\nThe required reviews and final review accepted this disposition. Full evidence is retained by Pip.");
+        writer.ensure_comment(&CommentSpec {
+            owner: ready.owner.clone(),
+            repository: ready.repository.clone(),
+            issue_number: pr,
+            effect_id: format!("{effect_id}:thread:{}", thread.id),
+            expected_actor_id: ready.expected_actor_id,
+            body,
+        })?;
+        let mut resolution = ready.clone();
+        resolution.client_mutation_id = format!("{effect_id}:resolve:{}", thread.id);
+        match writer.resolve_thread(&resolution, thread)? {
+            MutationResult::Existing(id) | MutationResult::Updated(id) if id == pr => {}
+            _ => return Err(DispositionError::UnexpectedMutationResult),
+        }
+    }
+    let result = writer.mark_ready(&ready)?;
     let mutation = match result {
         MutationResult::Existing(id) if id == pr => "existing",
         MutationResult::Updated(id) if id == pr => "updated",

@@ -289,6 +289,56 @@ fn final_preflight_joins_a_signed_publication_to_its_original_build_only() {
 }
 
 #[test]
+fn signed_build_dispositions_cover_only_unchanged_bot_threads_with_fresh_gates() {
+    for fault in ["none", "human", "edited", "ci", "review", "head"] {
+        let policy = active_policy();
+        let mut source = accepted_source();
+        source.evidence.pull_request.head_sha = "d".repeat(40);
+        source.evidence.check_runs[0].head_sha = "d".repeat(40);
+        for review in &mut source.evidence.reviews {
+            review.commit_id = Some("d".repeat(40));
+        }
+        source.threads[0].is_resolved = false;
+        source.threads[0].comments[0].author =
+            Some(pip_github::ReviewCommentAuthor { kind: "Bot".into() });
+        let snapshot = json!({"threads":[{"id":source.threads[0].id,"path":source.threads[0].path,"comments":source.threads[0].comments}]});
+        let dispositions = json!([{"thread_id":"PRRT_1","comment_id":"comment-1",
+            "disposition":"addressed","summary":"Each action is independently checked","verification":["action regression passed"]}]);
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = final_review_store_with_feedback(
+            temp.path().join("ledger.db"),
+            &policy,
+            &source,
+            Some(signed_publication("builder-1", "b", "c")),
+            Some((snapshot, dispositions)),
+        );
+        match fault {
+            "human" => source.threads[0].comments[0].author.as_mut().unwrap().kind = "User".into(),
+            "edited" => source.threads[0].comments[0].body = "New concern".into(),
+            "ci" => source.evidence.check_runs[0].conclusion = Some(CheckConclusion::Failure),
+            "review" => source.evidence.reviews[0].commit_id = Some("c".repeat(40)),
+            "head" => source.evidence.pull_request.head_sha = "e".repeat(40),
+            _ => {}
+        }
+        let result = reconcile_final_preflight_once(
+            &source,
+            &policy,
+            &mut store,
+            200,
+            "preflight",
+            30,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            matches!(result, FinalPreflightCycle::Accepted { .. }),
+            fault == "none",
+            "{fault}: {result:?}"
+        );
+    }
+}
+
+#[test]
 fn signed_publication_rejects_misbound_evidence_and_releases_the_lease() {
     for (field, value) in [
         ("/head_sha", json!("a".repeat(40))),
@@ -624,7 +674,7 @@ fn review_feedback_routing_preserves_other_gates_and_requires_comment_content() 
 }
 
 #[test]
-fn unchanged_feedback_or_exhausted_remediation_escalates_instead_of_building_again() {
+fn unchanged_feedback_uses_normal_repair_budget_and_exhausted_remediation_escalates() {
     for (repeat, legacy) in [(true, true), (true, false), (false, true)] {
         let directory = tempfile::tempdir().unwrap();
         let policy = active_policy();
@@ -715,7 +765,7 @@ fn unchanged_feedback_or_exhausted_remediation_escalates_instead_of_building_aga
         .unwrap();
         assert_eq!(
             store.case(&case.case_key).unwrap().unwrap().state,
-            "ESCALATED",
+            if repeat { "REMEDIATING" } else { "ESCALATED" },
             "{result:?}"
         );
         assert!(
@@ -727,13 +777,15 @@ fn unchanged_feedback_or_exhausted_remediation_escalates_instead_of_building_aga
                     &["DISPATCH_BUILDER", "DISPATCH_FINAL_REVIEWER"]
                 )
                 .unwrap()
-                .is_none()
+                .is_some()
+                == repeat
         );
         assert!(
             store
                 .claim_effect_matching("notify", 200, 30, &["ESCALATE"])
                 .unwrap()
                 .is_some()
+                != repeat
         );
     }
 }
@@ -869,8 +921,27 @@ fn final_review_store_with_publication(
     source: &FixtureSource,
     publication: Option<Value>,
 ) -> Store {
+    final_review_store_with_feedback(path, policy, source, publication, None)
+}
+
+fn final_review_store_with_feedback(
+    path: std::path::PathBuf,
+    policy: &pip_control::RepositoryPolicy,
+    source: &FixtureSource,
+    publication: Option<Value>,
+    feedback: Option<(Value, Value)>,
+) -> Store {
     let mut store = planning_store(path);
-    let results = results();
+    let mut results = results();
+    if let Some((_, dispositions)) = &feedback {
+        let WorkerResult::Builder(build) = &mut results[1] else {
+            panic!("builder");
+        };
+        build
+            .common
+            .evidence
+            .insert("suggestion_dispositions".into(), dispositions.clone());
+    }
     ingest_worker_result(
         &mut store,
         &policy.case_policy(),
@@ -878,7 +949,11 @@ fn final_review_store_with_publication(
         &results[0],
     )
     .unwrap();
-    accept_plan(&mut store, &results[0]);
+    accept_plan_with_feedback(
+        &mut store,
+        &results[0],
+        feedback.map(|(snapshot, _)| snapshot),
+    );
     ingest_worker_result(
         &mut store,
         &policy.case_policy(),
@@ -1057,6 +1132,10 @@ fn remediated_final_review_store_with_publication(
 }
 
 fn accept_plan(store: &mut Store, result: &WorkerResult) {
+    accept_plan_with_feedback(store, result, None);
+}
+
+fn accept_plan_with_feedback(store: &mut Store, result: &WorkerResult, feedback: Option<Value>) {
     let WorkerResult::Planner(plan) = result else {
         panic!("planner result required");
     };
@@ -1078,7 +1157,15 @@ fn accept_plan(store: &mut Store, result: &WorkerResult) {
                     payload: json!({"planner_result": plan}),
                 },
                 run: None,
-                evidence: Vec::new(),
+                evidence: feedback
+                    .into_iter()
+                    .map(|payload| EvidenceInput {
+                        evidence_id: "bound-thread-feedback".into(),
+                        kind: "GITHUB_REVIEW_FEEDBACK".into(),
+                        source: "github-pr-77".into(),
+                        payload,
+                    })
+                    .collect(),
                 findings: Vec::new(),
                 effects: vec![EffectInput {
                     effect_id: "effect-builder".into(),
@@ -1226,6 +1313,7 @@ fn accepted_source() -> FixtureSource {
                 body: "Check each action ID independently.".into(),
                 updated_at: "2026-09-09T01:00:00Z".into(),
                 url: "https://github.test/review/1".into(),
+                author: None,
             }],
         }],
         issue_authorized: true,
@@ -1303,6 +1391,8 @@ struct ReadyWriter {
     calls: std::cell::RefCell<Vec<&'static str>>,
     fail_ready: bool,
     fail_comment: bool,
+    fail_resolution: bool,
+    published_head: bool,
 }
 
 impl pip_control::DispositionWriter for ReadyWriter {
@@ -1311,7 +1401,10 @@ impl pip_control::DispositionWriter for ReadyWriter {
         spec: &pip_github::PullRequestReadySpec,
     ) -> Result<pip_github::MutationResult, GitHubError> {
         assert_eq!(spec.pull_request_number, 77);
-        assert_eq!(spec.expected_head_sha, "b".repeat(40));
+        assert_eq!(
+            spec.expected_head_sha,
+            if self.published_head { "d" } else { "b" }.repeat(40)
+        );
         assert_eq!(spec.expected_actor_id, 202880);
         self.calls.borrow_mut().push("ready");
         if self.fail_ready {
@@ -1329,6 +1422,108 @@ impl pip_control::DispositionWriter for ReadyWriter {
             return Err(GitHubError::Transport("comment timeout".into()));
         }
         Ok(pip_github::MutationResult::Existing(9001))
+    }
+    fn resolve_thread(
+        &self,
+        spec: &pip_github::PullRequestReadySpec,
+        thread: &ReviewThreadSnapshot,
+    ) -> Result<pip_github::MutationResult, GitHubError> {
+        assert_eq!(spec.expected_head_sha, "d".repeat(40));
+        assert_eq!(thread.id, "PRRT_1");
+        self.calls.borrow_mut().push("resolve");
+        if self.fail_resolution {
+            return Err(GitHubError::Transport("resolution timeout".into()));
+        }
+        Ok(pip_github::MutationResult::Updated(77))
+    }
+}
+
+#[test]
+fn readiness_publishes_assessment_and_resolves_bot_thread_before_promotion_with_safe_retry() {
+    for failure in ["none", "comment", "resolve", "ready"] {
+        let temp = tempfile::tempdir().unwrap();
+        let policy = active_policy();
+        let mut source = accepted_source();
+        source.evidence.pull_request.head_sha = "d".repeat(40);
+        source.evidence.check_runs[0].head_sha = "d".repeat(40);
+        for review in &mut source.evidence.reviews {
+            review.commit_id = Some("d".repeat(40));
+        }
+        source.threads[0].is_resolved = false;
+        source.threads[0].comments[0].author =
+            Some(pip_github::ReviewCommentAuthor { kind: "Bot".into() });
+        let snapshot = json!({"threads":[{"id":source.threads[0].id,"path":source.threads[0].path,"comments":source.threads[0].comments}]});
+        let dispositions = json!([{"thread_id":"PRRT_1","comment_id":"comment-1","disposition":"addressed","summary":"Fixed and checked","verification":["Regression passed"]}]);
+        let mut store = final_review_store_with_feedback(
+            temp.path().join("ledger.db"),
+            &policy,
+            &source,
+            Some(signed_publication("builder-1", "b", "c")),
+            Some((snapshot, dispositions)),
+        );
+        reconcile_final_preflight_once(&source, &policy, &mut store, 200, "preflight", 30, true)
+            .unwrap();
+        let mut result = results().pop().unwrap();
+        if let WorkerResult::Final(final_result) = &mut result {
+            final_result.reviewed_head_sha = "d".repeat(40);
+        }
+        ingest_worker_result(
+            &mut store,
+            &policy.case_policy(),
+            &binding(&result),
+            &result,
+        )
+        .unwrap();
+        let writer = ReadyWriter {
+            fail_comment: failure == "comment",
+            fail_resolution: failure == "resolve",
+            fail_ready: failure == "ready",
+            published_head: true,
+            ..Default::default()
+        };
+        let outcome = pip_control::consume_disposition_once(
+            (&source, &writer),
+            &policy,
+            &mut store,
+            300,
+            "disposition",
+            30,
+            true,
+        );
+        let expected = match failure {
+            "comment" => vec!["comment"],
+            "resolve" => vec!["comment", "resolve"],
+            "ready" => vec!["comment", "resolve", "ready"],
+            _ => vec!["comment", "resolve", "ready", "comment"],
+        };
+        assert_eq!(*writer.calls.borrow(), expected);
+        assert_eq!(outcome.is_ok(), failure == "none", "{failure}: {outcome:?}");
+        if failure != "none" {
+            // A timeout can occur after GitHub accepted the resolution.
+            source.threads[0].is_resolved = failure != "comment";
+            let retry = ReadyWriter {
+                published_head: true,
+                ..Default::default()
+            };
+            pip_control::consume_disposition_once(
+                (&source, &retry),
+                &policy,
+                &mut store,
+                301,
+                "disposition",
+                30,
+                true,
+            )
+            .unwrap();
+            assert_eq!(
+                *retry.calls.borrow(),
+                if failure == "comment" {
+                    vec!["comment", "resolve", "ready", "comment"]
+                } else {
+                    vec!["ready", "comment"]
+                }
+            );
+        }
     }
 }
 

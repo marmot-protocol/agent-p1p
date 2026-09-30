@@ -41,6 +41,76 @@ fn writer(transport: FakeTransport) -> GitHubWriter<FakeTransport> {
     .unwrap()
 }
 
+#[test]
+fn thread_resolution_rechecks_bot_snapshot_and_exact_owned_head() {
+    for fault in ["none", "resolved", "edited", "human", "foreign", "head"] {
+        let transport = FakeTransport::default();
+        let spec = PullRequestReadySpec {
+            owner: "marmot-protocol".into(),
+            repository: "mdk".into(),
+            repository_id: 984321,
+            pull_request_number: 77,
+            expected_actor_id: 1001,
+            expected_head_branch: "pip/repo-984321/issue-1240/workflow-1".into(),
+            expected_head_sha: "b".repeat(40),
+            expected_base_branch: "main".into(),
+            client_mutation_id: "thread-resolution".into(),
+        };
+        let mut pr = serde_json::json!({"id":9001,"node_id":"PR_test","number":77,"state":"open","draft":true,
+            "user":{"id":1001}, "title":"Fix", "body":"owned","html_url":"https://github.test/pr/77",
+            "head":{"ref":spec.expected_head_branch,"sha":spec.expected_head_sha,"repo":{"id":984321}},"base":{"ref":"main"}});
+        if fault == "head" {
+            pr["head"]["sha"] = serde_json::json!("c".repeat(40));
+        }
+        transport.push(200, &pr.to_string());
+        let comment = serde_json::json!({"id":"comment","body":"Fix retry","updatedAt":"now","url":"https://github.test/comment","author":{"__typename":"Bot"}});
+        let thread = pip_github::ReviewThreadSnapshot {
+            id: "thread".into(),
+            is_resolved: false,
+            is_outdated: false,
+            path: "src/lib.rs".into(),
+            comments: vec![serde_json::from_value(comment.clone()).unwrap()],
+        };
+        let mut live = serde_json::json!({"data":{"node":{"id":"thread","isResolved":false,"path":"src/lib.rs",
+            "pullRequest":{"number":77,"headRefOid":spec.expected_head_sha,"repository":{"databaseId":984321}},
+            "comments":{"nodes":[comment],"pageInfo":{"hasNextPage":false}}}}});
+        match fault {
+            "resolved" => live["data"]["node"]["isResolved"] = serde_json::json!(true),
+            "edited" => {
+                live["data"]["node"]["comments"]["nodes"][0]["body"] =
+                    serde_json::json!("New concern")
+            }
+            "human" => {
+                live["data"]["node"]["comments"]["nodes"][0]["author"]["__typename"] =
+                    serde_json::json!("User")
+            }
+            "foreign" => live["data"]["node"]["pullRequest"]["number"] = serde_json::json!(78),
+            _ => {}
+        }
+        if fault != "head" {
+            transport.push(200, &live.to_string());
+        }
+        if fault == "none" {
+            transport.push(
+                200,
+                r#"{"data":{"resolveReviewThread":{"thread":{"id":"thread","isResolved":true}}}}"#,
+            );
+            transport.push(200, &pr.to_string());
+        }
+        let result = writer(transport.clone()).resolve_bot_review_thread(&spec, &thread);
+        assert_eq!(
+            result.is_ok(),
+            matches!(fault, "none" | "resolved"),
+            "{fault}: {result:?}"
+        );
+        if fault != "none" {
+            assert!(!transport.requests.borrow().iter().any(|request| {
+                String::from_utf8_lossy(&request.body).contains("mutation ResolvePipReviewThread")
+            }));
+        }
+    }
+}
+
 fn comment() -> CommentSpec {
     CommentSpec {
         owner: "marmot-protocol".into(),

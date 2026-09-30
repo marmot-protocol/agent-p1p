@@ -426,6 +426,75 @@ impl<T: MutationTransport> GitHubWriter<T> {
         self.set_pull_request_draft(spec, false)
     }
 
+    /// Resolve only the unchanged bot-only snapshot on the exact owned PR.
+    /// Replays are observed before writing; human replies or edited comments
+    /// fail closed, even if the controller previously assessed the thread.
+    pub fn resolve_bot_review_thread(
+        &self,
+        spec: &PullRequestReadySpec,
+        thread: &super::ReviewThreadSnapshot,
+    ) -> Result<MutationResult, GitHubError> {
+        validate_ready_spec(spec)?;
+        if thread.id.trim().is_empty()
+            || thread.comments.is_empty()
+            || thread.comments.iter().any(|comment| {
+                comment
+                    .author
+                    .as_ref()
+                    .is_none_or(|author| author.kind != "Bot")
+            })
+        {
+            return Err(GitHubError::InvalidMutation);
+        }
+        let root = format!(
+            "/repos/{}/{}/pulls/{}",
+            spec.owner, spec.repository, spec.pull_request_number
+        );
+        let before: PullRequestDto = self.mutate_json("GET", &root, &json!({}))?;
+        validate_ready_identity(&before, spec)?;
+        let snapshot: Value = self.mutate_json("POST", "/graphql", &json!({
+            "query":"query PipThreadBeforeResolution($id:ID!){node(id:$id){... on PullRequestReviewThread{id isResolved path pullRequest{number headRefOid repository{databaseId}} comments(first:100){nodes{id body updatedAt url author{__typename}} pageInfo{hasNextPage}}}}}",
+            "variables":{"id":thread.id},
+        }))?;
+        let node = &snapshot["data"]["node"];
+        let comments: Vec<super::ReviewThreadComment> =
+            serde_json::from_value(node["comments"]["nodes"].clone())
+                .map_err(|_| GitHubError::InvalidIdentity)?;
+        if snapshot["errors"]
+            .as_array()
+            .is_some_and(|errors| !errors.is_empty())
+            || node["id"] != thread.id
+            || node["path"] != thread.path
+            || node["pullRequest"]["number"] != spec.pull_request_number
+            || node["pullRequest"]["repository"]["databaseId"] != spec.repository_id
+            || node["pullRequest"]["headRefOid"] != spec.expected_head_sha
+            || node["comments"]["pageInfo"]["hasNextPage"] != false
+            || comments != thread.comments
+        {
+            return Err(GitHubError::InvalidIdentity);
+        }
+        match node["isResolved"].as_bool() {
+            Some(true) => return Ok(MutationResult::Existing(spec.pull_request_number)),
+            Some(false) => {}
+            None => return Err(GitHubError::InvalidIdentity),
+        }
+        let result: Value = self.mutate_json("POST", "/graphql", &json!({
+            "query":"mutation ResolvePipReviewThread($input:ResolveReviewThreadInput!){resolveReviewThread(input:$input){thread{id isResolved}}}",
+            "variables":{"input":{"threadId":thread.id,"clientMutationId":spec.client_mutation_id}},
+        }))?;
+        if result["errors"]
+            .as_array()
+            .is_some_and(|errors| !errors.is_empty())
+            || result["data"]["resolveReviewThread"]["thread"]["id"] != thread.id
+            || result["data"]["resolveReviewThread"]["thread"]["isResolved"] != true
+        {
+            return Err(GitHubError::InvalidMutation);
+        }
+        let after: PullRequestDto = self.mutate_json("GET", &root, &json!({}))?;
+        validate_ready_identity(&after, spec)?;
+        Ok(MutationResult::Updated(spec.pull_request_number))
+    }
+
     pub fn mark_pull_request_draft(
         &self,
         spec: &PullRequestReadySpec,

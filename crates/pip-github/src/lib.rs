@@ -405,6 +405,14 @@ pub struct ReviewThreadComment {
     pub body: String,
     pub updated_at: String,
     pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<ReviewCommentAuthor>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ReviewCommentAuthor {
+    #[serde(rename = "__typename")]
+    pub kind: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -1197,7 +1205,7 @@ impl<T: ReadTransport> GitHubReader<T> {
         if repository_id == 0 || pull_request_number == 0 {
             return Err(GitHubError::InvalidIdentity);
         }
-        const QUERY: &str = "query PipReviewThreads($owner:String!,$repository:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repository){databaseId pullRequest(number:$number){number reviewThreads(first:100,after:$after){nodes{id isResolved isOutdated path comments(first:100){nodes{id body updatedAt url} pageInfo{hasNextPage endCursor}}} pageInfo{hasNextPage endCursor}}}}}";
+        const QUERY: &str = "query PipReviewThreads($owner:String!,$repository:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repository){databaseId pullRequest(number:$number){number reviewThreads(first:100,after:$after){nodes{id isResolved isOutdated path comments(first:100){nodes{id body updatedAt url author{__typename}} pageInfo{hasNextPage endCursor}}} pageInfo{hasNextPage endCursor}}}}}";
         let number =
             i64::try_from(pull_request_number).map_err(|_| GitHubError::InvalidIdentity)?;
         let mut after: Option<String> = None;

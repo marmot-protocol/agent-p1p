@@ -69,9 +69,18 @@ lifecycle boundary before use.
    Missing builder finding-resolution records are actionable feedback, not a
    passive wait: route one bounded builder pass with the missing IDs and any
    unresolved threads. Ownership, exact-head CI, ledger approvals and origin
-   confirmations still gate that route. Identical unaddressed feedback escalates.
+   confirmations still gate that route. An unchanged bot comment with an
+   explicit builder disposition, bound to the supplied comment snapshot and
+   current published build, is not blocked merely by its unresolved checkbox.
+   Human or unknown authors, new/edited comments and missing dispositions remain
+   blocking. Unhandled feedback uses the normal remediation budget, not a
+   separate one-pass escalation rule.
 10. Revalidate authorization, exact-head CI/reviews and final acceptance; mark the
     draft PR ready for review and publish a human-held readiness recommendation.
+    Before promotion, publish human-readable dispositions and resolve only the
+    unchanged bot-only threads accepted by the bound build and final gates.
+    Recheck thread content, authors and owned PR/head at the write boundary;
+    partial publication retries through the existing durable readiness intent.
     A person reviews and merges. Promotion and notification retry idempotently;
     leaving draft after accepted final review is not itself a human takeover.
     If authorized human feedback requests another pass, first return Pip's
