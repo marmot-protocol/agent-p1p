@@ -7,9 +7,7 @@ test -n "$references"
 for reference in $references; do
     case "$reference" in
         actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09|\
-        actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1|\
-        actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f|\
-        astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78)
+        actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f)
             ;;
         *)
             printf 'Action runtime has not been verified as Node 24: %s\n' "$reference" >&2
