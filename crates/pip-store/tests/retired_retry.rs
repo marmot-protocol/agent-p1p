@@ -1,7 +1,4 @@
-use pip_store::{
-    ApplyResult, EffectInput, EventInput, FaultPoint, NewCase, PolicyInput, RunInput, Store,
-    TransitionInput,
-};
+use pip_store::{EffectInput, EventInput, NewCase, PolicyInput, RunInput, Store, TransitionInput};
 use serde_json::json;
 
 const CASE: &str = "repo:42#9@1";
@@ -104,82 +101,19 @@ fn fixture() -> (tempfile::TempDir, Store, TransitionInput) {
 }
 
 #[test]
-fn retry_preserves_history_and_allows_only_one_additional_failure() {
-    let (_dir, mut store, input) = fixture();
-    let history = store.immutable_history_for_case(CASE).unwrap();
-    assert_eq!(
-        store.apply_transition(&input, None).unwrap(),
-        ApplyResult::Applied
-    );
-    assert_eq!(
-        store.apply_transition(&input, None).unwrap(),
-        ApplyResult::Replayed
-    );
-    let after = store.immutable_history_for_case(CASE).unwrap();
-    assert_eq!(after.runs, history.runs);
-    assert_eq!(store.failed_direct_attempt_count_for_case(CASE).unwrap(), 3);
-    assert_eq!(store.effective_provider_failure_limit(CASE, 3).unwrap(), 4);
-    let case = store.case(CASE).unwrap().unwrap();
-    assert_eq!(
-        (case.state_revision, case.policy_revision, case.plan_version),
-        (3, 7, 1)
-    );
-    let effect = store.claim_effect("worker", 150, 5).unwrap().unwrap();
-    assert_eq!(effect.effect_id, "retry-dispatch");
-    assert_eq!(store.status(150).unwrap().outbox_superseded, 1);
-}
-
-#[test]
-fn retry_rejects_invalid_scope_or_live_work_without_mutating_history() {
-    for scenario in [
-        "wrong-count",
-        "non-root",
-        "blank-reason",
-        "wrong-state",
-        "wrong-plan",
-        "wrong-effect",
-        "lease",
-        "running",
-        "expired",
-        "extra-effects",
+fn retired_lifetime_retry_events_are_rejected_without_mutating_history() {
+    for event_type in [
+        "BUILDER_RETRY_AUTHORIZED",
+        "REVIEW_RETRY_AUTHORIZED",
+        "PLANNER_RETRY_AUTHORIZED",
     ] {
         let (_dir, mut store, mut input) = fixture();
-        match scenario {
-            "wrong-count" => input.event.payload["failed_attempts"] = json!(2),
-            "non-root" => input.event.payload["operator_uid"] = json!(1000),
-            "blank-reason" => input.event.payload["reason"] = json!(" "),
-            "wrong-state" => input.next_state = "BUILDING".into(),
-            "wrong-plan" => input.plan_version = 2,
-            "wrong-effect" => input.event.payload["effect_id"] = json!("foreign"),
-            "expired" => input.observed_at = 86500,
-            "extra-effects" => input.effects.push(input.effects[0].clone()),
-            "lease" | "running" => {
-                let effect = store.claim_effect("worker", 135, 30).unwrap().unwrap();
-                if scenario == "running" {
-                    store
-                        .begin_direct_attempt(&effect, "old-task", 135)
-                        .unwrap();
-                }
-            }
-            _ => unreachable!(),
-        }
-        let before = store.status(140).unwrap();
-        assert!(store.apply_transition(&input, None).is_err(), "{scenario}");
-        assert_eq!(store.status(140).unwrap(), before);
-    }
-}
-
-#[test]
-fn retry_fault_rolls_back_authorization_and_new_dispatch_together() {
-    for fault in [
-        FaultPoint::AfterEvent,
-        FaultPoint::AfterProjection,
-        FaultPoint::AfterOutbox,
-    ] {
-        let (_dir, mut store, input) = fixture();
-        let before = store.status(140).unwrap();
-        assert!(store.apply_transition(&input, Some(fault)).is_err());
-        assert_eq!(store.status(140).unwrap(), before);
-        assert_eq!(store.effective_provider_failure_limit(CASE, 3).unwrap(), 3);
+        input.event.event_type = event_type.into();
+        let history = store.immutable_history_for_case(CASE).unwrap();
+        assert!(
+            store.apply_transition(&input, None).is_err(),
+            "{event_type}"
+        );
+        assert_eq!(store.immutable_history_for_case(CASE).unwrap(), history);
     }
 }

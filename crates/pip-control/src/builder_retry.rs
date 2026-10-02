@@ -1,125 +1,15 @@
-//! Offline, root-authorized recovery of exhausted builder/review work.
+//! Shared validation for offline, root-authorized recovery commands.
 use std::num::{NonZeroU32, NonZeroU64};
 use std::str::FromStr;
 
-use pip_controller::{LedgerController, WorkflowCommand};
+use pip_controller::WorkflowCommand;
 use pip_core::{
     CaseId, CaseState, Event, EventId, GitSha, IssueNumber, ObservedAt, PlanVersion,
     PolicyRevision, PullRequestNumber, RepositoryId, StateRevision, WorkflowVersion,
 };
-use pip_store::{ApplyResult, BuilderRetryAuthorization, Store};
+use pip_store::Store;
 
 use crate::{RepositoryPolicy, load_repository_policy};
-
-#[derive(Clone, Debug)]
-pub struct BuilderRetryRequest {
-    pub case_key: String,
-    pub expected_revision: u64,
-    pub effect_id: String,
-    pub expected_failures: u64,
-    pub request_id: String,
-    pub reason: String,
-}
-
-/// CLI checks actual process identity and stopped execution units before calling.
-/// No policy, plan, terminal attempt, or old task payload is rewritten.
-pub fn authorize_builder_retry(
-    store: &mut Store,
-    paused: &RepositoryPolicy,
-    request: &BuilderRetryRequest,
-    now: u64,
-    operator_uid: u32,
-) -> Result<ApplyResult, String> {
-    authorize_retry(
-        store,
-        paused,
-        request,
-        now,
-        operator_uid,
-        Event::BuilderRetryAuthorized,
-    )
-}
-
-pub fn authorize_review_retry(
-    store: &mut Store,
-    paused: &RepositoryPolicy,
-    request: &BuilderRetryRequest,
-    now: u64,
-    operator_uid: u32,
-) -> Result<ApplyResult, String> {
-    authorize_retry(
-        store,
-        paused,
-        request,
-        now,
-        operator_uid,
-        Event::ReviewRetryAuthorized,
-    )
-}
-
-pub fn authorize_planner_retry(
-    store: &mut Store,
-    paused: &RepositoryPolicy,
-    request: &BuilderRetryRequest,
-    now: u64,
-    operator_uid: u32,
-) -> Result<ApplyResult, String> {
-    authorize_retry(
-        store,
-        paused,
-        request,
-        now,
-        operator_uid,
-        Event::PlannerRetryAuthorized,
-    )
-}
-
-fn authorize_retry(
-    store: &mut Store,
-    paused: &RepositoryPolicy,
-    request: &BuilderRetryRequest,
-    now: u64,
-    operator_uid: u32,
-    event: Event,
-) -> Result<ApplyResult, String> {
-    let event_name = event.to_string();
-    let (case, accepted) = recovery_context(store, paused, &request.case_key, operator_uid)?;
-    let event_id = EventId::from_str(&request.request_id).map_err(error)?;
-    let authorization = BuilderRetryAuthorization {
-        schema_version: 1,
-        effect_id: request.effect_id.clone(),
-        failed_attempts: request.expected_failures,
-        base_failure_limit: accepted.max_provider_failures,
-        operator_uid,
-        reason: request.reason.clone(),
-    };
-    let payload = serde_json::to_value(authorization).map_err(error)?;
-    // Retry the same operator request safely, even after the new job advances.
-    if let Some(event) = store
-        .immutable_history_for_case(&case.case_key)
-        .map_err(error)?
-        .events
-        .iter()
-        .find(|event| event.event_id == request.request_id)
-    {
-        if event.event_type == event_name
-            && event.payload == payload
-            && request.expected_revision.checked_add(1) == Some(event.state_revision)
-        {
-            return Ok(ApplyResult::Replayed);
-        }
-        return Err("retry request id conflicts with recorded authorization".into());
-    }
-    let command = recovery_command(
-        &case,
-        request.expected_revision,
-        event_id,
-        event,
-        payload,
-        now,
-    )?;
-    LedgerController::apply(store, &accepted.case_policy(), &command).map_err(error)
-}
 
 pub(crate) fn recovery_context(
     store: &Store,

@@ -171,6 +171,10 @@ pub struct RepositoryPolicy {
     pub max_provider_failures: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_hermes_attempts: Option<u32>,
+    /// How long one stage may stay continuously unable to run (provider
+    /// outage, throttling, expired login) before the case parks for a human.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_outage_seconds: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hermes_scratch_root: Option<String>,
     pub max_repeated_finding_fingerprint: u32,
@@ -179,7 +183,14 @@ pub struct RepositoryPolicy {
     pub roles: Vec<RoleConfiguration>,
 }
 
+pub const DEFAULT_MAX_OUTAGE_SECONDS: u64 = 6 * 60 * 60;
+
 impl RepositoryPolicy {
+    pub fn outage_limit_seconds(&self) -> u64 {
+        self.max_outage_seconds
+            .unwrap_or(DEFAULT_MAX_OUTAGE_SECONDS)
+    }
+
     /// Old policies retain their planner binding; new replies may opt into an
     /// independent native model without changing accepted workflow jobs.
     pub fn conversation_binding(&self) -> Option<RoleConfiguration> {
@@ -452,6 +463,7 @@ fn validate_policy(policy: &RepositoryPolicy) -> Result<(), PolicyError> {
         && policy.max_case_elapsed_seconds > 0
         && policy.max_provider_failures > 0
         && policy.max_hermes_attempts != Some(0)
+        && policy.max_outage_seconds != Some(0)
         && policy.max_repeated_finding_fingerprint > 0
         && sensitive_scope.len() == policy.sensitive_scope_categories.len()
         && sensitive_scope.iter().all(|category| {

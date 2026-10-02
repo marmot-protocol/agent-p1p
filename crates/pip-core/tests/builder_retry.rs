@@ -1,4 +1,4 @@
-use pip_core::{CaseState, Effect, Event, MergeMode, TransitionContext, transition};
+use pip_core::{CaseState, Effect, Event, TransitionContext, transition};
 
 #[test]
 fn native_review_recovery_preserves_exhausted_remediation_budget() {
@@ -16,25 +16,6 @@ fn native_review_recovery_preserves_exhausted_remediation_budget() {
         CaseState::TakenOver,
         CaseState::Completed,
         CaseState::Abandoned,
-    ] {
-        assert!(transition(state, event, context).is_err());
-    }
-}
-
-#[test]
-fn planner_recovery_only_reopens_escalated_work_for_a_fresh_plan() {
-    let event: Event = "PLANNER_RETRY_AUTHORIZED".parse().unwrap();
-    let context = TransitionContext::default();
-    let decision = transition(CaseState::Escalated, event, context).unwrap();
-    assert_eq!(decision.next_state, CaseState::Planning);
-    assert_eq!(decision.effects, [Effect::DispatchPlanner]);
-    for state in [
-        CaseState::Planning,
-        CaseState::TakenOver,
-        CaseState::Abandoned,
-        CaseState::Completed,
-        CaseState::ReadyToBuild,
-        CaseState::ShadowReady,
     ] {
         assert!(transition(state, event, context).is_err());
     }
@@ -72,52 +53,12 @@ fn publication_recovery_only_releases_publication_not_another_agent_attempt() {
 }
 
 #[test]
-fn review_recovery_returns_to_ci_not_approval_or_build() {
-    let context = TransitionContext {
-        merge_mode: MergeMode::Shadow,
-        remediation_round: 0,
-        max_remediation_rounds: 3,
-    };
-    let decision = transition(CaseState::Escalated, Event::ReviewRetryAuthorized, context).unwrap();
-    assert_eq!(decision.next_state, CaseState::WaitingCi);
-    assert_eq!(decision.effects, vec![Effect::ObserveCi]);
-    for state in [
-        CaseState::Planning,
-        CaseState::Building,
-        CaseState::Reviewing,
-        CaseState::FinalReview,
-        CaseState::Completed,
-        CaseState::Abandoned,
+fn retired_lifetime_retry_events_are_not_part_of_the_workflow() {
+    for name in [
+        "BUILDER_RETRY_AUTHORIZED",
+        "REVIEW_RETRY_AUTHORIZED",
+        "PLANNER_RETRY_AUTHORIZED",
     ] {
-        assert!(transition(state, Event::ReviewRetryAuthorized, context).is_err());
-    }
-}
-
-#[test]
-fn operator_retry_can_redispatch_a_ready_or_escalated_builder() {
-    let context = TransitionContext {
-        merge_mode: MergeMode::Shadow,
-        remediation_round: 0,
-        max_remediation_rounds: 3,
-    };
-    let decision = transition(
-        CaseState::ReadyToBuild,
-        Event::BuilderRetryAuthorized,
-        context,
-    )
-    .unwrap();
-    assert_eq!(decision.next_state, CaseState::ReadyToBuild);
-    assert_eq!(decision.effects, vec![Effect::DispatchBuilder]);
-    assert_eq!(
-        transition(CaseState::Escalated, Event::BuilderRetryAuthorized, context).unwrap(),
-        decision
-    );
-    for state in [
-        CaseState::Planning,
-        CaseState::Building,
-        CaseState::Reviewing,
-        CaseState::Completed,
-    ] {
-        assert!(transition(state, Event::BuilderRetryAuthorized, context).is_err());
+        assert!(name.parse::<Event>().is_err(), "{name}");
     }
 }

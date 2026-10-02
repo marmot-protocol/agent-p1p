@@ -168,6 +168,9 @@ impl DirectQueue {
     }
 }
 
+/// Delay before a failed (not merely unavailable) stage may run again.
+pub const FAILED_ATTEMPT_COOLDOWN_SECONDS: u64 = 120;
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct WorkEnvelope {
@@ -188,6 +191,9 @@ enum ResultEnvelope {
         schema_version: u32,
         attempt_id: u64,
         error: String,
+        /// Stable outage cause; absent means a generic provider outage.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cause: Option<String>,
     },
     Complete {
         schema_version: u32,
@@ -464,6 +470,7 @@ fn execute_work<R: DirectWorkerRuntime>(
             schema_version: 1,
             attempt_id: work.attempt_id,
             error: "controller lease expired before direct execution".into(),
+            cause: Some("LEASE_EXPIRED".into()),
         }
     } else {
         match runtime.execute(&work.task, work.attempt_id) {
@@ -476,6 +483,13 @@ fn execute_work<R: DirectWorkerRuntime>(
                 schema_version: 1,
                 attempt_id: work.attempt_id,
                 error: bounded_error(&error),
+                cause: None,
+            },
+            Err(DirectWorkerRuntimeError::ModelUnavailable(error)) => ResultEnvelope::Unavailable {
+                schema_version: 1,
+                attempt_id: work.attempt_id,
+                error: bounded_error(&error),
+                cause: Some("MODEL_UNAVAILABLE".into()),
             },
             Err(error) => ResultEnvelope::Failed {
                 schema_version: 1,
@@ -666,31 +680,54 @@ fn ingest_result<'a>(
     )?;
     let binding = validate_job(&work.claimed, &validation_case, &work.task, &saved_policy)
         .map_err(|_| DirectQueueError::InvalidEnvelope)?;
-    let unavailable = matches!(envelope, ResultEnvelope::Unavailable { .. });
+    let outage_cause = match &envelope {
+        ResultEnvelope::Unavailable { cause, .. } => Some(
+            cause
+                .clone()
+                .unwrap_or_else(|| "PROVIDER_UNAVAILABLE".into()),
+        ),
+        _ => None,
+    };
     match envelope {
         ResultEnvelope::Failed { error, .. } | ResultEnvelope::Unavailable { error, .. } => {
             let detached_observer = work.claimed.effect_type == "RUN_DIRECT_OBSERVER";
-            if unavailable && !detached_observer {
-                store.record_direct_unavailability(
+            if let Some(cause) = outage_cause.as_deref()
+                && !detached_observer
+            {
+                store.record_direct_unavailability_with_cause(
                     attempt_id,
                     &attempt.lease_owner,
                     now,
                     &error,
+                    cause,
                 )?;
                 queue.archive(attempt_id)?;
                 return Ok(DirectQueueCycle::Failed { attempt_id });
             }
-            if attempt.status == DirectAttemptStatus::Running {
-                store.fail_direct_attempt(
+            if attempt.status == DirectAttemptStatus::Running && !detached_observer {
+                // A work failure holds the stage briefly so a fast-failing
+                // task cannot spend its whole budget in one burst.
+                store.fail_direct_attempt_with_cooldown(
                     attempt_id,
                     &attempt.lease_owner,
                     now,
                     &bounded_error(&error),
+                    FAILED_ATTEMPT_COOLDOWN_SECONDS,
                 )?;
+                queue.archive(attempt_id)?;
+                return Ok(DirectQueueCycle::Failed { attempt_id });
             }
             if detached_observer {
                 if attempt.status == DirectAttemptStatus::Complete {
                     return Err(DirectQueueError::InvalidEnvelope);
+                }
+                if attempt.status == DirectAttemptStatus::Running {
+                    store.fail_direct_attempt(
+                        attempt_id,
+                        &attempt.lease_owner,
+                        now,
+                        &bounded_error(&error),
+                    )?;
                 }
                 store.complete_effect_evidence(
                     &attempt.effect_id,
@@ -703,8 +740,6 @@ fn ingest_result<'a>(
                         payload: serde_json::json!({"error": bounded_error(&error)}),
                     },
                 )?;
-            } else if attempt.status == DirectAttemptStatus::Running {
-                store.release_effect(&attempt.effect_id, &attempt.lease_owner)?;
             }
             queue.archive(attempt_id)?;
             Ok(DirectQueueCycle::Failed { attempt_id })

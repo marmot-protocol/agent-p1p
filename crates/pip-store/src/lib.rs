@@ -26,7 +26,6 @@ pub use case_activity::CaseActivity;
 mod dispatch_intents;
 mod reauthorization;
 mod task_results;
-pub use builder_retry::BuilderRetryAuthorization;
 pub use dispatch_intents::{CreateReservation, DispatchIntent, DispatchTransport};
 
 const MIGRATIONS: &[&str] = &[
@@ -492,6 +491,14 @@ pub struct RunInput {
     pub task_id: String,
     pub role: String,
     pub payload: Value,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectOutage {
+    pub effect_id: String,
+    pub since: u64,
+    pub cause: String,
+    pub error: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1225,7 +1232,8 @@ impl Store {
                 input.event.event_type.as_str(),
                 "BUILDER_RETRY_AUTHORIZED" | "REVIEW_RETRY_AUTHORIZED" | "PLANNER_RETRY_AUTHORIZED"
             ) {
-                builder_retry::validate_retry(&transaction, &current, input)?;
+                // Failure budgets are per stage; these lifetime allowances are retired.
+                return Err(StoreError::InvalidInput("retired operator retry event"));
             }
             if input.event.event_type == "INFRASTRUCTURE_RECOVERY_AUTHORIZED" {
                 infrastructure_recovery::validate(&transaction, &current, input)?;
@@ -2255,6 +2263,17 @@ impl Store {
         if !leased {
             return Err(StoreError::LeaseLost(claimed.effect_id.clone()));
         }
+        // A worker that outlived its lease died or was stopped. That is an
+        // execution outage, not a failed attempt at the work.
+        let expired: Vec<(i64, String)> = transaction
+            .prepare(
+                "SELECT attempt_id, case_key FROM direct_attempts
+                 WHERE effect_id = ?1 AND status = 'RUNNING' AND lease_until < ?2",
+            )?
+            .query_map(params![claimed.effect_id, sql_u64(started_at)?], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })?
+            .collect::<std::result::Result<_, _>>()?;
         transaction.execute(
             "UPDATE direct_attempts
              SET completed_at = ?1, status = 'FAILED',
@@ -2262,6 +2281,24 @@ impl Store {
              WHERE effect_id = ?2 AND status = 'RUNNING' AND lease_until < ?1",
             params![sql_u64(started_at)?, claimed.effect_id],
         )?;
+        for (attempt_id, case_key) in expired {
+            insert_evidence(
+                &transaction,
+                &case_key,
+                started_at,
+                &[EvidenceInput {
+                    evidence_id: format!("direct-unavailable:{attempt_id}"),
+                    kind: "DIRECT_RUNTIME_UNAVAILABLE".into(),
+                    source: claimed.effect_id.clone(),
+                    payload: serde_json::json!({
+                        "attempt_id": attempt_id,
+                        "cause": "LEASE_EXPIRED",
+                        "error": "worker lease expired before completion",
+                        "retry_at": started_at,
+                    }),
+                }],
+            )?;
+        }
         transaction.execute(
             "INSERT INTO direct_attempts(
                 effect_id, case_key, state_revision, task_id, lease_owner,
@@ -2395,7 +2432,36 @@ impl Store {
         now: u64,
         error: &str,
     ) -> Result<u64> {
+        self.record_direct_unavailability_with_cause(
+            attempt_id,
+            owner,
+            now,
+            error,
+            "PROVIDER_UNAVAILABLE",
+        )
+    }
+
+    /// Records an execution outage with backoff. `cause` is a stable token
+    /// (for example `PROVIDER_UNAVAILABLE` or `MODEL_UNAVAILABLE`) that lets
+    /// the controller decide when an outage should park the case.
+    pub fn record_direct_unavailability_with_cause(
+        &mut self,
+        attempt_id: u64,
+        owner: &str,
+        now: u64,
+        error: &str,
+        cause: &str,
+    ) -> Result<u64> {
         self.ensure_writable()?;
+        if cause.is_empty()
+            || !cause
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
+        {
+            return Err(StoreError::InvalidInput(
+                "stable unavailability cause required",
+            ));
+        }
         if attempt_id == 0
             || owner.trim().is_empty()
             || error.trim().is_empty()
@@ -2453,7 +2519,12 @@ impl Store {
                 evidence_id: id.clone(),
                 kind: "DIRECT_RUNTIME_UNAVAILABLE".into(),
                 source: effect_id.clone(),
-                payload: serde_json::json!({"attempt_id": attempt_id, "error": error, "retry_at": retry_at}),
+                payload: serde_json::json!({
+                    "attempt_id": attempt_id,
+                    "cause": cause,
+                    "error": error,
+                    "retry_at": retry_at,
+                }),
             }],
         )?;
         let updated = tx.execute(
@@ -2487,6 +2558,135 @@ impl Store {
 
     pub fn direct_attempt_count(&self) -> Result<u64> {
         count(&self.connection, "direct_attempts")
+    }
+
+    /// Records a failed work attempt and holds its effect until `cooldown`
+    /// seconds pass, so repeated failures cannot exhaust a stage's budget in
+    /// one burst. The effect stays leased by `owner` until it is reclaimable.
+    pub fn fail_direct_attempt_with_cooldown(
+        &mut self,
+        attempt_id: u64,
+        owner: &str,
+        completed_at: u64,
+        error: &str,
+        cooldown: u64,
+    ) -> Result<u64> {
+        self.ensure_writable()?;
+        let error = error.trim();
+        if attempt_id == 0 || owner.trim().is_empty() || error.is_empty() || error.len() > 4096 {
+            return Err(StoreError::InvalidInput(
+                "attempt, owner, and bounded error are required",
+            ));
+        }
+        let retry_at = completed_at
+            .checked_add(cooldown)
+            .ok_or(StoreError::InvalidInteger)?;
+        let lost = || StoreError::LeaseLost(format!("direct-attempt:{attempt_id}"));
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let effect_id: String = transaction
+            .query_row(
+                "SELECT effect_id FROM direct_attempts WHERE attempt_id = ?1",
+                [sql_u64(attempt_id)?],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(lost)?;
+        let updated = transaction.execute(
+            "UPDATE direct_attempts
+             SET completed_at = ?1, status = 'FAILED', error = ?2
+             WHERE attempt_id = ?3 AND lease_owner = ?4 AND status = 'RUNNING'
+               AND started_at <= ?1",
+            params![sql_u64(completed_at)?, error, sql_u64(attempt_id)?, owner],
+        )?;
+        if updated != 1 {
+            return Err(lost());
+        }
+        let updated = transaction.execute(
+            "UPDATE outbox SET lease_until = ?1
+             WHERE effect_id = ?2 AND lease_owner = ?3
+               AND delivered_at IS NULL AND superseded_at IS NULL",
+            params![sql_u64(retry_at)?, effect_id, owner],
+        )?;
+        if updated != 1 {
+            return Err(lost());
+        }
+        transaction.commit()?;
+        Ok(retry_at)
+    }
+
+    /// Work failures charged to the case's current stage: the largest count of
+    /// failed, non-outage attempts on any pending direct work effect (detached
+    /// comparison observers never count). A new
+    /// stage, round, or head is a new effect and starts from zero.
+    pub fn direct_stage_failure_count(&self, case_key: &str) -> Result<u64> {
+        if case_key.trim().is_empty() {
+            return Err(StoreError::InvalidInput("case key is required"));
+        }
+        let value: Option<i64> = self.connection.query_row(
+            "SELECT MAX(failures) FROM (
+                SELECT (SELECT COUNT(*) FROM direct_attempts a
+                        WHERE a.effect_id = o.effect_id AND a.status = 'FAILED'
+                          AND NOT EXISTS (SELECT 1 FROM evidence e
+                              WHERE e.evidence_id = 'direct-unavailable:' || a.attempt_id
+                                AND e.kind = 'DIRECT_RUNTIME_UNAVAILABLE')) AS failures
+                FROM outbox o
+                WHERE o.case_key = ?1 AND o.effect_type != 'RUN_DIRECT_OBSERVER'
+                  AND o.delivered_at IS NULL AND o.superseded_at IS NULL)",
+            [case_key],
+            |row| row.get(0),
+        )?;
+        Ok(value.map(unsigned).unwrap_or(0))
+    }
+
+    /// The oldest uninterrupted execution outage on a pending direct work
+    /// effect: outages after the effect's latest real work attempt.
+    pub fn direct_stage_outage(&self, case_key: &str) -> Result<Option<DirectOutage>> {
+        if case_key.trim().is_empty() {
+            return Err(StoreError::InvalidInput("case key is required"));
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT e.source, e.observed_at, e.payload_json FROM evidence e
+             JOIN outbox o ON o.effect_id = e.source
+             WHERE e.case_key = ?1 AND e.kind = 'DIRECT_RUNTIME_UNAVAILABLE'
+               AND o.effect_type != 'RUN_DIRECT_OBSERVER'
+               AND o.delivered_at IS NULL AND o.superseded_at IS NULL
+               AND e.observed_at >= COALESCE((SELECT MAX(a.completed_at) FROM direct_attempts a
+                   WHERE a.effect_id = o.effect_id AND a.status = 'FAILED'
+                     AND NOT EXISTS (SELECT 1 FROM evidence u
+                         WHERE u.evidence_id = 'direct-unavailable:' || a.attempt_id
+                           AND u.kind = 'DIRECT_RUNTIME_UNAVAILABLE')), 0)
+             ORDER BY e.observed_at, e.evidence_id",
+        )?;
+        let rows = statement
+            .query_map([case_key], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let Some((effect_id, since, _)) = rows.first().cloned() else {
+            return Ok(None);
+        };
+        let (_, _, latest) = rows
+            .iter()
+            .rev()
+            .find(|(source, _, _)| *source == effect_id)
+            .cloned()
+            .unwrap_or_default();
+        let latest: Value = serde_json::from_str(&latest)?;
+        Ok(Some(DirectOutage {
+            effect_id,
+            since: unsigned(since),
+            cause: latest["cause"]
+                .as_str()
+                .unwrap_or("PROVIDER_UNAVAILABLE")
+                .to_string(),
+            error: latest["error"].as_str().unwrap_or_default().to_string(),
+        }))
     }
 
     /// Failures charged to a case's work budget. Detached comparisons retain

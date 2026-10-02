@@ -750,3 +750,90 @@ fn malformed_durable_result_never_converts_a_timeout_to_success() {
     ));
     assert!(!artifacts.join("result.json").exists());
 }
+
+fn failed_run(stderr: &[u8], stdout: Vec<u8>) -> Result<CursorExecutionError, String> {
+    let tmp = tempfile::tempdir().unwrap();
+    let worktree = tmp.path().join("worktree");
+    fs::create_dir(&worktree).unwrap();
+    let artifacts = tmp.path().join("artifacts");
+    let runner = FakeRunner::default();
+    runner.outputs.borrow_mut().push_back(Ok(ProcessOutput {
+        status: 1,
+        stdout,
+        stderr: stderr.to_vec(),
+        timed_out: false,
+    }));
+    match executor(runner).execute(
+        &health("composer-2.5"),
+        &task(WorkerRole::Builder, "composer-2.5", 1),
+        &worktree,
+        &artifacts,
+    ) {
+        Ok(_) => Err("execution unexpectedly succeeded".into()),
+        Err(error) => Ok(error),
+    }
+}
+
+#[test]
+fn real_cursor_authentication_failure_is_a_provider_outage() {
+    let error = failed_run(
+        include_bytes!("fixtures/cursor/invalid-api-key.stderr"),
+        Vec::new(),
+    )
+    .unwrap();
+    assert!(
+        matches!(&error, CursorExecutionError::ProviderUnavailable(detail) if detail.contains("API key is invalid")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn real_cursor_unknown_model_is_reported_as_model_unavailable() {
+    let error = failed_run(
+        include_bytes!("fixtures/cursor/unknown-model.stderr"),
+        Vec::new(),
+    )
+    .unwrap();
+    assert!(
+        matches!(&error, CursorExecutionError::ModelUnavailable(detail) if detail.contains("Cannot use this model")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn throttling_and_server_errors_on_stderr_are_provider_outages() {
+    for stderr in [
+        "Error: You've hit your usage limit for this billing period.",
+        "Request failed with status 429: Too Many Requests",
+        "Error: rate limit exceeded, retry later",
+        "upstream returned 503 Service Unavailable",
+        "Error: model is overloaded",
+        "getaddrinfo ENOTFOUND api2.cursor.sh",
+    ] {
+        let error = failed_run(stderr.as_bytes(), Vec::new()).unwrap();
+        assert!(
+            matches!(error, CursorExecutionError::ProviderUnavailable(_)),
+            "{stderr}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn ordinary_failures_and_model_prose_are_not_provider_outages() {
+    // A plain non-zero exit without an outage signature remains a work failure.
+    assert_eq!(
+        failed_run(b"panic: tool crashed", Vec::new()).unwrap(),
+        CursorExecutionError::CommandFailed(1)
+    );
+    // Model prose that mentions throttling never reclassifies a failed run.
+    let prose = serde_json::to_vec(&json!({
+        "type": "result", "subtype": "success", "is_error": false,
+        "result": "The test mocks a 429 rate limit response; no result produced."
+    }))
+    .unwrap();
+    let error = failed_run(b"", prose).unwrap();
+    assert!(
+        !matches!(error, CursorExecutionError::ProviderUnavailable(_)),
+        "{error:?}"
+    );
+}

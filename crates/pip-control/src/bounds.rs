@@ -24,6 +24,10 @@ pub enum OperationalBound {
     ElapsedTime,
     ProviderFailures,
     RepeatedFindingFingerprint,
+    /// One stage could not run for longer than the policy's outage window.
+    ProviderUnavailable,
+    /// The pinned model is unavailable to the provider account.
+    ModelUnavailable,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -113,11 +117,10 @@ pub fn enforce_operational_bounds<'a>(
                 },
             );
         }
-        let provider_failures = store.failed_direct_attempt_count_for_case(&case.case_key)?;
-        let provider_limit = store.effective_provider_failure_limit(
-            &case.case_key,
-            u64::from(policy.max_provider_failures),
-        )?;
+        // Work failures are charged to the current stage only. Outages never
+        // spend this budget; they park the case only when they persist.
+        let provider_failures = store.direct_stage_failure_count(&case.case_key)?;
+        let provider_limit = u64::from(policy.max_provider_failures);
         if provider_failures >= provider_limit {
             return escalate(
                 store,
@@ -128,9 +131,48 @@ pub fn enforce_operational_bounds<'a>(
                     bound: OperationalBound::ProviderFailures,
                     observed: provider_failures,
                     limit: provider_limit,
-                    details: json!({"source": "direct-worker"}),
+                    details: json!({"source": "direct-worker", "scope": "stage"}),
                 },
             );
+        }
+        if let Some(outage) = store.direct_stage_outage(&case.case_key)? {
+            let details = json!({
+                "source": "direct-worker",
+                "cause": outage.cause,
+                "effect_id": outage.effect_id,
+                "since": outage.since,
+                "error": outage.error,
+            });
+            if outage.cause == "MODEL_UNAVAILABLE" {
+                return escalate(
+                    store,
+                    policy,
+                    &case,
+                    now,
+                    BoundObservation {
+                        bound: OperationalBound::ModelUnavailable,
+                        observed: 1,
+                        limit: 1,
+                        details,
+                    },
+                );
+            }
+            let outage_seconds = now.saturating_sub(outage.since);
+            let outage_limit = policy.outage_limit_seconds();
+            if outage_seconds >= outage_limit {
+                return escalate(
+                    store,
+                    policy,
+                    &case,
+                    now,
+                    BoundObservation {
+                        bound: OperationalBound::ProviderUnavailable,
+                        observed: outage_seconds,
+                        limit: outage_limit,
+                        details,
+                    },
+                );
+            }
         }
         let repeated = repeated_finding_count(store, &case.case_key)?;
         let repeated_limit = u64::from(policy.max_repeated_finding_fingerprint);

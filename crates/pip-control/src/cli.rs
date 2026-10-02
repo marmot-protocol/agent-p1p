@@ -95,15 +95,12 @@ pub fn run_cli(arguments: impl IntoIterator<Item = String>) -> Result<Value, Cli
         "direct-worker-cycle" => direct_worker_cycle(&arguments[1..]),
         "bootstrap-runtime" => bootstrap_runtime(&arguments[1..]),
         "scratch-retire" => scratch_retire(&arguments[1..]),
-        "authorize-builder-retry" => authorize_retry(&arguments[1..], "builder"),
-        "authorize-review-retry" => authorize_retry(&arguments[1..], "review"),
         "authorize-native-review-retry" => {
             authorize_head_recovery(&arguments[1..], "native-review")
         }
         "authorize-review-coordination-recovery" => {
             authorize_head_recovery(&arguments[1..], "review-coordination")
         }
-        "authorize-planner-retry" => authorize_retry(&arguments[1..], "planner"),
         "authorize-publication-retry" => authorize_publication_retry(&arguments[1..]),
         "authorize-infrastructure-recovery" => authorize_infrastructure_recovery(&arguments[1..]),
         "authorize-remediation-extension" => {
@@ -127,49 +124,6 @@ fn validate_worker_result(arguments: &[String]) -> Result<Value, CliError> {
         .map_err(|error| CliError::Contract(error.to_string()))?;
     Ok(
         json!({"ok":true,"role":result.common().role,"task_id":result.common().task_id,"workflow_authorized":false}),
-    )
-}
-
-fn authorize_retry(arguments: &[String], kind: &str) -> Result<Value, CliError> {
-    let options = options(
-        arguments,
-        &[
-            "--policy",
-            "--database",
-            "--direct-queue",
-            "--case",
-            "--expected-revision",
-            "--effect-id",
-            "--expected-failures",
-            "--request-id",
-            "--reason",
-        ],
-        &[],
-    )?;
-    let (policy, mut store) = offline_recovery_store(&options, false)?;
-    let number = |name: &'static str| -> Result<u64, CliError> {
-        required(&options, name)?
-            .parse()
-            .map_err(|_| CliError::InvalidArgument(name.into()))
-    };
-    let request = crate::BuilderRetryRequest {
-        case_key: required(&options, "--case")?.into(),
-        expected_revision: number("--expected-revision")?,
-        effect_id: required(&options, "--effect-id")?.into(),
-        expected_failures: number("--expected-failures")?,
-        request_id: required(&options, "--request-id")?.into(),
-        reason: required(&options, "--reason")?.into(),
-    };
-    let authorize = match kind {
-        "planner" => crate::authorize_planner_retry,
-        "review" => crate::authorize_review_retry,
-        _ => crate::authorize_builder_retry,
-    };
-    let result = authorize(&mut store, &policy, &request, current_time()?, 0)
-        .map_err(CliError::Reconciliation)?;
-    Ok(
-        json!({"ok":true,"result":format!("{result:?}"),"case_key":request.case_key,"request_id":request.request_id,
-        "additional_attempts":1,"runtime_activated":false,"history_preserved":true}),
     )
 }
 

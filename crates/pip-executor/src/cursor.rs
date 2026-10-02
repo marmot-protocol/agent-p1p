@@ -44,6 +44,11 @@ pub enum CursorExecutionError {
     TimedOut,
     OutputTooLarge,
     CommandFailed(i32),
+    /// The provider could not run the task (authentication, throttling,
+    /// quota, or outage). Never charged to the task's work budget.
+    ProviderUnavailable(String),
+    /// The pinned model is not available to this account. Retrying cannot help.
+    ModelUnavailable(String),
     InvalidUtf8,
     MalformedEnvelope(String),
     InvalidResult(String),
@@ -83,6 +88,12 @@ impl fmt::Display for CursorExecutionError {
             }
             Self::CommandFailed(status) => {
                 write!(formatter, "direct Cursor worker exited with {status}")
+            }
+            Self::ProviderUnavailable(detail) => {
+                write!(formatter, "Cursor provider unavailable: {detail}")
+            }
+            Self::ModelUnavailable(detail) => {
+                write!(formatter, "Cursor model unavailable: {detail}")
             }
             Self::InvalidUtf8 => formatter.write_str("direct Cursor worker output is not UTF-8"),
             Self::MalformedEnvelope(error) => {
@@ -331,6 +342,7 @@ impl<R: ProcessRunner> CursorExecutor<R> {
         }
 
         let transport_error = validate_output(&output, self.max_output_bytes).err();
+        let provider_failure = provider_failure(&output);
         let stdout_result = if output.stdout.len() <= self.max_output_bytes
             && output.stderr.len() <= self.max_output_bytes
         {
@@ -381,6 +393,14 @@ impl<R: ProcessRunner> CursorExecutor<R> {
             }
             (Ok((stdout, envelope)), None) => {
                 if let Some(error) = transport_error {
+                    if let Some(failure) = provider_failure {
+                        write_execution_outcome(
+                            artifact_dir,
+                            "PROVIDER_UNAVAILABLE_NO_RESULT",
+                            &output,
+                        )?;
+                        return Err(failure);
+                    }
                     let classification = match error {
                         CursorExecutionError::TimedOut => "TIMEOUT_WITHOUT_DURABLE_RESULT",
                         CursorExecutionError::CommandFailed(_) => {
@@ -394,6 +414,14 @@ impl<R: ProcessRunner> CursorExecutor<R> {
                 (stdout, Some(envelope), "STDOUT_RESULT")
             }
             (Err(stdout_error), None) => {
+                if let Some(failure) = provider_failure {
+                    write_execution_outcome(
+                        artifact_dir,
+                        "PROVIDER_UNAVAILABLE_NO_RESULT",
+                        &output,
+                    )?;
+                    return Err(failure);
+                }
                 let error = transport_error.unwrap_or(stdout_error);
                 let classification = match error {
                     CursorExecutionError::TimedOut => "TIMEOUT_NO_RESULT",
@@ -619,6 +647,94 @@ struct CursorEnvelope {
     result: Value,
     #[serde(flatten)]
     extra: BTreeMap<String, Value>,
+}
+
+const PROVIDER_FAILURE_DETAIL_BYTES: usize = 512;
+
+/// Signatures of provider-side failures in Cursor CLI diagnostics. Only
+/// stderr and an envelope that itself reports an error are inspected: a
+/// successful envelope's `result` is model prose and never reclassifies a run.
+const PROVIDER_OUTAGE_SIGNATURES: &[&str] = &[
+    "api key is invalid",
+    "not authenticated",
+    "unauthenticated",
+    "unauthorized",
+    "please log in",
+    "login required",
+    "usage limit",
+    "rate limit",
+    "rate-limit",
+    "too many requests",
+    "status 429",
+    "quota",
+    "overloaded",
+    "service unavailable",
+    "bad gateway",
+    "gateway timeout",
+    "status 502",
+    "status 503",
+    "status 504",
+    "econnreset",
+    "econnrefused",
+    "etimedout",
+    "enotfound",
+    "eai_again",
+    "network error",
+    "socket hang up",
+];
+
+fn provider_failure(output: &ProcessOutput) -> Option<CursorExecutionError> {
+    let error_envelope = serde_json::from_slice::<CursorEnvelope>(&output.stdout)
+        .ok()
+        .filter(|envelope| envelope.is_error || envelope.subtype != "success");
+    if output.status == 0 && error_envelope.is_none() {
+        return None;
+    }
+    let mut text = strip_terminal_escapes(&String::from_utf8_lossy(&output.stderr));
+    if let Some(envelope) = error_envelope {
+        text.push('\n');
+        text.push_str(&match envelope.result {
+            Value::String(message) => message,
+            other => other.to_string(),
+        });
+    }
+    let lowered = text.to_ascii_lowercase();
+    let detail = || bounded_detail(text.trim());
+    if lowered.contains("cannot use this model") {
+        return Some(CursorExecutionError::ModelUnavailable(detail()));
+    }
+    PROVIDER_OUTAGE_SIGNATURES
+        .iter()
+        .any(|signature| lowered.contains(signature))
+        .then(|| CursorExecutionError::ProviderUnavailable(detail()))
+}
+
+fn strip_terminal_escapes(text: &str) -> String {
+    let mut stripped = String::with_capacity(text.len());
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character == '\u{1b}' {
+            if characters.peek() == Some(&'[') {
+                characters.next();
+                for next in characters.by_ref() {
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        stripped.push(character);
+    }
+    stripped
+}
+
+fn bounded_detail(text: &str) -> String {
+    let mut end = text.len().min(PROVIDER_FAILURE_DETAIL_BYTES);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_string()
 }
 
 fn parse_envelope(stdout: &[u8]) -> Result<(WorkerResult, Value), CursorExecutionError> {

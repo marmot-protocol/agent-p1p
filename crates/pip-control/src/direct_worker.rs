@@ -26,7 +26,12 @@ const LEASE_RECOVERY_MARGIN_SECONDS: u64 = 120;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DirectWorkerRuntimeError {
+    /// The provider or execution infrastructure could not run the task.
+    /// Retried with backoff; never charged to the work budget.
     Unavailable(String),
+    /// The pinned model is not available to the provider account.
+    ModelUnavailable(String),
+    /// The task ran and failed. Charged to the stage's work budget.
     Failed(String),
 }
 
@@ -35,6 +40,9 @@ impl fmt::Display for DirectWorkerRuntimeError {
         match self {
             Self::Unavailable(error) => {
                 write!(formatter, "direct worker runtime unavailable: {error}")
+            }
+            Self::ModelUnavailable(error) => {
+                write!(formatter, "direct worker model unavailable: {error}")
             }
             Self::Failed(error) => write!(formatter, "direct worker execution failed: {error}"),
         }
@@ -194,12 +202,7 @@ impl<R: ProcessRunner + Clone> CursorDirectRuntime<R> {
                 &worktree,
                 &artifact_dir,
             )
-            .map_err(|error| match error {
-                CursorExecutionError::TemporaryIo(_) => {
-                    DirectWorkerRuntimeError::Unavailable(error.to_string())
-                }
-                _ => DirectWorkerRuntimeError::Failed(error.to_string()),
-            })
+            .map_err(classify_execution_error)
     }
 }
 
@@ -614,7 +617,29 @@ fn attempt_artifact_dir(
 }
 
 fn provider_error(error: ProviderProbeError) -> DirectWorkerRuntimeError {
-    runtime_error(error.to_string())
+    match error {
+        ProviderProbeError::ModelNotAdvertised | ProviderProbeError::AmbiguousModel => {
+            DirectWorkerRuntimeError::ModelUnavailable(error.to_string())
+        }
+        _ => runtime_error(error.to_string()),
+    }
+}
+
+/// Infrastructure and provider failures are outages; everything else means
+/// the task ran and did not produce an acceptable result.
+fn classify_execution_error(error: CursorExecutionError) -> DirectWorkerRuntimeError {
+    match error {
+        CursorExecutionError::TemporaryIo(_)
+        | CursorExecutionError::ArtifactIo(_)
+        | CursorExecutionError::Process(_)
+        | CursorExecutionError::ProviderUnavailable(_) => {
+            DirectWorkerRuntimeError::Unavailable(error.to_string())
+        }
+        CursorExecutionError::ModelUnavailable(_) => {
+            DirectWorkerRuntimeError::ModelUnavailable(error.to_string())
+        }
+        _ => DirectWorkerRuntimeError::Failed(error.to_string()),
+    }
 }
 
 fn runtime_error(error: impl Into<String>) -> DirectWorkerRuntimeError {

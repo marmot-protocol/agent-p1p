@@ -32,7 +32,7 @@ fn elapsed_time_escalates_at_the_exact_policy_boundary() {
 }
 
 #[test]
-fn fresh_human_follow_up_does_not_reset_provider_failures() {
+fn a_new_stage_starts_with_a_fresh_provider_failure_budget() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::open(dir.path().join("ledger.db")).unwrap();
     let mut policy = policy();
@@ -80,16 +80,14 @@ fn fresh_human_follow_up_does_not_reset_provider_failures() {
             )
             .unwrap();
     }
-    assert!(matches!(
+    // The failure belonged to an earlier stage. History keeps it, but the
+    // follow-up's new work does not inherit a spent budget.
+    assert_eq!(
         enforce_operational_bounds(&mut store, &policy, 1001).unwrap(),
-        OperationalBoundsCycle::Escalated {
-            bound: OperationalBound::ProviderFailures,
-            observed: 1,
-            limit: 1,
-            ..
-        }
-    ));
+        OperationalBoundsCycle::Idle
+    );
     let case = store.case("repo:1055628515#42@2").unwrap().unwrap();
+    assert_eq!(case.state, "PLANNING");
     assert_eq!(case.remediation_round, 2);
     assert_eq!(
         store

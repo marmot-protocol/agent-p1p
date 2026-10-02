@@ -45,9 +45,6 @@ pub enum Event {
     HumanClarified,
     HumanFeedbackReceived,
     BuilderDispatched,
-    BuilderRetryAuthorized,
-    PlannerRetryAuthorized,
-    ReviewRetryAuthorized,
     NativeReviewRetryAuthorized,
     ReviewCoordinationRecoveryAuthorized,
     InfrastructureRecoveryAuthorized,
@@ -81,7 +78,7 @@ pub enum Event {
 }
 
 impl Event {
-    pub const ALL: [Self; 48] = [
+    pub const ALL: [Self; 45] = [
         Self::PlanRecorded,
         Self::Proceed,
         Self::WaitingForIssueCreator,
@@ -97,9 +94,6 @@ impl Event {
         Self::HumanClarified,
         Self::HumanFeedbackReceived,
         Self::BuilderDispatched,
-        Self::BuilderRetryAuthorized,
-        Self::PlannerRetryAuthorized,
-        Self::ReviewRetryAuthorized,
         Self::NativeReviewRetryAuthorized,
         Self::ReviewCoordinationRecoveryAuthorized,
         Self::InfrastructureRecoveryAuthorized,
@@ -215,9 +209,6 @@ string_enum!(Event, "event", {
     "HUMAN_CLARIFIED" => HumanClarified,
     "HUMAN_FEEDBACK_RECEIVED" => HumanFeedbackReceived,
     "BUILDER_DISPATCHED" => BuilderDispatched,
-    "BUILDER_RETRY_AUTHORIZED" => BuilderRetryAuthorized,
-    "PLANNER_RETRY_AUTHORIZED" => PlannerRetryAuthorized,
-    "REVIEW_RETRY_AUTHORIZED" => ReviewRetryAuthorized,
     "NATIVE_REVIEW_RETRY_AUTHORIZED" => NativeReviewRetryAuthorized,
     "REVIEW_COORDINATION_RECOVERY_AUTHORIZED" => ReviewCoordinationRecoveryAuthorized,
     "INFRASTRUCTURE_RECOVERY_AUTHORIZED" => InfrastructureRecoveryAuthorized,
@@ -412,10 +403,7 @@ pub fn transition(
             decision(State::Planning, &[Fx::DispatchPlanner])
         }
         (State::ReadyToBuild, Ev::BuilderDispatched) => decision(State::Building, &[]),
-        (State::ReadyToBuild | State::Escalated, Ev::BuilderRetryAuthorized) => {
-            decision(State::ReadyToBuild, &[Fx::DispatchBuilder])
-        }
-        (State::Escalated, Ev::ReviewRetryAuthorized | Ev::NativeReviewRetryAuthorized) => {
+        (State::Escalated, Ev::NativeReviewRetryAuthorized) => {
             decision(State::WaitingCi, &[Fx::ObserveCi])
         }
         (State::Reviewing | State::Escalated, Ev::ReviewCoordinationRecoveryAuthorized) => {
@@ -425,9 +413,6 @@ pub fn transition(
         // Observe the exact current head again; the extension itself is not work.
         (State::Escalated, Ev::RemediationBudgetExtended) => {
             decision(State::WaitingCi, &[Fx::ObserveCi])
-        }
-        (State::Escalated, Ev::PlannerRetryAuthorized) => {
-            decision(State::Planning, &[Fx::DispatchPlanner])
         }
         (State::Escalated | State::Blocked, Ev::InfrastructureRecoveryAuthorized)
             if context.remediation_round < context.max_remediation_rounds =>

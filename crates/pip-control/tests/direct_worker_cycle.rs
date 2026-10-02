@@ -776,7 +776,7 @@ fn shadow_reviewer_finishes_after_required_path_advances_without_changing_case_s
 }
 
 #[test]
-fn queued_task_failure_is_recorded_by_controller_and_releases_the_effect() {
+fn queued_task_failure_is_recorded_and_retried_after_a_cooldown() {
     let directory = tempfile::tempdir().unwrap();
     let queue_root = directory.path().join("direct-queue");
     for child in ["inbox", "results", "archive"] {
@@ -794,7 +794,9 @@ fn queued_task_failure_is_recorded_by_controller_and_releases_the_effect() {
         true,
     )
     .unwrap();
-    let runtime = runtime(Err(DirectWorkerRuntimeError::Failed("outage".into())));
+    let runtime = runtime(Err(DirectWorkerRuntimeError::Failed(
+        "invalid bound worker result".into(),
+    )));
     assert_eq!(
         execute_direct_queue_once(&runtime, &queue, 101).unwrap(),
         DirectQueueCycle::Executed {
@@ -816,9 +818,17 @@ fn queued_task_failure_is_recorded_by_controller_and_releases_the_effect() {
         DirectQueueCycle::Failed { attempt_id: 1 }
     );
     assert_eq!(store.status(102).unwrap().direct_attempts_failed, 1);
+    assert_eq!(store.direct_stage_failure_count(case_key()).unwrap(), 1);
+    let cooled = 102 + pip_control::FAILED_ATTEMPT_COOLDOWN_SECONDS;
     assert!(
         store
-            .claim_effect_matching("retry", 102, 30, &["RUN_DIRECT_WORKER"])
+            .claim_effect_matching("retry", cooled - 1, 30, &["RUN_DIRECT_WORKER"])
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .claim_effect_matching("retry", cooled + 1, 30, &["RUN_DIRECT_WORKER"])
             .unwrap()
             .is_some()
     );
