@@ -267,12 +267,16 @@ pub fn reconcile_final_preflight_once<'a, S: FinalPreflightSource>(
         };
     blockers.sort();
     if !blockers.is_empty() {
-        // Review feedback and missing builder resolution records require work,
-        // not passive waiting. Do not turn CI, ownership, authorization or head
-        // failures into builder work.
+        // Review feedback, missing builder resolution records and merge
+        // conflicts require work, not passive waiting. Do not turn CI,
+        // ownership, authorization or head failures into builder work.
+        let conflicts = blockers
+            .iter()
+            .any(|blocker| blocker == "PR_MERGE_CONFLICTS");
         if blockers.iter().all(|blocker| {
             blocker.starts_with("UNRESOLVED_REVIEW_THREAD:")
                 || blocker.starts_with("MISSING_FINDING_RESOLUTION:")
+                || blocker == "PR_MERGE_CONFLICTS"
         }) && threads
             .iter()
             .filter(|thread| !thread.is_resolved)
@@ -319,11 +323,16 @@ pub fn reconcile_final_preflight_once<'a, S: FinalPreflightSource>(
             // Unchanged GitHub checkboxes are not a one-pass operational bound.
             // Unhandled feedback uses the normal policy-bounded repair loop.
             command.event = Event::ReturnToBuild;
+            let conflict_summary = if conflicts {
+                "The PR conflicts with its target branch: merge the current target branch and resolve the conflicts within the accepted plan. "
+            } else {
+                ""
+            };
             command.event_payload = json!({
-                "reason": "UNRESOLVED_REVIEW_FEEDBACK",
+                "reason": if conflicts { "PR_MERGE_CONFLICT" } else { "UNRESOLVED_REVIEW_FEEDBACK" },
                 "previously_observed": repeated,
                 "head_sha":head_sha,"pull_request_number":pr_number,"blockers":blockers,
-                "summary": "Assess unresolved review threads and missing finding-resolution records. Repair in-scope defects, explicitly record each historical blocking finding's resolution against the resulting source head with test evidence, and explain deferred suggestions. Record each supplied thread_id and comment_id in suggestion_dispositions with its disposition, summary and verification. Fresh exact-head review and origin confirmation remain required.",
+                "summary": format!("{conflict_summary}Assess unresolved review threads and missing finding-resolution records. Repair in-scope defects, explicitly record each historical blocking finding's resolution against the resulting source head with test evidence, and explain deferred suggestions. Record each supplied thread_id and comment_id in suggestion_dispositions with its disposition, summary and verification. Fresh exact-head review and origin confirmation remain required."),
             });
             LedgerController::apply(store, &policy.case_policy(), &command)?;
             return Ok(FinalPreflightCycle::FeedbackRouted {
@@ -426,15 +435,19 @@ fn validate_pull_request(
     if !pull.open || pull.merged || expected_draft.is_some_and(|draft| pull.draft != draft) {
         push_unique(blockers, "PULL_REQUEST_DISPOSITION_DRIFT".into());
     }
+    // A human merges this PR, so only an actual conflict blocks readiness.
+    // `behind`, `blocked` (awaiting required human approval), `unstable` and
+    // `has_hooks` are for that human; Pip has already judged CI itself.
+    // Rebuilding whenever the target moves would never finish.
     match pull.mergeable {
         Some(false) => push_unique(blockers, "PR_MERGE_CONFLICTS".into()),
         None => push_unique(blockers, "PR_MERGEABILITY_UNKNOWN".into()),
         Some(true) => {}
     }
-    if pull.mergeable_state != "clean" {
-        // A conflict-free head can still be blocked by branch requirements.
-        // Preserve GitHub's observation without guessing which rule failed.
-        push_unique(blockers, format!("PR_MERGE_STATE:{}", pull.mergeable_state));
+    match pull.mergeable_state.as_str() {
+        "dirty" => push_unique(blockers, "PR_MERGE_CONFLICTS".into()),
+        "unknown" => push_unique(blockers, "PR_MERGEABILITY_UNKNOWN".into()),
+        _ => {}
     }
     let evaluation = evaluate_ci(evidence, head_sha, &policy.required_ci_contexts);
     if evaluation.verdict != CiVerdict::Accepted {

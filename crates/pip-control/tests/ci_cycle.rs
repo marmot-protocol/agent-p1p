@@ -434,7 +434,7 @@ fn fresh_ci_observation_on_the_same_head_preserves_prior_evidence() {
 }
 
 #[test]
-fn pending_ci_is_read_only_and_historical_failure_enters_remediation() {
+fn pending_ci_is_read_only_and_a_failed_latest_attempt_enters_remediation() {
     let directory = tempfile::tempdir().unwrap();
     let mut pending_store = waiting_ci_store(directory.path().join("pending.db"));
     let mut pending = evidence(Vec::new());
@@ -464,10 +464,7 @@ fn pending_ci_is_read_only_and_historical_failure_enters_remediation() {
     let mut failed_store = waiting_ci_store(directory.path().join("failed.db"));
     let result = reconcile_ci_once(
         &FixtureSource {
-            evidence: evidence(vec![
-                check(CheckConclusion::Failure),
-                check(CheckConclusion::Success),
-            ]),
+            evidence: evidence(vec![check(CheckConclusion::Failure)]),
         },
         &active_policy(),
         &mut failed_store,
@@ -692,4 +689,26 @@ fn active_policy() -> pip_control::RepositoryPolicy {
     value["github"]["reviewer_secperf_actor_id"] = json!(202882);
     value["required_ci_contexts"] = json!(["test"]);
     load_repository_policy(&serde_json::to_vec(&value).unwrap()).unwrap()
+}
+
+#[test]
+fn a_green_rerun_of_a_flaky_check_releases_reviewers_without_remediation() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = waiting_ci_store(directory.path().join("rerun.db"));
+    let result = reconcile_ci_once(
+        &FixtureSource {
+            evidence: evidence(vec![
+                check(CheckConclusion::Failure),
+                check(CheckConclusion::Success),
+            ]),
+        },
+        &active_policy(),
+        &mut store,
+        101,
+    )
+    .unwrap();
+    assert!(matches!(result, CiCycle::Transitioned { verdict, .. } if verdict == "ACCEPTED"));
+    let case = store.case("repo:984321#1240@1").unwrap().unwrap();
+    assert_eq!(case.state, "REVIEWING");
+    assert_eq!(case.remediation_round, 0);
 }

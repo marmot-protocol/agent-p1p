@@ -41,7 +41,7 @@ fn unfinished_optional_checks_hold_reviews_without_hiding_failure() {
 }
 
 #[test]
-fn completed_status_supersedes_earlier_pending_observations_but_not_failures() {
+fn the_latest_status_of_a_context_is_its_disposition() {
     for older in [CommitStatusState::Pending, CommitStatusState::Failure] {
         let evidence = evidence(
             vec![],
@@ -53,11 +53,7 @@ fn completed_status_supersedes_earlier_pending_observations_but_not_failures() {
         );
         assert_eq!(
             evaluate_ci(&evidence, &"b".repeat(40), &["ci".into()]).verdict,
-            if older == CommitStatusState::Failure {
-                CiVerdict::Failed
-            } else {
-                CiVerdict::Accepted
-            }
+            CiVerdict::Accepted
         );
     }
 }
@@ -81,7 +77,7 @@ fn exact_required_contexts_accept_only_complete_green_evidence() {
 }
 
 #[test]
-fn any_historical_red_attempt_is_permanently_failed_even_after_green_retry() {
+fn a_green_rerun_supersedes_an_earlier_red_attempt_of_the_same_check() {
     let evidence = evidence(
         vec![
             check(
@@ -101,9 +97,50 @@ fn any_historical_red_attempt_is_permanently_failed_even_after_green_retry() {
         Vec::new(),
     );
     let evaluated = evaluate_ci(&evidence, &"b".repeat(40), &["test".into()]);
+    assert_eq!(evaluated.verdict, CiVerdict::Accepted);
 
+    // The other way round, the latest attempt is red and names the check.
+    let mut evidence = evidence;
+    evidence.check_runs[0].conclusion = Some(CheckConclusion::Success);
+    evidence.check_runs[1].conclusion = Some(CheckConclusion::Failure);
+    let evaluated = evaluate_ci(&evidence, &"b".repeat(40), &["test".into()]);
     assert_eq!(evaluated.verdict, CiVerdict::Failed);
-    assert_eq!(evaluated.blockers, ["HISTORICAL_FAILED_ATTEMPT"]);
+    assert_eq!(
+        evaluated.blockers,
+        ["CHECK_FAILED:test", "REQUIRED_CONTEXT_NOT_GREEN:test"]
+    );
+}
+
+#[test]
+fn a_cancelled_optional_check_is_ignored_but_a_cancelled_required_one_is_not_green() {
+    let evidence = evidence(
+        vec![
+            check(
+                1,
+                "Required CI",
+                CheckStatus::Completed,
+                Some(CheckConclusion::Success),
+            ),
+            check(
+                2,
+                "Nightly bench",
+                CheckStatus::Completed,
+                Some(CheckConclusion::Cancelled),
+            ),
+        ],
+        CommitStatusState::Success,
+        vec![],
+    );
+    assert_eq!(
+        evaluate_ci(&evidence, &"b".repeat(40), &["Required CI".into()]).verdict,
+        CiVerdict::Accepted
+    );
+    let evaluated = evaluate_ci(&evidence, &"b".repeat(40), &["Nightly bench".into()]);
+    assert_eq!(evaluated.verdict, CiVerdict::Failed);
+    assert_eq!(
+        evaluated.blockers,
+        ["REQUIRED_CONTEXT_NOT_GREEN:Nightly bench"]
+    );
 }
 
 #[test]
@@ -127,7 +164,7 @@ fn pending_missing_and_hollow_evidence_never_release_reviewers() {
 }
 
 #[test]
-fn exact_head_drift_and_failed_combined_status_fail_closed() {
+fn exact_head_drift_and_failed_statuses_fail_closed() {
     let evidence = evidence(
         vec![check(
             1,
@@ -136,7 +173,7 @@ fn exact_head_drift_and_failed_combined_status_fail_closed() {
             Some(CheckConclusion::Success),
         )],
         CommitStatusState::Failure,
-        Vec::new(),
+        vec![status(2, "lint", CommitStatusState::Failure)],
     );
     let evaluated = evaluate_ci(&evidence, &"c".repeat(40), &["test".into()]);
     assert_eq!(evaluated.verdict, CiVerdict::Failed);
@@ -144,7 +181,7 @@ fn exact_head_drift_and_failed_combined_status_fail_closed() {
         evaluated.blockers,
         [
             "PR_HEAD_MISMATCH",
-            "COMBINED_STATUS_FAILURE",
+            "STATUS_FAILED:lint",
             "CHECK_HEAD_MISMATCH"
         ]
     );

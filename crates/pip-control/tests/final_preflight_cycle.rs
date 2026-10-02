@@ -575,33 +575,21 @@ fn unresolved_threads_route_one_bounded_builder_pass_without_releasing_final_rev
 }
 
 #[test]
-fn mergeability_blockers_distinguish_conflicts_unknown_and_branch_requirements() {
+fn only_conflicts_and_unknown_mergeability_hold_a_human_merged_pr() {
     for (mergeable, state, expected) in [
-        (
-            Some(false),
-            "dirty",
-            vec!["PR_MERGE_CONFLICTS", "PR_MERGE_STATE:dirty"],
-        ),
-        (
-            None,
-            "unknown",
-            vec!["PR_MERGEABILITY_UNKNOWN", "PR_MERGE_STATE:unknown"],
-        ),
-        (Some(true), "blocked", vec!["PR_MERGE_STATE:blocked"]),
-        (Some(true), "behind", vec!["PR_MERGE_STATE:behind"]),
-        (
-            Some(true),
-            "future-state",
-            vec!["PR_MERGE_STATE:future-state"],
-        ),
-        (None, "clean", vec!["PR_MERGEABILITY_UNKNOWN"]),
-        (Some(false), "clean", vec!["PR_MERGE_CONFLICTS"]),
+        (Some(false), "dirty", "routed"),
+        (Some(false), "clean", "routed"),
+        (None, "unknown", "pending"),
+        (None, "clean", "pending"),
+        (Some(true), "blocked", "accepted"),
+        (Some(true), "behind", "accepted"),
+        (Some(true), "unstable", "accepted"),
+        (Some(true), "future-state", "accepted"),
     ] {
         let directory = tempfile::tempdir().unwrap();
         let policy = active_policy();
         let mut source = accepted_source();
-        // Reach final review while mergeable, then observe a later base conflict.
-        // A conflict already present at the CI stage now correctly remediates.
+        // Reach final review while mergeable, then observe a later change.
         let mut store = final_review_store(directory.path().join("ledger.db"), &policy, &source);
         source.evidence.pull_request.mergeable = mergeable;
         source.evidence.pull_request.mergeable_state = state.into();
@@ -615,23 +603,21 @@ fn mergeability_blockers_distinguish_conflicts_unknown_and_branch_requirements()
             true,
         )
         .unwrap();
-        let FinalPreflightCycle::Pending { blockers, .. } = result else {
-            panic!("unsafe gate accepted {mergeable:?}/{state}");
-        };
-        assert_eq!(blockers, expected, "{mergeable:?}/{state}");
-        assert_eq!(store.evidence_count().unwrap(), 5);
-        assert!(
-            store
-                .claim_effect_matching("dispatcher", 200, 30, &["DISPATCH_FINAL_REVIEWER"])
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            store
-                .claim_effect_matching("retry", 200, 30, &["OBSERVE_FINAL_PREFLIGHT"])
-                .unwrap()
-                .is_some()
-        );
+        match expected {
+            // A conflict is builder work, not an indefinite wait.
+            "routed" => assert!(
+                matches!(result, FinalPreflightCycle::FeedbackRouted { ref state, .. } if state == "REMEDIATING"),
+                "{mergeable:?}/{state}: {result:?}"
+            ),
+            "pending" => assert!(
+                matches!(result, FinalPreflightCycle::Pending { ref blockers, .. } if blockers == &["PR_MERGEABILITY_UNKNOWN"]),
+                "{mergeable:?}/{state}: {result:?}"
+            ),
+            _ => assert!(
+                matches!(result, FinalPreflightCycle::Accepted { .. }),
+                "{mergeable:?}/{state}: {result:?}"
+            ),
+        }
     }
 }
 
@@ -813,7 +799,7 @@ fn dirty_mergeability_and_missing_or_stale_role_reviews_cannot_open_the_gate() {
     assert!(matches!(
         result,
         FinalPreflightCycle::Pending { blockers, .. }
-            if blockers.contains(&"PR_MERGE_STATE:dirty".into())
+            if blockers.contains(&"PR_MERGE_CONFLICTS".into())
                 && blockers.contains(&"MISSING_EXACT_HEAD_APPROVAL:reviewer-secperf".into())
     ));
     assert!(

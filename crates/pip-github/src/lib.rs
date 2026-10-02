@@ -294,15 +294,13 @@ pub enum CheckConclusion {
 }
 
 impl CheckConclusion {
+    /// A conclusion that means the checked work is broken. Cancelled and
+    /// stale runs say nothing about the code; a required context that ends
+    /// that way is still not green.
     pub fn is_failure(self) -> bool {
         matches!(
             self,
-            Self::ActionRequired
-                | Self::Cancelled
-                | Self::Failure
-                | Self::Stale
-                | Self::StartupFailure
-                | Self::TimedOut
+            Self::ActionRequired | Self::Failure | Self::StartupFailure | Self::TimedOut
         )
     }
 }
@@ -443,37 +441,53 @@ pub fn evaluate_ci(
     if !evidence.pull_request.open || evidence.pull_request.merged {
         push_unique(&mut failed, "PR_NOT_OPEN".into());
     }
-    let historical_failure = evidence
-        .check_runs
-        .iter()
-        .any(|check| check.conclusion.is_some_and(CheckConclusion::is_failure))
-        || evidence.commit_statuses.iter().any(|status| {
-            matches!(
-                status.state,
-                CommitStatusState::Error | CommitStatusState::Failure
-            )
-        });
-    if historical_failure {
-        push_unique(&mut failed, "HISTORICAL_FAILED_ATTEMPT".into());
+    // A re-run supersedes earlier attempts of the same check, and a newer
+    // status supersedes earlier ones for its context. Judge only the latest.
+    let mut latest_checks = std::collections::BTreeMap::new();
+    for check in &evidence.check_runs {
+        latest_checks
+            .entry((check.app_id, check.name.as_str()))
+            .and_modify(|current: &mut &CheckRunSnapshot| {
+                if (&check.started_at, check.id) > (&current.started_at, current.id) {
+                    *current = check;
+                }
+            })
+            .or_insert(check);
     }
-    // Every observed failed check vetoes acceptance, including optional jobs.
-    // Apply the same boundary while those jobs are running: otherwise fast
-    // Required CI releases reviewers with a permanently stale native-CI snapshot.
-    if evidence
-        .check_runs
-        .iter()
+    let mut latest_statuses = std::collections::BTreeMap::new();
+    for status in &evidence.commit_statuses {
+        latest_statuses
+            .entry(status.context.as_str())
+            .and_modify(|current: &mut &CommitStatusSnapshot| {
+                if (&status.created_at, status.id) > (&current.created_at, current.id) {
+                    *current = status;
+                }
+            })
+            .or_insert(status);
+    }
+    for check in latest_checks.values() {
+        if check.conclusion.is_some_and(CheckConclusion::is_failure) {
+            push_unique(&mut failed, format!("CHECK_FAILED:{}", check.name));
+        }
+    }
+    for status in latest_statuses.values() {
+        if matches!(
+            status.state,
+            CommitStatusState::Error | CommitStatusState::Failure
+        ) {
+            push_unique(&mut failed, format!("STATUS_FAILED:{}", status.context));
+        }
+    }
+    // Wait for every observed check, including optional ones: a fast required
+    // check must not release reviewers while slower jobs may still fail.
+    if latest_checks
+        .values()
         .any(|check| check.status != CheckStatus::Completed)
+        || latest_statuses
+            .values()
+            .any(|status| status.state == CommitStatusState::Pending)
     {
         push_unique(&mut pending, "CI_PENDING".into());
-    }
-    match evidence.commit_status_state {
-        CommitStatusState::Error | CommitStatusState::Failure => {
-            push_unique(&mut failed, "COMBINED_STATUS_FAILURE".into());
-        }
-        CommitStatusState::Pending if !evidence.commit_statuses.is_empty() => {
-            push_unique(&mut pending, "CI_PENDING".into());
-        }
-        CommitStatusState::Pending | CommitStatusState::Success => {}
     }
 
     if required_contexts.is_empty()
@@ -483,38 +497,23 @@ pub fn evaluate_ci(
         push_unique(&mut pending, "CI_HOLLOW".into());
     }
     for required in required_contexts {
-        let checks = evidence
-            .check_runs
-            .iter()
+        let checks = latest_checks
+            .values()
             .filter(|check| &check.name == required)
             .collect::<Vec<_>>();
-        let statuses = evidence
-            .commit_statuses
-            .iter()
-            .filter(|status| &status.context == required)
-            .collect::<Vec<_>>();
-        // Status updates are separate immutable records, unlike mutable check
-        // runs. Retain every failure above, but use the latest update for the
-        // current pending/success disposition of this context.
-        let latest_status = statuses
-            .iter()
-            .max_by_key(|status| (&status.created_at, status.id));
-        if checks.is_empty() && statuses.is_empty() {
+        let status = latest_statuses.get(required.as_str());
+        if checks.is_empty() && status.is_none() {
             push_unique(&mut pending, format!("MISSING_REQUIRED_CONTEXT:{required}"));
             continue;
         }
         let in_progress = checks
             .iter()
             .any(|check| check.status != CheckStatus::Completed)
-            || latest_status.is_some_and(|status| status.state == CommitStatusState::Pending);
-        if in_progress {
-            push_unique(&mut pending, "CI_PENDING".into());
-        }
+            || status.is_some_and(|status| status.state == CommitStatusState::Pending);
         let green = checks.iter().any(|check| {
             check.status == CheckStatus::Completed
                 && check.conclusion == Some(CheckConclusion::Success)
-        }) || latest_status
-            .is_some_and(|status| status.state == CommitStatusState::Success);
+        }) || status.is_some_and(|status| status.state == CommitStatusState::Success);
         if !green && !in_progress {
             push_unique(
                 &mut failed,
