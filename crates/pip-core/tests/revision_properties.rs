@@ -42,6 +42,7 @@ fn command(expected_revision: u64) -> CaseCommand {
         expected_state_revision: StateRevision::new(NonZeroU64::new(expected_revision).unwrap()),
         accepted_policy_revision: policy().revision,
         event: Event::Proceed,
+        resume_target: None,
     }
 }
 

@@ -14,6 +14,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 mod builder_retry;
+mod control;
 mod conversations;
 mod follow_up_recovery;
 mod infrastructure_recovery;
@@ -27,6 +28,9 @@ pub use case_activity::CaseActivity;
 mod dispatch_intents;
 mod reauthorization;
 mod task_results;
+pub use control::{
+    ControlCommand, ControlCommandInput, ControlCommandStatus, PARKED_STATES, ParkingEvent,
+};
 pub use dispatch_intents::{CreateReservation, DispatchIntent, DispatchTransport};
 pub use projection_retry::{PendingProjection, ProjectionRejection};
 
@@ -45,6 +49,7 @@ const MIGRATIONS: &[&str] = &[
     MIGRATION_11,
     MIGRATION_12,
     conversations::MIGRATION,
+    control::MIGRATION,
 ];
 const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
 
@@ -1253,6 +1258,8 @@ impl Store {
                 reauthorization::validate(&transaction, &current, input)?
             } else if input.event.event_type == "REMEDIATION_BUDGET_EXTENDED" {
                 remediation_extension::validate(&transaction, &current, input)?
+            } else if input.event.event_type == "HUMAN_RESUMED" {
+                control::validate_resume(&transaction, &current, input)?
             } else {
                 current.policy_revision
             };

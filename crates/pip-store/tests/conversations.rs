@@ -118,10 +118,10 @@ fn schema_twelve_upgrades_without_rewriting_existing_case_history() {
         serde_json::to_value(store.immutable_history_for_case("repo:123#7@3").unwrap()).unwrap();
     drop(store);
     let sql = rusqlite::Connection::open(&path).unwrap();
-    sql.execute_batch("DROP TABLE conversations; DELETE FROM schema_migrations WHERE version=13; PRAGMA user_version=12;").unwrap();
+    sql.execute_batch("DROP TABLE control_commands; DROP TABLE conversations; DELETE FROM schema_migrations WHERE version>=13; PRAGMA user_version=12;").unwrap();
     drop(sql);
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 13);
+    assert_eq!(store.schema_version().unwrap(), 14);
     assert_eq!(
         serde_json::to_value(store.immutable_history_for_case("repo:123#7@3").unwrap()).unwrap(),
         before

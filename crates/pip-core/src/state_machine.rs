@@ -75,10 +75,14 @@ pub enum Event {
     HumanTookOver,
     AuthorizationRemoved,
     OperationalBoundReached,
+    /// A trusted human asked Pip to continue a parked case.
+    HumanResumed,
+    /// A trusted human asked Pip to stop a parked case for good.
+    HumanAbandoned,
 }
 
 impl Event {
-    pub const ALL: [Self; 45] = [
+    pub const ALL: [Self; 47] = [
         Self::PlanRecorded,
         Self::Proceed,
         Self::WaitingForIssueCreator,
@@ -124,6 +128,8 @@ impl Event {
         Self::HumanTookOver,
         Self::AuthorizationRemoved,
         Self::OperationalBoundReached,
+        Self::HumanResumed,
+        Self::HumanAbandoned,
     ];
 }
 
@@ -239,6 +245,8 @@ string_enum!(Event, "event", {
     "HUMAN_TOOK_OVER" => HumanTookOver,
     "AUTHORIZATION_REMOVED" => AuthorizationRemoved,
     "OPERATIONAL_BOUND_REACHED" => OperationalBoundReached,
+    "HUMAN_RESUMED" => HumanResumed,
+    "HUMAN_ABANDONED" => HumanAbandoned,
 });
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -253,6 +261,9 @@ pub struct TransitionContext {
     pub remediation_round: u32,
     pub max_remediation_rounds: u32,
     pub merge_mode: MergeMode,
+    /// Where a `HumanResumed` event restarts a parked case. The controller
+    /// chooses it from the parking cause; it is ignored for other events.
+    pub resume_target: Option<CaseState>,
 }
 
 impl Default for TransitionContext {
@@ -261,6 +272,7 @@ impl Default for TransitionContext {
             remediation_round: 0,
             max_remediation_rounds: 3,
             merge_mode: MergeMode::Shadow,
+            resume_target: None,
         }
     }
 }
@@ -285,6 +297,8 @@ pub enum Effect {
     RecordBlock,
     RecordTakeover,
     Escalate,
+    /// Tell the human who resumed a case where it continues.
+    AcknowledgeResume,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -361,6 +375,23 @@ pub fn transition(
     }
     if event == Event::OperationalBoundReached {
         return decision(CaseState::Escalated, &[Effect::Escalate]);
+    }
+    let parked = matches!(
+        state,
+        CaseState::Escalated | CaseState::Blocked | CaseState::WaitingHuman
+    );
+    if event == Event::HumanAbandoned && parked {
+        return decision(CaseState::Abandoned, &[Effect::RecordAbandonment]);
+    }
+    if event == Event::HumanResumed && parked {
+        let dispatch = match context.resume_target {
+            Some(CaseState::Planning) => Effect::DispatchPlanner,
+            Some(CaseState::ReadyToBuild | CaseState::Remediating) => Effect::DispatchBuilder,
+            Some(CaseState::WaitingCi) => Effect::ObserveCi,
+            _ => return Err(TransitionError::InvalidTransition { state, event }),
+        };
+        let target = context.resume_target.unwrap_or(state);
+        return decision(target, &[dispatch, Effect::AcknowledgeResume]);
     }
 
     use CaseState as State;

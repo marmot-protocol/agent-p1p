@@ -30,6 +30,8 @@ pub struct CaseCommand {
     pub expected_state_revision: StateRevision,
     pub accepted_policy_revision: PolicyRevision,
     pub event: Event,
+    /// Only meaningful for `HumanResumed`.
+    pub resume_target: Option<CaseState>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -110,6 +112,7 @@ pub fn evaluate_case_command(
             remediation_round: snapshot.remediation_round,
             max_remediation_rounds: policy.max_remediation_rounds.get(),
             merge_mode: policy.merge_mode,
+            resume_target: command.resume_target,
         },
     )
     .map_err(CommandError::InvalidTransition)?;

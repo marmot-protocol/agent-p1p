@@ -20,7 +20,8 @@ fn ten_round_policy_allows_corrections_until_ten_and_completion_at_the_limit() {
                 TransitionContext {
                     remediation_round: round,
                     max_remediation_rounds: policy.max_remediation_rounds,
-                    merge_mode: MergeMode::Shadow
+                    merge_mode: MergeMode::Shadow,
+                    resume_target: None,
                 }
             )
             .unwrap()

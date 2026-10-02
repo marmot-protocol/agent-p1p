@@ -478,7 +478,8 @@ fn conversation_roundtrip_with_crash(
         assert_eq!(case.state, "PLANNING");
         let revisions = if state == Some("SHADOW_READY") { 3 } else { 2 };
         assert_eq!(case.state_revision, revisions);
-        assert_eq!(case.remediation_round, 1);
+        // Human input is not a failed round; it never spends remediation budget.
+        assert_eq!(case.remediation_round, 0);
         let history = store.immutable_history_for_case(&case.case_key).unwrap();
         assert_eq!(history.events.len(), revisions as usize);
         assert_eq!(history.evidence[0].kind, "HUMAN_DISCUSSION");

@@ -75,7 +75,8 @@ impl LedgerController {
         workflow: &WorkflowCommand,
     ) -> Result<ApplyResult, ControllerError> {
         validate_workflow(store, workflow)?;
-        let transition = transition_input(policy, workflow)?;
+        let policy = effective_policy(store, policy, workflow)?;
+        let transition = transition_input(&policy, workflow)?;
         store
             .apply_transition(&transition, None)
             .map_err(Into::into)
@@ -90,6 +91,7 @@ impl LedgerController {
             "at least one workflow command is required",
         ))?;
         validate_workflow(store, first)?;
+        let policy = &effective_policy(store, policy, first)?;
         let mut transitions = Vec::with_capacity(workflows.len());
         for workflow in workflows {
             validate_workflow_shape(workflow)?;
@@ -102,6 +104,20 @@ impl LedgerController {
             .apply_transition_batch(&transitions, None)
             .map_err(Into::into)
     }
+}
+
+/// The case's remediation budget includes rounds humans granted on resume.
+fn effective_policy(
+    store: &Store,
+    policy: &CasePolicy,
+    workflow: &WorkflowCommand,
+) -> Result<CasePolicy, ControllerError> {
+    let granted = store.granted_remediation_rounds(&workflow.case_id.to_string())?;
+    let mut effective = *policy;
+    effective.max_remediation_rounds = policy.max_remediation_rounds.checked_add(granted).ok_or(
+        ControllerError::InvalidCommand("remediation budget overflow"),
+    )?;
+    Ok(effective)
 }
 
 fn transition_input(
@@ -122,13 +138,15 @@ fn transition_input(
         expected_state_revision: workflow.expected_state_revision,
         accepted_policy_revision: workflow.accepted_policy_revision,
         event: workflow.event,
+        resume_target: resume_target(workflow)?,
     };
     let evaluated = evaluate_case_command(&snapshot, &command, policy)?;
     let next_plan_version = next_plan_version(workflow)?;
-    let next_remediation_round = if (evaluated.transition.next_state == CaseState::Remediating
-        && workflow.expected_state != CaseState::Remediating)
-        || (workflow.event == Event::HumanFeedbackReceived
-            && evaluated.transition.next_state == CaseState::Planning)
+    // A new remediation round starts when work returns to the builder. Human
+    // input (feedback or a resume) is not a failed round and never spends one.
+    let next_remediation_round = if evaluated.transition.next_state == CaseState::Remediating
+        && workflow.expected_state != CaseState::Remediating
+        && workflow.event != Event::HumanResumed
     {
         workflow
             .remediation_round
@@ -315,5 +333,19 @@ fn effect_name(effect: Effect) -> &'static str {
         Effect::RecordBlock => "RECORD_BLOCK",
         Effect::RecordTakeover => "RECORD_TAKEOVER",
         Effect::Escalate => "ESCALATE",
+        Effect::AcknowledgeResume => "ACKNOWLEDGE_RESUME",
     }
+}
+
+fn resume_target(workflow: &WorkflowCommand) -> Result<Option<CaseState>, ControllerError> {
+    if workflow.event != Event::HumanResumed {
+        return Ok(None);
+    }
+    workflow.event_payload["resume_target"]
+        .as_str()
+        .and_then(|state| state.parse().ok())
+        .map(Some)
+        .ok_or(ControllerError::InvalidCommand(
+            "a resume names its target state",
+        ))
 }

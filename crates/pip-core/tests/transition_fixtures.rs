@@ -49,6 +49,7 @@ fn curated_target_transition_oracle_passes() {
                 remediation_round: case.remediation_round.unwrap_or(0),
                 max_remediation_rounds: case.max_rounds.unwrap_or(3),
                 merge_mode,
+                resume_target: None,
             },
         )
         .unwrap_or_else(|error| panic!("{}: {error}", case.name));
@@ -95,6 +96,7 @@ fn loop_bounds_must_be_positive() {
                 remediation_round: 0,
                 max_remediation_rounds: 0,
                 merge_mode: MergeMode::Shadow,
+                resume_target: None,
             },
         ),
         Err(TransitionError::InvalidLoopBound)
@@ -248,6 +250,7 @@ fn guarded_merge_preparation_releases_only_the_deterministic_transaction() {
         Event::MergeStarted,
         TransitionContext {
             merge_mode: MergeMode::Guarded,
+            resume_target: None,
             ..TransitionContext::default()
         },
     )
@@ -297,6 +300,7 @@ proptest! {
                 remediation_round,
                 max_remediation_rounds: max_rounds,
                 merge_mode: MergeMode::Shadow,
+                resume_target: None,
             },
         ).unwrap();
         let expected = if remediation_round >= max_rounds {
@@ -333,6 +337,7 @@ proptest! {
             remediation_round,
             max_remediation_rounds: max_rounds,
             merge_mode: MergeMode::Shadow,
+            resume_target: None,
         };
         let first = transition(state, Event::ALL[event_index], input);
         let replay = transition(state, Event::ALL[event_index], input);

@@ -247,7 +247,7 @@ fn upgrade_snapshots_schema_seven_before_migrating_to_current() {
             .unwrap()
             .schema_version()
             .unwrap(),
-        13
+        14
     );
 }
 
