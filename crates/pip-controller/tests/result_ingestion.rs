@@ -500,7 +500,7 @@ fn three_required_reviewer_policy() -> WorkflowPolicy {
         skills: vec![
             match role {
                 pip_contracts::WorkerRole::Planner => "planner",
-                pip_contracts::WorkerRole::Builder => "builder-grok",
+                pip_contracts::WorkerRole::Builder => "builder",
                 pip_contracts::WorkerRole::ReviewerGeneral => "reviewer-general",
                 pip_contracts::WorkerRole::ReviewerSecperf => "reviewer-secperf",
                 pip_contracts::WorkerRole::FinalReviewer => "final-reviewer",
@@ -535,7 +535,7 @@ fn three_required_reviewer_policy() -> WorkflowPolicy {
             ),
             role(
                 pip_contracts::WorkerRole::Builder,
-                "builder-grok",
+                "builder",
                 ExecutionKind::Direct,
                 "cursor",
                 "grok-4.7-high-fast",

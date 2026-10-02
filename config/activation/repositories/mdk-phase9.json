@@ -67,14 +67,14 @@
     },
     {
       "role": "builder",
-      "profile": "builder-grok",
+      "profile": "builder",
       "execution": "direct",
       "provider": "cursor",
       "model": "cursor-grok-4.6-high-fast",
       "reasoning_effort": null,
       "max_runtime": "PT45M",
       "priority": 50,
-      "skills": ["workflow-contract", "builder-grok"]
+      "skills": ["workflow-contract", "builder"]
     },
     {
       "role": "reviewer-general",

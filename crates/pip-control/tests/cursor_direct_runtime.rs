@@ -50,14 +50,14 @@ fn production_runtime_probes_exact_model_reads_canonical_skills_and_retains_arti
         "# Fixture field guide\nExact role result fields travel with this prompt.\n",
     )
     .unwrap();
-    fs::create_dir_all(skills.join("builder-grok")).unwrap();
+    fs::create_dir_all(skills.join("builder")).unwrap();
     fs::write(
         skills.join("shared/workflow-contract/SKILL.md"),
         "# Workflow contract\nReturn the exact bound result.\n",
     )
     .unwrap();
     fs::write(
-        skills.join("builder-grok/SKILL.md"),
+        skills.join("builder/SKILL.md"),
         "# Builder\nBuild only in the assigned worktree.\n",
     )
     .unwrap();
@@ -162,9 +162,9 @@ fn direct_task(worktree: &std::path::Path) -> DirectTaskSpec {
             "immutable_evidence_bundle": {"schema_version": 1, "sha256": "b".repeat(64)},
         }),
         role: WorkerRole::Builder,
-        profile: "builder-grok".into(),
+        profile: "builder".into(),
         workspace: worktree.display().to_string(),
-        skills: vec!["workflow-contract".into(), "builder-grok".into()],
+        skills: vec!["workflow-contract".into(), "builder".into()],
         provider: "cursor".into(),
         model: "composer-2.5".into(),
         max_runtime: "PT45M".into(),

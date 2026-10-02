@@ -4,10 +4,7 @@ const ROLE_SKILLS: [(&str, &str); 6] = [
         include_str!("../../../skills/shared/workflow-contract/SKILL.md"),
     ),
     ("planner", include_str!("../../../skills/planner/SKILL.md")),
-    (
-        "builder-grok",
-        include_str!("../../../skills/builder-grok/SKILL.md"),
-    ),
+    ("builder", include_str!("../../../skills/builder/SKILL.md")),
     (
         "reviewer-general",
         include_str!("../../../skills/reviewer-general/SKILL.md"),
@@ -70,7 +67,10 @@ fn shared_skill_leaves_bookkeeping_to_the_controller() {
         "Copy the case identity",
         "Requested and actual models match",
     ] {
-        assert!(!shared.contains(retired), "shared skill still says {retired}");
+        assert!(
+            !shared.contains(retired),
+            "shared skill still says {retired}"
+        );
     }
     for field in [
         "immutable_evidence_bundle",
@@ -99,7 +99,7 @@ fn final_reviewer_requires_the_controller_preflight_from_the_bound_bundle() {
 fn builder_uses_the_assigned_worktree_and_never_pushes_directly() {
     let builder = ROLE_SKILLS
         .iter()
-        .find_map(|(name, skill)| (*name == "builder-grok").then_some(*skill))
+        .find_map(|(name, skill)| (*name == "builder").then_some(*skill))
         .unwrap();
     assert!(builder.contains("`assigned_worktree`"));
     assert!(builder.contains("`assigned_branch`"));
@@ -117,5 +117,24 @@ fn reviewers_leave_hidden_publication_metadata_to_the_controller() {
         assert!(!skill.contains("Pip reviewer role:"));
         assert!(skill.contains("controller derives"));
         assert!(skill.contains("hidden"));
+    }
+}
+
+#[test]
+fn standing_worker_prompts_stay_focused_on_the_work() {
+    // The direct runtime inlines the shared skill, the field guide and the
+    // role skill into every prompt. Bookkeeping belongs in code, not here.
+    let guide = include_str!(
+        "../../../skills/shared/workflow-contract/references/worker-result-contracts.md"
+    );
+    for (name, skill) in &ROLE_SKILLS[1..] {
+        let standing = ROLE_SKILLS[0].1.len() + guide.len() + skill.len();
+        assert!(
+            standing < 14 * 1024,
+            "{name} standing prompt grew to {standing} bytes"
+        );
+        for retired in ["BLOCKED_UNEXPECTED_MODEL", "kanban_block", "actual_model"] {
+            assert!(!skill.contains(retired), "{name} still mentions {retired}");
+        }
     }
 }

@@ -120,7 +120,7 @@ fn bootstrap(conversations: bool) {
     assert!(root.join("profiles/planner").is_dir());
     assert!(root.join("profiles/reviewer-general").is_dir());
     assert!(root.join("profiles/final-reviewer").is_dir());
-    assert!(!root.join("profiles/builder-grok").exists());
+    assert!(!root.join("profiles/builder").exists());
     assert!(!root.join("profiles/reviewer-secperf").exists());
     let planner: serde_json::Value =
         serde_json::from_slice(&fs::read(root.join("profiles/planner/config.yaml")).unwrap())

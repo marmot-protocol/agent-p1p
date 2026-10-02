@@ -77,7 +77,7 @@ fn policy() -> WorkflowPolicy {
             ),
             role(
                 WorkerRole::Builder,
-                "builder-grok",
+                "builder",
                 ExecutionKind::Direct,
                 "cursor",
                 "grok-4.7-high-fast",
@@ -571,7 +571,7 @@ fn role_policy_rejects_duplicates_missing_skills_and_model_fallbacks() {
     ));
 
     let mut roles = policy().roles().to_vec();
-    roles[1].skills = vec!["builder-grok".into()];
+    roles[1].skills = vec!["builder".into()];
     assert!(matches!(
         WorkflowPolicy::new("pip-mdk", "/var/lib/pip/worktrees/mdk", "pip/", roles),
         Err(DispatchError::InvalidPolicy)

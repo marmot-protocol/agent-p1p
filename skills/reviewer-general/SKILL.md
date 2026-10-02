@@ -1,7 +1,7 @@
 ---
 name: reviewer-general
 description: Use for exact-head correctness review of a Pip PR.
-version: 0.10.0
+version: 0.11.0
 author: agent-p1p
 license: MIT
 metadata:
@@ -12,41 +12,37 @@ metadata:
 
 # General Reviewer
 
-## Overview
+Review the exact PR head independently, as an experienced engineer on this
+codebase would.
 
-Independently review the exact PR head with the task-bound model and reasoning effort. Reviewer IDs are stable identities, not model selectors. Copy the exact task-bound model and reviewer identity; never reinterpret a historical task using a newer policy.
+## What to look at
 
-## Review focus
+- Does the change fix the issue's root cause, as the accepted plan describes?
+- Correctness: state transitions, concurrency, error paths, edge cases.
+- Are the tests strong enough to catch a regression of this bug?
+- Maintainability: unnecessary complexity, scope creep, missing changelog.
 
-- Root cause and issue intent.
-- Implementation versus the active authorized plan.
-- Correctness, state transitions, concurrency, and error paths.
-- Edge cases and regression-test strength.
-- Maintainability, unnecessary complexity, and scope creep.
-- Changelog, binding, conformance, and version-bump hygiene.
+Read the code and run the relevant tests in your checkout. Bind what you say
+to the head you reviewed and report it as `reviewed_head_sha`.
 
-For each blocker, explain what is wrong, why it matters, likely corrective direction, and evidence required to prove resolution. Suggestions are guidance, not mandatory patches.
+## Findings
 
-## Exact-head rule
+A blocking finding is something that must change before a human should merge:
+explain the defect, why it matters, the direction of the fix, and the evidence
+that would prove it fixed. Everything else is a suggestion. Do not block on
+style or preference.
 
-Record the reviewed head SHA. Any later commit invalidates the verdict. Confirm prior findings only after reviewing their resolution on the new head, and record each decision in `finding_confirmations` with the finding ID, status, reviewed fix SHA, and evidence.
+On a re-review, check each of your earlier findings against the new head and
+record it in `finding_confirmations` as `CONFIRMED_RESOLVED` or `STILL_OPEN`.
+Do not repeat a finding that has been fixed, and do not restate a still-open
+one in new words; confirm it as `STILL_OPEN`.
 
-## Completion
+## Result
 
-Do not mutate GitHub. Copy the exact `reviewer_id` from the task into the result.
-The controller aggregates all required instances in this semantic lane and
-publishes one accepted lane contract through the role-scoped GitHub identity.
-Do not add control-language footers or publication markers to prose. The
-controller derives a hidden identity marker from the validated role. Put concise
-check summaries under `evidence.local_checks` and limitations under
-`evidence.limitations`, as arrays of strings; omit unsupported claims.
-Produce the Rust
-`reviewer-general` contract
-from `references/worker-result-contracts.md` in the loaded `workflow-contract` skill directory (not the target repository). After
-validating it, call `kanban_complete` with a concise summary and the complete
-object as `metadata`; Hermes must durably store the contract in the Kanban run
-metadata. Then return the same object as the entire final response without
-prose or a code fence. Use `APPROVE`, `REQUEST_CHANGES`, `BLOCKED`, or
-`BLOCKED_UNEXPECTED_MODEL`.
-
-Complete the Kanban review task even when the verdict is `REQUEST_CHANGES`; the Rust controller accepts the findings and schedules any remediation. Use Kanban blocked status only when the review itself cannot be performed. On the re-review round, evaluate the current head independently and explicitly confirm or retain every prior blocker.
+Return the reviewer fields from `references/worker-result-contracts.md` in the
+`workflow-contract` skill directory, with `APPROVE`, `REQUEST_CHANGES` or
+`BLOCKED`. Put check summaries in `evidence.local_checks` and limitations in
+`evidence.limitations`. Do not post to GitHub or add publication markers to
+your prose; the controller derives a hidden identity marker and publishes the
+review. Call `kanban_complete` with the result as metadata, including when you
+request changes. Use `BLOCKED` only when the review itself cannot be done.

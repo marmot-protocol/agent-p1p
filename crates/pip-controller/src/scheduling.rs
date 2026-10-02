@@ -908,7 +908,7 @@ const fn is_reviewer(role: WorkerRole) -> bool {
 const fn role_skill_name(role: WorkerRole) -> &'static str {
     match role {
         WorkerRole::Planner => "planner",
-        WorkerRole::Builder => "builder-grok",
+        WorkerRole::Builder => "builder",
         WorkerRole::ReviewerGeneral => "reviewer-general",
         WorkerRole::ReviewerSecperf => "reviewer-secperf",
         WorkerRole::FinalReviewer => "final-reviewer",

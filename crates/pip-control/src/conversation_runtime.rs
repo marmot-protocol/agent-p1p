@@ -13,16 +13,19 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const WAITING_FOR_ISSUE_CAPACITY: &str = "waiting_for_issue_capacity";
 
+/// The reply a conversation task produces. Bookkeeping the controller already
+/// knows (model, skills commit) is not required, and unknown keys are ignored.
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Answer {
+    #[serde(default = "conversation_schema")]
     schema_version: u32,
     message_key: String,
     reply: String,
     follow_up: String,
-    requested_model: String,
-    actual_model: String,
-    skills_repository_commit: String,
+}
+
+const fn conversation_schema() -> u32 {
+    1
 }
 
 pub fn reconcile_conversation_once<
@@ -563,7 +566,7 @@ fn handoff<S: IntakeSource, W: DispositionWriter>(
     Ok(if bounded { BOUNDED } else { REPLANNED })
 }
 
-fn validate_answer(value: &Value, key: &str, binding: &Value) -> Result<Answer> {
+fn validate_answer(value: &Value, key: &str, _binding: &Value) -> Result<Answer> {
     let answer: Answer = serde_json::from_value(value.clone())?;
     if answer.schema_version != 1
         || answer.message_key != key
@@ -571,15 +574,6 @@ fn validate_answer(value: &Value, key: &str, binding: &Value) -> Result<Answer> 
         || answer.reply.len() > 8_000
         || !matches!(answer.follow_up.as_str(), "NONE" | "REPLAN")
         || answer.reply.contains("<!--")
-        || answer.requested_model
-            != format!(
-                "{}/{}",
-                binding["provider"].as_str().ok_or("missing provider")?,
-                binding["model"].as_str().ok_or("missing model")?
-            )
-        || answer.actual_model != answer.requested_model
-        || Some(answer.skills_repository_commit.as_str())
-            != binding["skills_repository_commit"].as_str()
     {
         return Err("invalid conversation result".into());
     }
@@ -620,12 +614,15 @@ mod tests {
     }
 
     #[test]
-    fn answer_requires_exact_model_and_skill_binding() {
+    fn answer_needs_only_the_reply_and_ignores_bookkeeping() {
         let binding = json!({"provider":"configured-provider","model":"configured-model","skills_repository_commit":"a".repeat(40)});
-        let mut answer = json!({"schema_version":1,"message_key":"message-1","reply":"An explanation","follow_up":"NONE",
-            "requested_model":"configured-provider/configured-model","actual_model":"configured-provider/configured-model","skills_repository_commit":"a".repeat(40)});
+        let mut answer = json!({"message_key":"message-1","reply":"An explanation","follow_up":"NONE",
+            "actual_model":"whatever-the-model-says"});
         assert!(validate_answer(&answer, "message-1", &binding).is_ok());
-        answer["actual_model"] = json!("different-provider/different-model");
+        answer["message_key"] = json!("another-message");
+        assert!(validate_answer(&answer, "message-1", &binding).is_err());
+        answer["message_key"] = json!("message-1");
+        answer["follow_up"] = json!("MERGE");
         assert!(validate_answer(&answer, "message-1", &binding).is_err());
     }
 }

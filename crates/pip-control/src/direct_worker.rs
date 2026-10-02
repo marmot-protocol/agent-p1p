@@ -447,7 +447,7 @@ fn role_name(role: WorkerRole) -> &'static str {
 
 fn role_skill_name(role: WorkerRole) -> &'static str {
     match role {
-        WorkerRole::Builder => "builder-grok",
+        WorkerRole::Builder => "builder",
         WorkerRole::ReviewerSecperf => "reviewer-secperf",
         WorkerRole::Planner => "planner",
         WorkerRole::ReviewerGeneral => "reviewer-general",

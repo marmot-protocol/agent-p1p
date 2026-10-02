@@ -73,11 +73,13 @@ honest explanation rather than reporting a successful result.
 ## Result
 
 This task uses the conversation schema, not the case-worker contract. Complete
-the Hermes task with one metadata object containing exactly:
+the Hermes task with one metadata object:
 
 ```json
-{"schema_version":1,"message_key":"copy the task's message_key","reply":"A concise, human-readable Markdown response.","follow_up":"NONE","requested_model":"provider/model from task","actual_model":"provider/model actually used","skills_repository_commit":"copy the task's skills_repository_commit"}
+{"message_key":"copy the task's message_key","reply":"A concise, human-readable Markdown response.","follow_up":"NONE"}
 ```
+
+`follow_up` is `NONE` or `REPLAN`.
 
 Use at most 8,000 UTF-8 bytes for `reply`. No machine JSON, control-role footer,
 HTML comments, fake check results, or routine internal-state dump belongs in the

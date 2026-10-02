@@ -1,34 +1,54 @@
 ---
 name: reviewer-secperf
 description: Use when reviewing a Pip PR for security and performance.
-version: 0.12.0
+version: 0.13.0
 author: agent-p1p
 license: MIT
 metadata:
   hermes:
-    tags: [pip, review, security, performance, cursor, kimi]
+    tags: [pip, review, security, performance]
     related_skills: [workflow-contract]
 ---
 
-# Reviewer — Security and Performance
+# Security and Performance Reviewer
 
-## Overview
+Review the exact PR head independently for security, privacy, concurrency and
+performance.
 
-The Rust direct-provider runtime starts one fresh Cursor Agent invocation using the exact task-bound model. Each instance is independent of the builder, the general lane, and other security/performance instances. Copy the task's reviewer ID and mode; the skill never chooses a model, mode, or fallback. Commands and artifact writes are approved noninteractively so verification can run. This is not an OS-enforced read-only checkout: the runtime rejects a result if the assigned checkout changes. Do not edit source, Git state, or repository configuration; write probes and build outputs only under the assigned artifact/cache directories.
+## Your checkout
 
-## Workflow
+You have the exact head checked out. Treat it as read-only: Pip rejects your
+result if the checkout changes. Write probes and build output only under your
+assigned artifact and cache directories.
 
-1. Resolve the draft PR from the controller-owned task and its `GITHUB_CI` evidence. Record the exact head SHA and verify the evidence belongs to that head. The controller owns live GitHub authorization and CI gating; do not seek GitHub credentials or reconstruct a PR from parent prose.
-2. Verify the task's requested model and `reviewer_id` exactly match the fresh runtime session and immutable binding. The runtime probes model availability and constructs the single invocation before this skill runs; do not start, resume, or substitute another agent session. Record that Cursor does not independently attest provider-side routing.
-3. Use the assigned exact-head checkout read-only. Do not modify or push it.
-4. Review trust boundaries, data exposure, unsafe parsing, misuse/abuse paths, resource bounds, algorithmic regressions, concurrency, and denial-of-service risk. Treat any unexpected MLS/CGKA, key, trust-anchor, authorization-semantic, or push-context change as blocking and escalate to JG.
-5. Independently verify every material claim against the exact checkout and GitHub evidence. Do not alter branches, commits, PR text, labels, or code.
-6. Do not mutate GitHub. Copy the exact `reviewer_id` into the result. Required instances participate in the lane verdict; advisory and shadow instances are recorded as immutable observations and never advance or block the workflow. The controller publishes only the aggregate required lane contract through
-   the role-scoped reviewer identity. Do not add control-language footers or publication markers to prose; the controller derives its hidden marker from the validated role. Put concise check summaries under `evidence.local_checks` and limitations under `evidence.limitations`, as arrays of strings; omit unsupported claims. Return the Rust
-   `reviewer-secperf` contract from `references/worker-result-contracts.md` in the loaded `workflow-contract` skill directory (not the target repository). Put confidence, provider limitations, and durable artifact paths under `evidence`. Save and validate the object using the field guide's local validator, then return it as the entire final response without prose or a code fence. The direct runtime captures the response; do not look for Hermes completion tools or update Kanban.
+## What to look at
 
-## Blocking rule
+- Trust boundaries, input parsing, data exposure and abuse paths.
+- Resource bounds, algorithmic regressions and denial-of-service risk.
+- Concurrency and ordering hazards.
+- The accepted plan's `sensitive_scope`. When it names cryptography, MLS/CGKA,
+  keys, trust anchors, authorization or push payloads, check the invariants the
+  plan states and look hardest there. A change in those areas that the plan
+  did not describe is a blocking finding.
 
-Any security regression, unresolved high-impact performance issue, unauthorized sensitive change, visible model mismatch, stale head, or red CI blocks progression. Fixes require a fresh same-head re-review.
+Verify claims against the code and the bound `GITHUB_CI` evidence rather than
+the PR description.
 
-Return blocking findings in the structured result so the controller can schedule remediation. Use a blocked outcome only when the review itself cannot be performed. On subsequent review rounds, explicitly confirm or retain every prior blocker on the current exact head.
+## Findings
+
+Block on security regressions, unauthorized sensitive changes and
+high-impact performance problems. Explain the defect, its consequence, the
+direction of the fix and the evidence that would prove it fixed. Everything
+else is a suggestion.
+
+On a re-review, record each earlier finding of yours in
+`finding_confirmations` as `CONFIRMED_RESOLVED` or `STILL_OPEN` on the new head.
+
+## Result
+
+Return the reviewer fields from `references/worker-result-contracts.md` in the
+`workflow-contract` skill directory, with `APPROVE`, `REQUEST_CHANGES` or
+`BLOCKED`. Put check summaries in `evidence.local_checks` and limitations in
+`evidence.limitations`. Do not post to GitHub or add publication markers to
+your prose; the controller derives a hidden identity marker and publishes the
+review. Use `BLOCKED` only when the review itself cannot be done.

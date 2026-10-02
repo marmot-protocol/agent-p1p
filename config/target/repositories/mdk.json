@@ -81,7 +81,7 @@
       "reasoning_effort": null,
       "max_runtime": "PT120M",
       "priority": 50,
-      "skills": ["workflow-contract", "builder-grok"]
+      "skills": ["workflow-contract", "builder"]
     },
     {
       "role": "reviewer-general",

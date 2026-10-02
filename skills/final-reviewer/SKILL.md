@@ -1,45 +1,47 @@
 ---
 name: final-reviewer
 description: Use for holistic final adjudication of a Pip case.
-version: 0.8.0
+version: 0.9.0
 author: agent-p1p
 license: MIT
 metadata:
   hermes:
-    tags: [pip, final-review, merge]
+    tags: [pip, final-review]
     related_skills: [workflow-contract]
 ---
 
 # Final Reviewer
 
-## Overview
+Decide whether this PR solves the right problem well enough to hand to a
+human for merge. Look at the whole case, not just the latest diff.
 
-Holistically adjudicate the complete case using the exact task-bound model and reasoning effort. Never reinterpret a historical task's model binding using a newer policy. Do not merely repeat the general code review.
+## What to read
 
-## Workflow
+The `immutable_evidence_bundle` holds the full case: the issue and human
+discussion, every plan version, every build round, both review histories with
+findings and confirmations, and the controller's `GITHUB_FINAL_PREFLIGHT`
+observation of the PR, its CI and its review threads on the current head.
 
-1. Verify the task's evidence bundle (inline `immutable_evidence_bundle` or via `immutable_evidence_ref`, as specified by the shared contract), including its case/revision binding and root digest. It is the authoritative closed-world history for this adjudication; do not substitute parent summaries or session memory.
-2. Re-read the original issue and authoritative clarifications recorded in the bundle. Check the controller's fresh issue authorization in `GITHUB_FINAL_PREFLIGHT`; do not seek credentials or independently administer the authorization gate.
-3. Inspect every bundled plan version and identify the active authorized plan and its controller publication evidence.
-4. Inspect the final diff and every bundled build/remediation round.
-5. Inspect both complete bundled review histories, findings, confirmations, controller-published review evidence, and CodeRabbit findings when present.
-   Assess nonblocking suggestions too. Check the builder's `evidence.suggestion_dispositions` when available; if reviews approved on the first round, the builder has not yet had an opportunity to respond. Decide explicitly which suggestions merit a small, in-scope follow-up and which should be deferred with a reason. Use the existing `RETURN_TO_BUILD` outcome when a worthwhile concrete change remains, explaining it in `decision_rationale`; do not create a new loop solely because suggestions exist. Document decisions under `evidence.suggestion_dispositions` (reviewer identity, suggestion, addressed/deferred disposition and explanatory summary). A justified deferral does not block readiness. Do not wait for late advisory reviewers or broaden the plan without human authorization. Any actual new commit still requires fresh exact-head CI and required reviews.
-6. Verify the bundled `GITHUB_FINAL_PREFLIGHT` observation binds ownership, mandatory approvals, assessed review feedback, clean mergeability, and green required CI to the task's current exact head. An open bot-only thread is not itself a defect: assess the published builder's per-comment dispositions and verification against the unchanged supplied feedback. Accept justified `deferred` or `not_applicable` decisions; return concrete remaining defects to the builder. Do not require a GitHub checkbox to be resolved before final review; the controller publishes accepted dispositions and resolves eligible bot threads after final acceptance. Human or unknown authors and new or edited comments remain blocking. Assess the complete check evidence supplied by the controller, including failures and limitations. Do not invent repository-specific skipped-check exemptions. Missing or contradictory evidence is blocking; the controller independently revalidates live GitHub state before publishing readiness.
-7. Decide whether the work solves the right root problem with sufficient evidence.
-8. Return `READY`, `RETURN_TO_BUILD`, `RETURN_TO_REVIEW`, `RETURN_TO_PLANNING`, `WAIT_FOR_ISSUE_CREATOR`, `BLOCKED`, `ABANDON`, or `BLOCKED_UNEXPECTED_MODEL`.
+## What to decide
 
-## Merge separation
+1. Does the change fix the issue's root cause under the active plan?
+2. Are the tests and verification evidence sufficient for the risk, especially
+   for anything listed in the plan's `sensitive_scope`?
+3. Were blocking findings genuinely resolved, as their reviewers confirmed?
+4. Suggestions and bot review threads: check the builder's
+   `evidence.suggestion_dispositions`. Accept justified deferrals. If one small,
+   worthwhile in-scope change remains, return `RETURN_TO_BUILD` and say exactly
+   what. Do not loop on suggestions alone.
+5. Human or unknown-author threads, and new or edited comments, still need the
+   builder's attention.
 
-Do not invoke merge, notify a human, or claim merge or notification authority. MDK is human-merge-only. A clean result means only that the deterministic post-validation consumer may later send JG the PR link, exact head, CI/review evidence, and a recommendation. Any unresolved blocker, reviewer mismatch, later commit, red CI, sensitive-scope change, or missing human review remains held.
+Outcomes: `READY`, `RETURN_TO_BUILD`, `RETURN_TO_REVIEW`, `RETURN_TO_PLANNING`,
+`WAIT_FOR_ISSUE_CREATOR`, `BLOCKED` or `ABANDON`. `READY` is a recommendation
+to a human, never merge authority.
 
-## Completion
+## Result
 
-Post a final role-stamped rationale inside the Rust `final-reviewer` contract
-from `references/worker-result-contracts.md` in the loaded `workflow-contract` skill directory (not the target repository), tied to the exact reviewed head. After
-validating it, call `kanban_complete` with a
-concise summary and the complete object as `metadata`; Hermes must durably
-store the contract in the Kanban run metadata. Then return the same JSON object
-as the entire final response without prose or a code fence. Use `READY` when
-every gate passes; deterministic shadow policy maps it to a human-held
-`SHADOW_READY` disposition. Do not send, subscribe, stage,
-or otherwise trigger a human notification. Never merge.
+Return the final-reviewer fields from `references/worker-result-contracts.md`
+in the `workflow-contract` skill directory, with a clear `decision_rationale`
+and the exact `reviewed_head_sha`. Call `kanban_complete` with the result as
+metadata. Do not merge or notify anyone; the controller does that.
