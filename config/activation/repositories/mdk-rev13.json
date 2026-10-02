@@ -1,4 +1,5 @@
 {
+  "conversations_enabled": true,
   "policy_format": 2,
   "revision": 13,
   "conversation_model": {
@@ -29,8 +30,8 @@
     "reviewer_secperf_actor_id": 323998100
   },
   "intake": {
-    "enabled": false,
-    "paused": true,
+    "enabled": true,
+    "paused": false,
     "label": "pip-ok",
     "trusted_actor_ids": [202880, 258432291, 292420120],
     "excluded_issue_numbers": [1366, 1384],
@@ -38,7 +39,7 @@
     "repository_active_limit": 2,
     "global_active_limit": 2
   },
-  "dispatch_enabled": false,
+  "dispatch_enabled": true,
   "merge": {
     "mode": "shadow",
     "autonomous": false,

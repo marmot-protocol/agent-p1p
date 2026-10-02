@@ -123,7 +123,7 @@ fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
     let bytes = include_bytes!("../../../config/target/repositories/mdk.json");
     let policy = load_repository_policy(bytes).unwrap();
     assert_eq!(policy.policy_format, 2);
-    assert_eq!(policy.revision, 12);
+    assert_eq!(policy.revision, 13);
     assert_eq!(policy.workflow_version, 3);
     assert_eq!(policy.repository.id, 1_055_628_515);
     assert_eq!(policy.repository.full_name(), "marmot-protocol/mdk");
@@ -149,7 +149,7 @@ fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
     assert!(policy.merge.is_shadow());
     assert!(!policy.merge.autonomous);
     assert_eq!(policy.merge.method, "squash");
-    assert_eq!(policy.max_case_elapsed_seconds, 86_400);
+    assert_eq!(policy.max_case_elapsed_seconds, 604_800);
     assert_eq!(policy.max_remediation_rounds, 10);
     assert_eq!(policy.max_provider_failures, 3);
     assert_eq!(policy.max_hermes_attempts, Some(1));
@@ -157,7 +157,8 @@ fn target_mdk_policy_is_generic_paused_numeric_and_shadow_only() {
         policy.hermes_scratch_root.as_deref(),
         Some("/var/lib/pip/worktrees/hermes-scratch")
     );
-    assert_eq!(policy.max_repeated_finding_fingerprint, 2);
+    assert_eq!(policy.max_repeated_finding_fingerprint, 3);
+    assert_eq!(policy.max_outage_seconds, Some(21_600));
     assert_eq!(policy.required_ci_contexts, ["Required CI"]);
     assert_eq!(policy.sensitive_scope_categories.len(), 7);
     assert!(policy.intake.held_issue_numbers.is_empty());
@@ -233,9 +234,14 @@ fn current_mdk_activation_changes_only_live_switches_from_target() {
         "../../../config/target/repositories/mdk.json"
     ))
     .unwrap();
-    let active_bytes = include_bytes!("../../../config/activation/repositories/mdk-rev12.json");
+    let active_bytes = include_bytes!("../../../config/activation/repositories/mdk-rev13.json");
     let active = load_repository_policy(active_bytes).unwrap();
-    assert_eq!(active.revision, 12);
+    assert_eq!(active.revision, 13);
+    // Transient trouble retries and parks for a human; it never burns a case.
+    assert_eq!(active.max_case_elapsed_seconds, 7 * 86_400);
+    assert_eq!(active.outage_limit_seconds(), 6 * 3_600);
+    assert_eq!(active.stall_limit_seconds(), 4 * 3_600);
+    assert_eq!(active.max_repeated_finding_fingerprint, 3);
     assert!(active.intake.enabled);
     assert!(!active.intake.paused);
     assert!(active.dispatch_enabled);
