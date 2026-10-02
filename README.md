@@ -7,43 +7,42 @@ Hermes Kanban boards.
 
 ## Status
 
-Pip is undergoing a lean Rust refactor before completing its first live
-end-to-end shadow issue. Planning has run, but a complete builder/reviewer/final
-review pipeline and human-ready PR are not yet proven.
+Pip has taken one MDK issue to a human-held, ready-for-review PR. The October
+2026 reliability pass changed how it handles failure: transient problems back
+off, work failures retry per stage, and anything else pauses the case with an
+explanation that a maintainer resolves from GitHub. See [status](docs/status.md)
+for what is deployed and what still needs live proof.
 
-The target keeps signed webhooks, an authoritative Rust workflow ledger,
-unmodified Hermes and a narrow Cursor adapter. Operational failures must be
-isolated from issue-work failures, and saved jobs must survive upgrades.
-Automatic merge is deferred; the MDK pilot remains human-merge-only.
+## When Pip pauses
 
-See [implementation status](docs/implementation-status.md) for the current
-refactor inventory and dated host evidence. Python is a frozen migration
-reference, not an installable runtime; it will be removed after cutover proof.
+Pip posts a comment on the issue explaining what stopped. A trusted maintainer
+replies with one of:
 
+```text
+@agent-p1p resume      continue where it stopped (guidance on following lines)
+@agent-p1p replan      start again from planning
+@agent-p1p abandon     stop; re-adding the label restarts it
+```
+
+See [parked cases](docs/runbooks/parked-cases.md).
 
 ## Documentation
 
-- [`docs/pip-architecture-plan.md`](docs/pip-architecture-plan.md) —
-  canonical target architecture and invariants.
-- [`docs/current-python-canary.md`](docs/current-python-canary.md) — accurate
-  inventory of the legacy Python prototype and its gaps.
-- [`docs/control-flow.md`](docs/control-flow.md) — workflow and source map,
-  review-loop, and recovery flow.
-- [`docs/adr/0001-rust-control-plane.md`](docs/adr/0001-rust-control-plane.md) —
-  decision to implement the target runtime in Rust.
-- [`docs/adr/0002-authoritative-ledger.md`](docs/adr/0002-authoritative-ledger.md) —
-  decision that the control-plane ledger is authoritative and executor queues
-  are projections of committed intent.
-- [`docs/runbooks/deployment.md`](docs/runbooks/deployment.md) — target build,
-  provenance, install, rollback, and canary-activation contract.
-- [`docs/migration-roadmap.md`](docs/migration-roadmap.md) — remaining cutover,
-  simplification and Python-retirement gates.
-- [`docs/implementation-status.md`](docs/implementation-status.md) — current
-  executable inventory, inert boundaries, and remaining cutover work.
-- [`docs/completion-audit.md`](docs/completion-audit.md) — current live-workflow
-  and lean-architecture completion gates, with explicit remaining gaps.
-- [`docs/worker-result-contracts.md`](docs/worker-result-contracts.md) — exact
-  versioned JSON returned by each worker role.
+- [`docs/pip-architecture-plan.md`](docs/pip-architecture-plan.md): canonical
+  architecture and invariants.
+- [`docs/status.md`](docs/status.md): what is deployed, what still needs live
+  proof, remaining work.
+- [`docs/control-flow.md`](docs/control-flow.md): workflow and source map.
+- [`docs/runbooks/parked-cases.md`](docs/runbooks/parked-cases.md): why cases
+  pause, budgets, and the resume commands.
+- [`docs/runbooks/deployment.md`](docs/runbooks/deployment.md): build,
+  provenance, install, rollback and rollout.
+- [`docs/github-conversations.md`](docs/github-conversations.md): mentions and
+  human feedback.
+- [`docs/adr/`](docs/adr/): the Rust control plane and authoritative ledger
+  decisions.
+- [`docs/worker-result-contracts.md`](docs/worker-result-contracts.md): what
+  each worker role returns.
 
 ## Target roles
 
@@ -129,38 +128,23 @@ The MDK canary is constrained by policy instead:
 Removing authorization, taking over the PR, pausing the repository, or changing
 the exact reviewed head fails closed.
 
-## Repository layout during migration
+## Repository layout
 
 ```text
-docs/                   Canonical architecture, ADRs, migration, and runbooks
-skills/                 Canonical shared and role-specific skills
-schemas/                Legacy JSON contracts retained as migration inputs
-manifests/              Legacy role manifests retained as migration inputs
-src/pip_agent/          Legacy Python reference implementation
-tests/                  Legacy behavioral and safety tests
-scripts/                Rust release/lifecycle tools plus retained legacy installer
-migration/               Language-neutral Python-to-Rust compatibility fixtures
-crates/                  Rust core, contracts, store, adapters, controller, and CLI
+crates/      Rust core, contracts, store, adapters, controller and CLI
+skills/      Canonical shared and role-specific worker skills
+docs/        Architecture, status, ADRs, runbooks and historical evidence
+config/      Repository policy (target and activation revisions)
+packaging/   systemd units
+scripts/     Release, install and lifecycle tooling
+tests/       Shell checks, lifecycle harness and probe fixtures
+migration/   Frozen parity fixtures used by Rust tests
 ```
 
 Canonical skills remain under `skills/`; runtime profile directories must
 symlink to their installed, content-addressed copies.
 
-## Legacy prototype diagnostics
-
-These commands inspect the Python reference implementation. They are not a
-production deployment procedure.
-
-```bash
-uv run --locked pip-bootstrap --repo-root "$PWD"
-uv run --locked pip-fixture
-uv run --locked --dev pytest -q
-uv build --wheel
-```
-
-Do not run `scripts/install-control-plane.sh` from the current migration branch.
-The legacy installer and runtime remain issue-specific and do not have
-cryptographically bound source provenance.
+## Checks
 
 The Rust workspace and disposable systemd lifecycle are checked with:
 

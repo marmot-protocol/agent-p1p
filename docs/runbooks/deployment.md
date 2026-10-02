@@ -1,7 +1,7 @@
 # Deployment and recovery
 
 This runbook describes the Rust installation boundary, not permission to act on
-a host. Check [implementation status](../implementation-status.md) and live
+a host. Check [status](../status.md) and live
 state before changes. Historical evidence is under ../evidence/; old numbered
 activation scripts are not the normal deployment interface.
 
@@ -125,35 +125,32 @@ and exact-result replay does not insert another observation. A saved review
 blocked by the former case-global key can be accepted by normal reconciliation
 after upgrade; no result edit, attempt reset or new model call is needed.
 
-## Revision-12 model and inbox rollout
+## Revision-13 rollout on a fresh ledger
+
+Revision 13 changes failure handling throughout (see
+[parked cases](parked-cases.md)) and adds ledger schema 14. Existing cases are
+abandoned rather than migrated:
+
+1. Pause intake and dispatch, stop the Pip execution timers and services and
+   the Pip Hermes gateway, and confirm no provider process remains.
+2. Back up `/var/lib/pip/ledger.db` and move it aside. The new release creates
+   a fresh ledger on first start.
+3. Archive the old tasks on the repository's Hermes board.
+4. Install the signed release as described above with
+   `config/activation/repositories/mdk-rev13.json` as the active policy. Merge
+   mode stays shadow.
+5. Start the services. Check one controller cycle report: every case section
+   should report `ok`, and `rate_limited_until` should be absent.
+6. Re-label the issues to work on. Watch the first park comment and try
+   `@<pip-login> resume` from GitHub before relying on it.
 
 For a maintenance drain, `controller-cycle --admit-new-cases false` suppresses
-only new issue admission while collecting and reconciling existing authorized
-work. It does not change policy or pause existing dispatch. Stop execution
-timers and prove workers quiescent first; keep the gateway stopped if the drain
-must not start newly queued native jobs. Omission preserves normal admission.
-
-The active template `config/activation/repositories/mdk-rev12.json` keeps Astra
-for planning and final review, uses Cursor Opus 5.5 for builders, Sol 6.1 for
-general reviews and GitHub replies, and retains the Kimi required / Opus shadow
-security-performance reviewers. The builder skill's legacy directory name is
-not a model binding: the frozen policy/task supplies the exact Cursor model.
+only new issue admission while collecting and reconciling existing work.
 
 `conversation_model` is an optional operational binding; older policies fall
-back to the planner. It is excluded from accepted case snapshots, just like the
-inbox enable switch. New messages use the current reply binding; existing jobs
-retain their saved model. Updating worker models still requires quiescence and
-an explicit disposition for incompatible old-policy cases, never rewriting jobs.
-
-The conversation collector recognizes Hermes's current terminal crash breaker
-and retains an exhausted reply as FAILED rather than waiting forever. Cancelled
-or archived unanswered tasks likewise become FAILED. Incomplete running tasks
-remain waiting; no successful reply or new retry budget is fabricated.
-
-Pre-PR RETURN_TO_PLANNING may retain descendant builder commits and unfinished
-edits. It must still have the exact case-owned branch and planned-base ancestry.
-Initial planning and published-head/review checks remain strict. Do not reset
-the worktree to make replanning proceed.
+back to the planner. Operational settings such as capacity, retry and time
+limits apply to existing cases immediately; model, reviewer, actor, path and
+merge changes park existing cases with `POLICY_CHANGED` until resumed.
 
 ## First-install prerequisites
 

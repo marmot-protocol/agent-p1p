@@ -1,8 +1,8 @@
 # Control flow and source map
 
-[Pip architecture](pip-architecture-plan.md) defines the target.
-[Implementation status](implementation-status.md) distinguishes implemented
-behavior from remaining work. This file maps that design onto the code.
+[Pip architecture](pip-architecture-plan.md) defines the target and
+[status](status.md) records what is deployed. This file maps the design onto
+the code.
 
 ## One authority
 
@@ -57,15 +57,18 @@ use process/service evidence before concluding a worker is still executing.
 | Workspace allocation, publication and retention | crates/pip-executor/ and crates/pip-control/src/workspace_lifecycle.rs |
 | Release verification and installation | crates/pip-control/src/release.rs, install.rs and scripts/install-rust-control-plane.sh |
 
-## Recovery
+## Failure, parking and resume
 
-Recover from saved ledger definitions, never task titles or model memory.
-Keep completed results and uncertain external effects for reconciliation.
-Do not reset a case, remove an authorization label or delete attempts merely
-to bypass a failed infrastructure boundary.
+| Responsibility | Source |
+|---|---|
+| Cursor failure classification (outage vs work failure) | crates/pip-executor/src/cursor.rs and crates/pip-control/src/direct_worker.rs |
+| Per-stage budgets, outage and stall detection, policy fence | crates/pip-control/src/bounds.rs |
+| Hermes per-task retry | crates/pip-control/src/results.rs and crates/pip-store/src/projection_retry.rs |
+| Result bookkeeping filled by the controller | crates/pip-contracts/src/lib.rs (`fill_binding`) |
+| Park explanations and resume targets | crates/pip-control/src/park.rs and disposition.rs |
+| `@<pip-login>` commands | crates/pip-control/src/conversations.rs (intake), resume.rs (apply), crates/pip-store/src/control.rs |
 
-Pause must eventually separate new work from safe completion collection; that
-is a target requirement, not a claim that every current path supports it.
-The status document records this and the remaining policy-upgrade and
-failure-isolation gaps. For current deployment ordering and privileges, use
-the [deployment runbook](runbooks/deployment.md).
+Recover from saved ledger definitions, never task titles or model memory. A
+paused case is resumed by a trusted human's comment; see
+[parked cases](runbooks/parked-cases.md). Do not reset a case, remove an
+authorization label or delete attempts to bypass a failure.

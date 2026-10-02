@@ -1,450 +1,196 @@
 # Pip architecture
 
-Status: approved lean target, 2026-09-06; implementation and live proof in progress.
-This is the canonical architecture required by `AGENTS.md`. It describes the
-target, not a claim that the live pipeline is complete.
+This is the canonical architecture referenced by `AGENTS.md`. It describes how
+Pip is meant to work; [status](status.md) says what is deployed and proven.
 
 ## Purpose
 
-Turn an explicitly authorized repository issue into a draft PR with a validated
-plan, implementation, independent reviews, and a final merge-readiness decision.
-Pip is a small Rust workflow coordinator around unmodified Hermes and Cursor,
-not another general-purpose agent platform.
+Turn an explicitly authorized GitHub issue into a draft PR with a validated
+plan, an implementation, independent reviews and a final readiness
+recommendation, which a human then reviews and merges. Pip is a small Rust
+workflow coordinator around unmodified Hermes and a narrow Cursor adapter.
 
-The MDK pilot remains shadow/human-merge-only. No model or worker may merge.
-Repository and issue identities, models, actors, limits, and branches come from
-validated policy and live evidence, never constants in the generic engine.
+Pip's job is to keep making progress safely and to tell a human clearly when it
+cannot. No model, worker or configuration merges; the MDK pilot stays in shadow
+merge mode until JG changes it.
 
 ## Ownership
 
 | Component | Authority |
 |---|---|
-| GitHub | Issues, labels and their actors, branches, PR heads, reviews, CI and merge status |
-| Rust ledger | Accepted workflow decisions, job definitions/results, findings and intended GitHub effects |
-| Hermes | Native task dispatch, claims, run lifecycle and operator-facing repository boards |
-| Cursor adapter | Execute one assigned job and return its result; no independent workflow decisions |
-| Human | Scope decisions, takeover, exceptional recovery and merge |
+| GitHub | Issues, labels and actors, branches, PR heads, reviews, CI, merge status |
+| Rust ledger | Accepted decisions, job definitions and results, findings, intended GitHub effects |
+| Hermes | Native task execution and the operator-facing board |
+| Cursor adapter | Executing one direct job and returning its result |
+| Human | Authorization, scope decisions, resuming paused cases, takeover, merge |
 
-One SQLite database remains authoritative for Pip. Hermes task completion is an
-execution observation, not approval to advance the workflow. Queue transport
-files are messages, not a second workflow database.
-
-There is one logical job contract with two narrow execution adapters. Do not
-force Cursor into an unsupported Hermes provider or maintain a Hermes fork.
-Native external-CLI lanes are not assumed to be a supported integration merely
-because Hermes has an internal spawn callback. Any adapter must prove its real
-lifecycle boundary before use.
+One SQLite ledger is authoritative. Hermes completion and Cursor output are
+observations that the controller validates before anything advances.
 
 ## Workflow
 
-1. Re-read an open, authorized issue and its trusted label event.
-2. Create a stable case and ask the planner to validate the issue, root cause,
-   scope, dependencies and test plan against current source.
-3. Accept a versioned plan or record an explicit human/terminal disposition.
-4. Ask the builder to implement that plan, test it and produce a local commit.
-5. The controller signs the accepted build tree, retains its source commit and
-   records the source-to-published commit binding, then publishes the signed
-   commit to the assigned branch and creates/updates one draft PR.
-6. Observe required CI for that exact head.
-   Also wait for every observed check run (from any app) to finish before releasing reviewers;
-   a fast aggregate check cannot stand in for still-running native jobs. Waiting
-   leaves case history and remediation counters unchanged. Actual failures enter
-   remediation with bounded, exact-head Actions log excerpts when available.
-   The same CI evaluator protects final-review preflight and marking a PR ready.
-   Checks not yet created cannot be observed; named required contexts still
-   protect against missing required CI. Inaccessible logs do not waive failures.
-   Confirmed GitHub merge conflicts (`mergeable=false`, state `dirty`) enter the
-   existing bounded builder-remediation path even when CI has not started.
-   Retain the observed head/base and conflict evidence; unknown mergeability or
-   merely being behind the base is not a conflict. Repaired heads require fresh
-   CI and reviews, and exhausted remediation limits still escalate.
-7. Run every configured required reviewer independently on the same head.
-8. If changes are needed, combine blocking findings, remediate, and repeat CI
-   and the required review set on the new head.
-   Builders also assess nonblocking suggestions and record addressed/deferred
-   decisions with reasons. The final reviewer assesses suggestions when no
-   remediation occurred, returning worthwhile in-scope changes to the existing
-   build loop. Suggestions alone do not force a new round or expand authority.
-9. Run a fresh final review of the issue, plan, implementation and review history.
-   Missing builder finding-resolution records are actionable feedback, not a
-   passive wait: route one bounded builder pass with the missing IDs and any
-   unresolved threads. Ownership, exact-head CI, ledger approvals and origin
-   confirmations still gate that route. An unchanged bot comment with an
-   explicit builder disposition, bound to the supplied comment snapshot and
-   current published build, is not blocked merely by its unresolved checkbox.
-   Human or unknown authors, new/edited comments and missing dispositions remain
-   blocking. Unhandled feedback uses the normal remediation budget, not a
-   separate one-pass escalation rule.
-10. Revalidate authorization, exact-head CI/reviews and final acceptance; mark the
-    draft PR ready for review and publish a human-held readiness recommendation.
-    Before promotion, publish human-readable dispositions and resolve only the
-    unchanged bot-only threads accepted by the bound build and final gates.
-    Recheck thread content, authors and owned PR/head at the write boundary;
-    partial publication retries through the existing durable readiness intent.
-    A person reviews and merges. Promotion and notification retry idempotently;
-    leaving draft after accepted final review is not itself a human takeover.
-    If authorized human feedback requests another pass, first return Pip's
-    exact owned PR to draft, then record feedback and dispatch planning. An
-    uncertain draft mutation is retried before advancing the ledger. Subsequent
-    readiness still requires fresh exact-head CI, reviews and final acceptance.
-    Once capacity is reacquired and the handoff is recorded, an explicitly marked
-    ready-to-planning follow-up starts a fresh policy-bounded elapsed-time window.
-    Human-review and capacity-wait time cannot consume this new window. Replays,
-    answers without follow-up and feedback on already-active work do not renew it.
-    Authorization time, provider failures and spent remediation rounds remain;
-    historical unmarked feedback does not retroactively receive a new deadline.
-11. Observe the human merge of the same accepted PR head and record `COMPLETED`,
-    retaining GitHub's merge commit SHA separately from the reviewed head. This
-    is read-only observation, not merge authority, and works after issue closure.
+1. A trusted actor applies the authorization label. Signed webhooks (with
+   bounded polling for missed events) revalidate the issue, label actor,
+   assignees, exclusions and capacity, then create a case and a planning job.
+2. The planner validates the issue against current source, finds the root
+   cause and returns a plan. Sensitive areas (cryptography, MLS, keys, trust
+   anchors, authorization, push payloads) are listed in the plan and focus the
+   security review; only an open product decision holds for a human.
+3. The builder implements the plan in its assigned worktree, tests it and
+   commits locally. The controller signs the accepted tree, publishes the
+   branch and creates or updates one draft PR.
+4. CI is observed for the exact PR head. Every observed check must finish;
+   the latest attempt of each check decides, and required contexts must be
+   green. Failures go back to the builder with log excerpts; a real merge
+   conflict does too.
+5. Every required reviewer instance reviews the same head independently.
+   Advisory and shadow reviewers are observations only.
+6. Blocking findings return to the builder. A new head needs fresh CI and
+   reviews; approvals never carry over to a different commit.
+7. A fresh final review looks at the whole case. After a live preflight of
+   authorization, exact-head CI and approvals, and mergeability, the PR is
+   marked ready and Pip posts a human-held readiness recommendation.
+8. A human reviews and merges. Pip records the merge.
 
-If a person marks an owned, open PR ready before Pip finishes, Pip records human
-takeover and posts one concise handoff comment on that PR. The comment explains
-why automation stopped and that remaining checks/reviews belong to the human;
-it is not a claim that the PR passed Pip's gates. It uses the existing durable,
-idempotent publication path and still requires publication authorization. Other
-takeover causes (such as a closed/merged or foreign PR) must not receive this
-early-ready explanation. Already-recorded terminal history is not replayed just
-to backfill a notice.
+A person who marks Pip's PR ready early or pushes their own commit takes the
+case over; Pip explains that and stops.
 
-A narrowly proven historical ready-to-takeover misclassification may append
-`HUMAN_MERGED` and move to `COMPLETED`: the immediately preceding state must be
-`SHADOW_READY`, the original takeover must record only the PR disposition change,
-and original plus fresh GitHub evidence must confirm the same owned, merged PR
-and head. Original events remain intact. An offline operator may also correct
-the proven `SHADOW_READY` → feedback → non-draft-only false takeover using
-`FOLLOW_UP_RECOVERY_AUTHORIZED`, after verifying ownership and returning the PR
-to draft. This preserves the already spent loop budget, original deadline and
-all history, and redispatches the interrupted planning pass once. Genuine human
-takeovers and other terminal cases cannot reopen work.
+## Jobs and results
 
-This is a dynamic bounded loop, not a pre-created multi-round DAG. Rust creates
-only currently authorized work; no synthetic activation-gate cards. Hermes
-dependencies may organize execution, but never bypass result acceptance.
+Every job freezes its role, reviewer identity, exact provider and model,
+skills version, inputs and runtime limit before dispatch. Recovery reuses the
+saved definition. Restrictive controls (pause, revocation, takeover) apply to
+old and new work alike.
 
-Planner outcomes distinguish proceed, already fixed, duplicate, not reproducible,
-different scope, external dependency, human clarification, blocked and abandoned.
-Final review can recommend ready, more implementation/review/planning, human
-input, blocked or abandoned. Neither role guesses missing product intent.
+Workers return only their judgement and work. The controller fills in the
+bookkeeping it already knows (case, task, model, plan, round, timing) before
+validating a result, and ignores unknown fields. Each result is bound to its
+job and accepted at most once; late results cannot advance a superseded stage.
 
-## Jobs and evidence
+Model substitution is prevented where it can be observed: the pinned provider
+flag, the provider's model probe and the Hermes profile binding. A model's
+description of itself is not evidence.
 
-### Stage capacity
+The ledger records a decision and its intended effects in one transaction.
+External effects reconcile through stable ownership markers and exact heads.
 
-Issue admission and running-worker capacity are separate limits. An issue waiting
-for CI or review does not reserve a builder. Optional policy `execution_capacity`
-enables bounded stage slots; its absence retains the serial execution default:
+## Capacity
 
-```json
-{"native_sessions":2,"builders":2,"direct_reviewers":1,"ready_plans":2,"cargo_jobs":2}
-```
+Issue admission and worker capacity are separate limits. Optional policy
+`execution_capacity` bounds native sessions, builders, direct reviewers, plan
+lookahead and per-task Cargo jobs. Cases that are ready for human review or
+paused waiting for a human do not hold an issue slot.
 
-`native_sessions` caps active Kanban tasks in the dedicated Hermes runtime, while Hermes's existing
-one-task-per-profile limit keeps planning, general review and final review from
-duplicating their own lane. `builders` and `direct_reviewers` are independent
-limits in the existing Cursor queue adapter. Required work has priority over
-comparison reviews; remediation has priority over new builds. These are not
-additional workflow databases or agent orchestrators. Limits are integers 1–8.
+## Failure handling
 
-Managed profiles allow two CLI session leases so a newly claimed task can start
-while its predecessor finishes after `kanban_complete`. This is one bounded
-handoff overlap, not a second Kanban slot in that profile; host resource limits
-still apply to both processes. It avoids treating ordinary completion cleanup
-as a model/provider failure without patching Hermes or disabling its session cap.
+Every failure is classified before Pip decides what to do:
 
-`ready_plans` bounds planning lookahead: at most that many waiting plans plus one
-planning case can be admitted in `PLANNING`/`READY_TO_BUILD`. Total repository and
-global active-issue limits still bound work in progress, including CI waits.
-`SHADOW_READY` (Pip finished, waiting for human review/merge) releases issue
-admission capacity without becoming terminal or discarding evidence. Other
-nonterminal states, including human-input holds and escalations, still count.
-An authorized follow-up on a ready PR reacquires capacity under the same
-cross-process lock as intake before withdrawing readiness and replanning. When
-full, its validated conversation answer remains queued durably; retrying does
-not rerun the model or bypass the two-issue policy limit.
-`cargo_jobs` is the per-task Cargo budget; host CPU/memory limits are a separate
-operational safeguard and must be measured under real workloads.
-The MDK builder has a 120-minute hard ceiling so an unresponsive provider cannot
-hold a slot indefinitely. That duration is not a CI acceptance shortcut: broader
-checks still run before publication and on the exact PR head. Two concurrent
-builders require the matching Pirate worker service resource drop-in under
-`config/target/systemd/`; a slot-count change alone is unsafe under the former
-28G shared memory cap. Existing accepted jobs retain their frozen runtime.
+| Kind | Examples | What happens |
+|---|---|---|
+| Transient | Provider throttling, quota or outage, expired login, network, lease expiry, executor crash | Retry with exponential backoff. Never spends a work budget. If one stage cannot run for `max_outage_seconds` (6h), park. |
+| Work failure | Invalid or unusable result, failing build, crashed Hermes task | Retry the same job after a short cooldown, with the previous error passed to the worker. Each stage has its own budget (`max_provider_failures`); a new stage, round or head starts fresh. When spent, park. |
+| Substantive | CI failures, blocking review findings | Remediation rounds (`max_remediation_rounds`). When spent, park. |
+| Needs a human | Planner's open decision, worker reports it is blocked, model unavailable, policy changed, the same finding on three heads | Park immediately with the reason. |
+| Stuck | No events, attempts, tasks or evidence for the stall window (longest role runtime plus two hours, at least four hours) | Park with what it was waiting on. |
 
-Each newly dispatched review/final review under this policy gets an independent
-detached exact-head Git copy, keyed by its immutable projection. Builders keep
-their own case checkouts. Review sources are read-only to the direct worker and
-read-only-mounted in Hermes; build output stays on workspace storage. A late
-comparison therefore cannot observe a builder changing the next revision.
-Copies retire with the original terminal-case storage lifecycle, after native
-and direct work is quiescent; accepted results remain in the ledger/artifacts.
-Frozen legacy jobs keep their old paths: drain those jobs before first activation.
+A case is also bounded by an overall age (`max_case_elapsed_seconds`, 7 days).
 
-A capacity-only rollout can run existing cases under their original accepted
-policy revision while using the new slot/admission counts. Compatibility is an
-exact comparison of every other policy field (apart from the existing conversation
-switch). Models, actors, labels, exclusions, retry budgets, paths and merge policy
-must match. Any other change retains the revision-mismatch fence. This does not
-rewrite accepted policy rows, case history or frozen jobs.
+Retrying a single Hermes job projects a fresh task for the same frozen job;
+it adds no workflow transition, so peer jobs (such as the other reviewer) are
+unaffected.
 
-The first live trial should admit two issues with the limits above, retaining
-the current model assignments and human-only merge policy. Raising limits is an
-explicit policy/deployment change, not an automatic response to a backlog. Verify
-actual overlapping execution, exact-head reviews, resource use, restart behavior
-and cleanup before raising them further. Local tests are not live trial proof.
+### Parking and resuming
 
-### GitHub conversation lane
+Parked states are `ESCALATED`, `BLOCKED` and `WAITING_HUMAN`. Parking posts a
+specific comment on the issue: what stopped, where, the last error, and how to
+continue. A parked case frees its issue slot.
 
-Opt-in mentions and human feedback use the existing webhook/queue/publication
-boundaries, with a separate durable inbox in the same Rust ledger. They are not
-new issue authorization. A native conversation task answers a question or
-recommends a bounded planning follow-up; only the controller may hand feedback to
-an existing, freshly authorized case at a safe worker boundary. This lane never
-approves CI, review heads, sensitive scope or merges. See
-[GitHub conversations](github-conversations.md) for behavior and rollout gates.
-Conversation jobs receive bounded, timestamped case-status evidence from the
-ledger so they can explain progress and blockers without direct database access
-or retry authority. Historical decisions are not live CI or runner-health checks.
+A trusted actor replies on the issue or PR:
 
-### Case jobs
+- `@<pip-login> resume`: continue where it stopped. If the remediation rounds
+  were used up, three more are granted.
+- `@<pip-login> replan`: start again from planning.
+- `@<pip-login> abandon`: stop. Re-adding the authorization label restarts it.
 
-Every job freezes its case/round, role/reviewer identity, exact provider/model,
-reasoning settings, skills version, workspace, input references and execution
-limit before dispatch. No silent model substitution is permitted.
+Lines after the command are passed to the next worker as human guidance.
+Commands arrive by webhook, with a periodic poll of paused cases as a
+fallback. The controller applies a command online once no builder for the case
+is still running and a slot is free. Resuming rebinds the case to the current
+policy, starts a fresh age window and acknowledges where work continues. None
+of this requires root, stopped services or ledger edits.
 
-Recovery reads the saved definition rather than rebuilding it from the current
-release or profile defaults. Existing jobs retain their original inputs across
-upgrades. New jobs may use newly approved settings. Immediately restrictive
-controls (pause, revocation, takeover) apply to old and new work.
+### Policy changes
 
-Each result is schema-validated, bound to the authorized job and accepted at most
-once. Late results cannot advance a superseded round or revoked case. Record
-what model identity can actually be observed; do not claim provider attestation
-that the provider does not supply.
+Operational settings (capacity, retry and time limits, the conversation inbox)
+apply to existing cases immediately. Settings that define what a case accepted
+(models, reviewers, actors, label, paths, merge mode, remediation rounds) stay
+pinned; changing them parks existing cases with `POLICY_CHANGED`, and resuming
+adopts the new settings.
 
-Keep accepted results, relevant GitHub observations and decision history durable.
-Give workers compact role-specific evidence, including the accepted plan and
-applicable findings. Keep full history available through immutable artifacts;
-do not copy the entire growing ledger into every prompt. The transport uses a
-shared 8 MiB compact-history limit, a 12 MiB frozen queue-envelope limit, and a
-32 MiB limit for the direct worker's line-readable JSON artifact. These are file
-budgets, not increases to model context or provider-output limits. History is
-never truncated to fit; oversized dispatch errors report the observed size and
-limit. Existing immutable jobs and evidence digests remain valid across upgrades.
-Bound individual
-payloads and preserve provenance without making unrelated formatting or release
-changes invalidate a job.
+## GitHub conversations
 
-The ledger transaction records a decision and its intended effects together.
-External publication reconciles stable ownership markers and exact heads after
-timeouts/restarts. Do not promise exactly-once physical execution across an
-uncooperative external queue. Prevent overlapping workspace writers, fence stale
-results, and make publication idempotent. Uncertain execution must be inspected
-before a retry; ordinary confirmed non-starts must have a supported recovery path.
+Opt-in mentions and human feedback use the same webhook, queue and publication
+boundaries, with a separate inbox in the ledger. A conversation task answers a
+question or recommends a replan; only the controller hands feedback to a case.
+Control commands are handled separately and never wait in that inbox. See
+[GitHub conversations](github-conversations.md).
 
 ## Reviews and readiness
 
-Reviewer instances are policy records, not compiled role/model combinations:
-stable ID, semantic lane, exact model/provider, executor and review mode.
-
-- Required reviewers block readiness and contribute mandatory findings.
-- Advisory/shadow reviewers are comparison observations only. Their failures,
-  latency or absence must not consume the main workflow's failure allowance or
-  delay required work.
-
-The initial semantic lanes remain general and security/performance. Additional
-models do not require new engine code. Lane publication uses the configured
-distinct GitHub App identities, separate from the PR author.
+Reviewer instances are policy records: stable ID, semantic lane (general or
+security/performance), exact model, executor and mode (required, advisory,
+shadow). Lane reviews publish through distinct GitHub App identities.
 
 Readiness requires current authorization and ownership, the accepted build,
-green required CI, all required reviews and final review bound to the same
-current PR head, no unresolved mandatory findings, no blocking GitHub reviews
-or threads, and clean mergeability. A new head invalidates earlier head-bound
-approvals. Applicable findings require resolution confirmation by their origin.
+green required CI, every required review and the final review on the same
+current head, no unresolved mandatory findings or human review threads, and no
+merge conflict. Branch states such as "behind" or "blocked by required
+approval" are left to the human who merges.
 
-Unresolved GitHub threads are actionable feedback, not an indefinite polling
-state: when the other final-preflight gates pass, freeze their complete bounded
-comment text and return to the existing builder loop. The builder assesses each
-request within the accepted scope and records addressed/deferred dispositions.
-Fresh CI and reviews still follow. Repeated identical feedback or exhausted
-remediation bounds escalate; thread closure remains a reviewer/operator action.
+Published text is for humans: outcomes, scope, findings, checks and
+limitations, with small hidden ownership markers. Structured evidence stays in
+the ledger.
 
-Controllers publish plans, draft PRs, lane reviews and readiness comments using
-stable markers. Workers do not receive GitHub publication credentials.
-GitHub text is for humans: concise outcomes, scope, actionable findings, reported
-checks and limitations. Do not embed serialized results, internal paths or hash
-inventories in visible comments. Keep structured evidence in Pip; when an export
-is useful to a person, provide a separately downloadable file rather than a code
-block. Small ownership markers may remain hidden. Publication formatting must
-not change accepted results, review votes or exact-head bindings.
-PR titles describe the change. Descriptions briefly explain the problem and
-implemented solution, link the accepted published plan, and include a closing
-`Fixes #N` reference. Reviewer-role identification belongs in hidden metadata,
-not a visible control-language footer.
-The dedicated commit-signing key is controller-only as well. Signing preserves
-the accepted tree exactly and uses validated parents and automation identity;
-it never edits the accepted worker result to substitute a new SHA. Retain the
-original source commit before replacing workspace refs or reclaiming storage.
-CI, reviews and final readiness bind the published signed SHA, not its unsigned
-source SHA. The controller resolves the policy's target branch from the bound
-remote and retains its common ancestor with the accepted source as an additional
-parent when needed. This preserves integrated target history without publishing
-unsigned worker ancestors or trusting worker-controlled remote-tracking refs.
-Replacing an unsigned or legacy ancestry-losing publication requires an audited
-recovery decision and fresh head-bound CI and reviews.
-Automatic merge is deferred; it is not part of the lean runtime's required
-execution path and cannot be enabled accidentally by a generic configuration.
-
-## Failure and recovery
-
-The MDK target policy allows ten remediation rounds (previously three). This
-is a temporary safety ceiling, not a measure of productive progress. See
-[`runbooks/remediation-budget.md`](runbooks/remediation-budget.md) for the
-implemented accounting, independent limits, and existing-case rollout boundary.
-
-Infrastructure unavailability is not a failed attempt to solve an issue.
-Distinguish unavailable runtime/authentication, transport failures, invalid
-results, task failure, and human scope blockers. Preserve observations without
-spending a work-attempt allowance before useful work starts.
-
-Infrastructure retries require bounded backoff and a successful readiness probe;
-no busy retries or unlimited provider spending. Bound actual runs and remediation
-separately. Paused/outage time must not silently burn an issue's work budget.
-An explicit overall age limit may still require human attention.
-
-Failures are local to the affected job or capability. Mint reviewer credentials
-when publishing reviews, not before planning or ingesting every result. Keep
-completed-result ingestion and safe housekeeping available during a dispatch
-pause. One failed cleanup or publication must not prevent unrelated progress.
-
-Provide ordinary status, pause/resume and explained retry/recovery operations.
-Exceptional recovery appends history; it does not delete failures, alter accepted
-results or require case-specific shell scripts. Recovery must prove a previous
-worker is stopped before another writer starts.
+The controller-only signing key signs the exact accepted tree with validated
+parents; workers never receive it or any GitHub credential.
 
 ## Intake and configuration
 
-Keep signed webhook intake for low latency and bounded polling for missed events.
-Retain the isolated loopback receiver, delivery-ID deduplication, bounded durable
-spool, authenticated payloads and live issue revalidation. Public ingress never
-receives repository credentials, provider credentials or ledger access.
-Inline discussion intake retains the authenticated comment and exact file/commit
-references. If an optional diff excerpt exceeds the bounded context budget, omit
-that excerpt explicitly with its byte count and digest; do not discard the
-comment or block the spool merely because GitHub supplied a large diff hunk.
+Eligibility checks the current label, a trusted numeric actor, the open issue,
+assignees (anything other than Pip's account blocks admission), exclusions,
+pause and capacity. Active intake assigns Pip with GitHub's additive assignee
+endpoint and verifies it before creating a case. Removing the label or taking
+over stops new work and publication; it does not promise to kill a running
+model.
 
-Eligibility checks current label, trusted numeric actor, open issue/repository
-identity, assignees, exclusions, pause and capacity limits. Any assignee other
-than the policy's numeric automation actor blocks admission, including mixed
-human/Pip assignments. Unassigned issues and issues assigned only to Pip may be
-eligible. Only after all admission checks pass, active intake re-reads the issue,
-adds Pip using GitHub's additive assignee endpoint if needed, and verifies the
-returned assignment before creating a case or planner effect. It never replaces
-or removes another assignee. Missing/malformed assignee evidence, API failures,
-ignored assignments and conflicting reads fail closed. Shadow intake stays
-read-only, and capacity-waiting candidates are not assigned in advance.
-
-The verified assignment is retained in the authorization event's issue context.
-If a response or ledger write is interrupted, a later intake can confirm Pip's
-existing assignment and finish admission without a duplicate assignment or case;
-assignment alone never authorizes work without the trusted label and other gates.
-GitHub does not provide an atomic unassigned-only claim: a concurrent human
-assignment is never removed, and subsequent authorization checks hold further
-work/publication if another assignee appears. This hold preserves history and
-budgets and clears when the conflicting assignment is removed; it does not
-silently discard the case or cancel an already executing model. Existing cases
-are not bulk-assigned during deployment; the new admission requirement applies
-when taking or reauthorizing an issue.
-
-Label removal and takeover stop
-new work and downstream publication; do not promise instant termination of an
-already executing model. Replayed deliveries do not create duplicate cases.
-
-A fresh trusted label after withdrawal may reauthorize an abandoned pre-PR
-case through the controller poll once old jobs are terminal (`done`, `cancelled`,
-or `archived`) or removed and no direct attempt is running. Unknown task states
-and failed queue reads block restart. Append a new planning generation under
-current policy; preserve prior plans, failures, effects and workspace-retirement records. Restart
-only the elapsed-time window, not failure allowances. Capacity and pause rules
-still apply. Completed work, human takeovers, other abandonment decisions and
-cases with a PR require explicit recovery rather than label-driven restart.
-If retained provider failures stop the new generation before planner dispatch,
-an offline operator may authorize one extra failure allowance and fresh planning.
-This appends history, preserves the deadline, requires stopped execution and an
-undispatched reauthorization, and cannot silently reset or stack failure budgets.
-Webhook intake records the delivery but cannot supply the execution-quiescence
-check needed to restart an existing case.
-
-Separate operational switches from immutable accepted work definitions.
-Configuration changes must not require rewriting case history. Use supported
-structured Hermes interfaces where available and narrowly scoped semantic
-compatibility checks otherwise; human-readable formatting is not a contract.
+Repository, actor, model and limit configuration lives in validated policy,
+never in the engine.
 
 ## Runtime and storage
 
-Keep controller secrets/state separate from code-executing workers. Workers may
-run repository tests and provider runtimes without access to the ledger or
-GitHub credentials. Scope systemd protections to actual capabilities: Cursor
-and Node tests require JIT memory; this does not justify weakening controller
-or ingress services. Retain no-new-privileges and restricted writable paths.
+Controller secrets and the ledger are separate from code-executing workers.
+Workers run repository tests and provider CLIs without ledger access or GitHub
+credentials. Systemd protections match each service's actual needs.
 
-Use one supported case workspace layout, one assigned branch and controlled
-publication. Disable worker-controlled Git hooks, credential helpers, URL
-rewrites and configuration injection before credential-bearing operations.
-Never share a private credential-bearing Git configuration with a worker.
-Target fetches explicitly share only case-local Git objects and their directories
-across the service identities. Do not use Git's setgid-based shared-repository
-mode in the restricted controller sandbox. Reusing a validated checkout repairs
-private object-store entries left by interrupted controller operations without
-rewriting staged work, refs, source, or credentials. Verify the full round trip:
-worker build, controller fetch/sign/publication, then worker remediation, under
-both service sandboxes.
+One case workspace layout, one assigned branch, controlled publication.
+Worker-controlled Git hooks, credential helpers, URL rewrites and config
+injection are disabled before credential-bearing operations. Review jobs get
+detached exact-head copies, so a late review cannot observe the next build.
 
-Keep workspaces/build output on the managed storage volume with a free-space
-reserve. Disposable build caches have separate retention from accepted artifacts.
-Cleanup must not delete active work or unpreserved commits and must not block
-unrelated workflow progress. Legacy workspace layouts exist only for explicit
-migration/retirement, not parallel permanent execution paths.
-Review-copy retirement must handle group-writable worker-owned build output
-without attempting to chmod it, and accept controller-private snapshot roots
-left by interrupted cleanup only after validating their ownership markers.
+Workspaces and build output live on the managed volume with a free-space
+reserve; cleanup never deletes active work or unpreserved commits.
 
-## Packaging and code organization
+## Packaging
 
-Keep one Rust executable with a pure domain core, a durable store and narrow
-GitHub/Hermes/Cursor adapters. Modules or crates are boundaries only when they
-enforce a real responsibility; do not add abstractions for hypothetical engines.
+One Rust executable with a pure domain core, a durable store and narrow
+GitHub, Hermes and Cursor adapters. Signed release verification and an atomic
+install/rollback boundary. Hermes stays upstream and is checked by a small
+compatibility suite.
 
-Keep the working signed release verification and atomic install/backup boundary.
-Normal deployment must preserve jobs and operational state without custom
-activation scripts or manual digest juggling. Test the actual installed worker
-environment, not only separate host-shell probes. Hermes stays upstream and is
-upgraded through a small real-interface compatibility suite.
+## Verification
 
-Retire the Python runtime after the Rust end-to-end cutover proof. Preserve the
-small useful parity fixtures and historical source in Git, not two maintained
-implementations. Remove unused alternate execution paths after migrating their
-useful tests onto production paths.
-
-## Verification and completion
-
-Use strict TDD for executable changes. Preserve tests for meaningful boundaries:
-exact-head joins, independent reviewers, revocation, stale results, publication
-replay, bounded failures and safe workspace lifecycle. Do not retain tests solely
-to preserve obsolete architecture.
-
-The proof ladder is: pure/adapter tests; transaction/restart tests; actual
-service-identity execution tests; verified release installation; one real issue
-through planner, builder, CI, independent reviews and final readiness.
-
-The lean migration is complete only when:
-- one live issue produces a PR ready for human review and merge;
-- required reviews and CI are verified on its exact current head;
-- the agreed failure isolation, saved-job recovery and duplicate-path removal
-  are implemented and tested;
-- runtime/history are preserved and no Hermes fork is required;
-- obsolete code/docs are retired rather than hidden behind new abstractions;
-- webhook intake remains functional and autonomous merge remains disabled.
-
-Local tests, installed behavior and live provider/PR evidence are distinct.
-See dated evidence under `docs/evidence/` for historical observations; those
-snapshots are not current deployment status.
+Test-driven development at real boundaries: fixtures captured from actual
+Hermes, Cursor and GitHub output. The proof ladder is unit and adapter tests,
+transaction and restart tests, service-identity execution, verified release
+installation, and real issues through to human-held readiness. Local tests,
+installed behavior and live evidence are distinct gates.

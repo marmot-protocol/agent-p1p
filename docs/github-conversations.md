@@ -35,8 +35,12 @@ a successful live rollout.
   during active work, and remediation-exhausted handoffs grant no new window.
   Original authorization/history, provider failures and remediation counts remain.
   Historical feedback without this marker retains its original deadline.
-- Completed, abandoned, taken-over, blocked and operationally escalated work is
-  not reopened by comments. Exceptional recovery remains an operator action.
+- Conversation replies never reopen work. Paused cases (escalated, blocked or
+  waiting for a human) are resumed, replanned or abandoned by an explicit
+  `@<pip-login> resume|replan|abandon` command instead. Commands are recorded
+  separately from this inbox, work even with conversations disabled, and never
+  hold up a case's work; see [parked cases](runbooks/parked-cases.md).
+  Completed and taken-over work is not reopened by comments.
 
 ## Queue and failure behavior
 
