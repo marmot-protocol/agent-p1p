@@ -105,7 +105,8 @@ pub use release::{
     create_release_manifest, resource_set_digest, sign_manifest, verify_release, verifying_key,
 };
 pub use results::{
-    ResultCycle, ResultCycleError, ingest_completed_once, ingest_completed_once_with,
+    RETRY_COOLDOWN_SECONDS, ResultCycle, ResultCycleError, RetryProjectionCycle,
+    ingest_completed_once, ingest_completed_once_with, project_task_retries,
     reconcile_completed_once_with,
 };
 pub use reviews::{

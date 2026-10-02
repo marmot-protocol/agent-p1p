@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 #[derive(Clone, Default)]
 struct FakeRunner {
     outputs: Rc<RefCell<VecDeque<CommandOutput>>>,
+    commands: Rc<RefCell<Vec<CommandSpec>>>,
 }
 
 impl FakeRunner {
@@ -26,7 +27,8 @@ impl FakeRunner {
 }
 
 impl CommandRunner for FakeRunner {
-    fn run(&self, _spec: &CommandSpec) -> Result<CommandOutput, HermesError> {
+    fn run(&self, spec: &CommandSpec) -> Result<CommandOutput, HermesError> {
+        self.commands.borrow_mut().push(spec.clone());
         Ok(self.outputs.borrow_mut().pop_front().unwrap())
     }
 }
@@ -142,7 +144,9 @@ fn paused_native_collection_rejects_a_foreign_result_before_retention() {
     result["task_id"] = json!("foreign-task");
     let runner = FakeRunner::default();
     runner.json(completed_planner("planner", result));
-    assert!(
+    // Paused collection never retains it, and records no rejection either:
+    // only an authorized pass may decide to retry or park.
+    assert_eq!(
         pip_control::reconcile_completed_once_with(
             &mut store,
             &active_policy(),
@@ -151,7 +155,8 @@ fn paused_native_collection_rejects_a_foreign_result_before_retention() {
             10,
             false,
         )
-        .is_err()
+        .unwrap(),
+        ResultCycle::Idle
     );
     assert_eq!(store.status(10).unwrap(), before);
 }
@@ -494,12 +499,17 @@ fn transport_annotations_never_hide_unknown_fields_bad_shapes_or_binding_drift()
         result[field] = value;
         let runner = FakeRunner::default();
         runner.json(completed_planner("planner", result));
+        let outcome =
+            ingest_completed_once_with(&mut store, &active_policy(), runner, "hermes", 10).unwrap();
         assert!(
-            ingest_completed_once_with(&mut store, &active_policy(), runner, "hermes", 10,)
-                .is_err(),
-            "accepted {field}"
+            matches!(outcome, ResultCycle::RetryScheduled { attempt: 2, .. }),
+            "accepted {field}: {outcome:?}"
         );
         assert_eq!(store.run_count().unwrap(), 0);
+        assert_eq!(
+            store.case("repo:984321#1240@1").unwrap().unwrap().state,
+            "PLANNING"
+        );
     }
 }
 
@@ -517,9 +527,15 @@ fn wrong_profile_or_self_described_model_never_mutates_the_case() {
         let runner = FakeRunner::default();
         runner.json(completed_planner(profile, result));
 
-        assert!(
-            ingest_completed_once_with(&mut store, &active_policy(), runner, "hermes", 10).is_err()
-        );
+        let outcome =
+            ingest_completed_once_with(&mut store, &active_policy(), runner, "hermes", 10);
+        if mutate {
+            // A self-described model change is an invalid result: retried, never accepted.
+            assert!(matches!(outcome, Ok(ResultCycle::RetryScheduled { .. })));
+        } else {
+            // A task run by a foreign profile is not this job's result at all.
+            assert!(outcome.is_err());
+        }
         assert_eq!(store.run_count().unwrap(), 0);
         assert_eq!(
             store.case("repo:984321#1240@1").unwrap().unwrap().state,
@@ -529,44 +545,65 @@ fn wrong_profile_or_self_described_model_never_mutates_the_case() {
 }
 
 #[test]
-fn a_hermes_circuit_breaker_escalates_the_case_once() {
+fn a_hermes_circuit_breaker_is_retried_then_parks_when_the_stage_budget_is_spent() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
     project_planner(&mut store);
-    let runner = FakeRunner::default();
-    runner.json(json!({
-        "task": {
-            "id": "planner-1",
-            "title": "Run planner",
-            "status": "blocked",
-            "assignee": "planner",
-            "created_by": "pip-controller",
-            "body": serde_json::to_string(&json!({
-                "projection_key": "repo:984321#1240@1:planner:round:1:revision:1:worker"
-            })).unwrap()
-        },
-        "runs": [
-            {"outcome":"spawn_failed","profile":"planner","metadata":{}},
-            {"outcome":"spawn_failed","profile":"planner","metadata":{}},
-            {"outcome":"gave_up","profile":"planner","metadata":{"failures":3}}
-        ]
-    }));
-
+    let gave_up = |id: &str, key: &str| {
+        json!({
+            "task": {
+                "id": id,
+                "title": "Run planner",
+                "status": "blocked",
+                "assignee": "planner",
+                "created_by": "pip-controller",
+                "body": serde_json::to_string(&json!({"projection_key": key})).unwrap()
+            },
+            "runs": [
+                {"outcome":"spawn_failed","profile":"planner","metadata":{}},
+                {"outcome":"gave_up","profile":"planner","metadata":{"failures":3}}
+            ]
+        })
+    };
+    let root = "repo:984321#1240@1:planner:round:1:revision:1:worker";
     let mut current_policy = active_policy();
-    current_policy.max_provider_failures = 9;
+    current_policy.max_provider_failures = 2;
     current_policy.max_hermes_attempts = Some(1);
+
+    let runner = FakeRunner::default();
+    runner.json(gave_up("planner-1", root));
     assert_eq!(
         ingest_completed_once_with(&mut store, &current_policy, runner, "hermes", 50).unwrap(),
+        ResultCycle::RetryScheduled {
+            task_id: "planner-1".into(),
+            retry_projection: format!("{root}:attempt:2"),
+            attempt: 2,
+        }
+    );
+    assert_eq!(
+        store.case("repo:984321#1240@1").unwrap().unwrap().state,
+        "PLANNING"
+    );
+
+    // The controller creates the retry task once its cooldown has passed.
+    store
+        .record_projection_task(&format!("{root}:attempt:2"), "planner-2", &json!({}), 200)
+        .unwrap();
+    let runner = FakeRunner::default();
+    runner.json(gave_up("planner-2", &format!("{root}:attempt:2")));
+    assert_eq!(
+        ingest_completed_once_with(&mut store, &current_policy, runner, "hermes", 300).unwrap(),
         ResultCycle::ProviderFailureEscalated {
-            task_id: "planner-1".into()
+            task_id: "planner-2".into()
         }
     );
     let case = store.case("repo:984321#1240@1").unwrap().unwrap();
     assert_eq!(case.state, "ESCALATED");
     let history = store.immutable_history_for_case(&case.case_key).unwrap();
     let event = history.events.last().unwrap();
-    assert_eq!(event.payload["observed"], 3);
-    assert_eq!(event.payload["limit"], 3);
+    assert_eq!(event.payload["observed"], 2);
+    assert_eq!(event.payload["limit"], 2);
+    assert_eq!(event.payload["details"]["source"], "hermes");
     assert_eq!(
         store.latest_event_type(&case.case_key).unwrap().as_deref(),
         Some("OPERATIONAL_BOUND_REACHED")
@@ -578,7 +615,7 @@ fn project_planner(store: &mut Store) {
 }
 
 #[test]
-fn crash_breaker_event_escalates_one_attempt_without_accepting_a_result() {
+fn crash_breaker_event_parks_when_no_retry_budget_remains() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
     project_planner_with_limit(&mut store, 1);
@@ -590,8 +627,10 @@ fn crash_breaker_event_escalates_one_attempt_without_accepting_a_result() {
         "events":[{"kind":"gave_up", "payload":{"failures":1, "effective_limit":1,
             "limit_source":"task", "trigger_outcome":"crashed"}}]
     }));
+    let mut policy = active_policy();
+    policy.max_provider_failures = 1;
     assert!(matches!(
-        ingest_completed_once_with(&mut store, &active_policy(), runner, "hermes", 50).unwrap(),
+        ingest_completed_once_with(&mut store, &policy, runner, "hermes", 50).unwrap(),
         ResultCycle::ProviderFailureEscalated { .. }
     ));
     assert_eq!(store.run_count().unwrap(), 0);
@@ -626,7 +665,17 @@ fn scratch_planner_requires_bounded_inline_plan_for_cross_identity_handoff() {
         let valid = inline
             .as_str()
             .is_some_and(|text| !text.is_empty() && text.len() <= 16384);
-        assert_eq!(result.is_ok(), valid);
+        if valid {
+            assert!(
+                matches!(result, Ok(ResultCycle::Ingested { .. })),
+                "{result:?}"
+            );
+        } else {
+            assert!(
+                matches!(result, Ok(ResultCycle::RetryScheduled { .. })),
+                "{result:?}"
+            );
+        }
         assert_eq!(store.run_count().unwrap(), u64::from(valid));
     }
 }
@@ -686,6 +735,17 @@ fn project_native_task(
     task_id: &str,
     inline_plan: bool,
     review: bool,
+) {
+    project_native_task_with(store, max_retries, task_id, inline_plan, review, |_| {});
+}
+
+fn project_native_task_with(
+    store: &mut Store,
+    max_retries: u32,
+    task_id: &str,
+    inline_plan: bool,
+    review: bool,
+    customize: impl FnOnce(&mut TaskCreateSpec),
 ) {
     let accepted = active_policy();
     store
@@ -794,6 +854,7 @@ fn project_native_task(
         desired.body["remediation_round"] = json!(0);
         desired.model = "gpt-6-sol".into();
     }
+    customize(&mut desired);
     let observed = TaskSnapshot {
         configuration: Default::default(),
         id: task_id.into(),
@@ -934,4 +995,104 @@ fn active_policy() -> pip_control::RepositoryPolicy {
     value["github"]["reviewer_general_actor_id"] = json!(202881);
     value["github"]["reviewer_secperf_actor_id"] = json!(202882);
     load_repository_policy(&serde_json::to_vec(&value).unwrap()).unwrap()
+}
+
+fn hermes_task(spec: &TaskCreateSpec, id: &str) -> Value {
+    let (kind, path) = spec
+        .workspace
+        .split_once(':')
+        .map_or((spec.workspace.as_str(), None), |(kind, path)| {
+            (kind, Some(path))
+        });
+    json!({
+        "id": id, "title": spec.title, "status": "ready", "assignee": spec.assignee,
+        "created_by": "pip-controller",
+        "body": serde_json::to_string(&spec.queue_body().unwrap()).unwrap(),
+        "workspace_kind": kind, "workspace_path": path, "skills": spec.skills,
+        "provider_override": spec.provider, "model_override": spec.model,
+        "max_retries": spec.max_retries, "priority": spec.priority,
+    })
+}
+
+#[test]
+fn a_due_retry_creates_one_fresh_task_carrying_the_previous_error() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    project_native_task_with(&mut store, 1, "planner-1", false, false, |spec| {
+        spec.workspace = "scratch".into();
+        spec.parent_task_ids.clear();
+    });
+    let mut invalid = planner_result();
+    invalid["requested_model"] = json!("openai-codex/auto");
+    let runner = FakeRunner::default();
+    runner.json(completed_planner("planner", invalid));
+    let ResultCycle::RetryScheduled {
+        retry_projection, ..
+    } = ingest_completed_once_with(&mut store, &active_policy(), runner, "hermes", 50).unwrap()
+    else {
+        panic!("expected a scheduled retry");
+    };
+
+    // Nothing is created during the cooldown.
+    let due = 50 + pip_control::RETRY_COOLDOWN_SECONDS;
+    assert_eq!(
+        pip_control::project_task_retries(
+            &mut store,
+            &active_policy(),
+            FakeRunner::default(),
+            "hermes",
+            due - 1,
+            true,
+        )
+        .unwrap(),
+        pip_control::RetryProjectionCycle::Idle
+    );
+
+    let pending = store
+        .pending_projection_retries(984_321, None, due)
+        .unwrap();
+    let spec: TaskCreateSpec = serde_json::from_value(pending[0].desired.clone()).unwrap();
+    let runner = FakeRunner::default();
+    runner.json(hermes_task(&spec, "planner-2"));
+    runner.json(json!({"task": hermes_task(&spec, "planner-2"), "parents": [], "runs": []}));
+    assert_eq!(
+        pip_control::project_task_retries(
+            &mut store,
+            &active_policy(),
+            runner.clone(),
+            "hermes",
+            due,
+            true
+        )
+        .unwrap(),
+        pip_control::RetryProjectionCycle::Projected {
+            projection_id: retry_projection.clone(),
+            task_id: "planner-2".into(),
+        }
+    );
+    let create = &runner.commands.borrow()[0].args;
+    let key = create
+        .windows(2)
+        .find(|pair| pair[0] == "--idempotency-key")
+        .map(|pair| pair[1].clone())
+        .unwrap();
+    assert_eq!(key, "effect-planner:worker:attempt:2");
+    let body = create
+        .windows(2)
+        .find(|pair| pair[0] == "--body")
+        .map(|pair| pair[1].clone())
+        .unwrap();
+    assert!(body.contains("previous_result_error"), "{body}");
+    assert!(body.contains(&format!("\"projection_key\":\"{retry_projection}\"")));
+
+    // The retry is now the awaited task for this job, and nothing else is due.
+    let awaited = store.unconsumed_task_projections_in(984_321, None).unwrap();
+    assert_eq!(awaited.len(), 1);
+    assert_eq!(awaited[0].task_id, "planner-2");
+    assert!(
+        store
+            .pending_projection_retries(984_321, None, due + 1000)
+            .unwrap()
+            .is_empty()
+    );
 }

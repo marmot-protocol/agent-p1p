@@ -18,6 +18,7 @@ mod conversations;
 mod follow_up_recovery;
 mod infrastructure_recovery;
 mod native_review_retry;
+mod projection_retry;
 mod remediation_extension;
 mod review_coordination_recovery;
 pub use conversations::{Conversation, ConversationInput};
@@ -27,6 +28,7 @@ mod dispatch_intents;
 mod reauthorization;
 mod task_results;
 pub use dispatch_intents::{CreateReservation, DispatchIntent, DispatchTransport};
+pub use projection_retry::{PendingProjection, ProjectionRejection};
 
 const MIGRATIONS: &[&str] = &[
     MIGRATION_1,
@@ -1995,6 +1997,8 @@ impl Store {
              JOIN cases c ON c.case_key = o.case_key
              LEFT JOIN runs r ON r.task_id = p.task_id
              WHERE p.task_id IS NOT NULL AND r.task_id IS NULL
+               AND NOT EXISTS (SELECT 1 FROM evidence e
+                   WHERE e.evidence_id = 'projection-rejected:' || p.projection_id)
                AND (?1 IS NULL OR c.repository_id = ?1)
                AND (?2 IS NULL OR c.case_key = ?2)
              ORDER BY p.reconciled_at, p.projection_id",
@@ -2020,10 +2024,9 @@ impl Store {
                     effect_id: effect_id.clone(),
                     board,
                     task_id,
-                    desired: dispatch_intents::resolve_output(
+                    desired: projection_retry::resolve_projection_desired(
                         &self.connection,
                         &effect_id,
-                        DispatchTransport::Hermes,
                         serde_json::from_str(&desired)?,
                     )?,
                     observed: serde_json::from_str(&observed)?,

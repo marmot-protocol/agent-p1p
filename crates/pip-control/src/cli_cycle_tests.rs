@@ -2,117 +2,79 @@ use super::*;
 use pip_github::{GitHubError, MutationRequest, ReadRequest, ReadResponse};
 use pip_store::{EffectInput, EventInput, NewCase};
 
-struct QueueSnapshot(pip_hermes::CommandOutput);
+/// Answers `kanban show` for each of a case's tasks; anything else fails.
+struct CaseTasks(Vec<(&'static str, Result<&'static str, i32>)>);
 
-impl pip_hermes::CommandRunner for QueueSnapshot {
+impl pip_hermes::CommandRunner for CaseTasks {
     fn run(
         &self,
         spec: &pip_hermes::CommandSpec,
     ) -> Result<pip_hermes::CommandOutput, pip_hermes::HermesError> {
         assert_eq!(spec.program, "fixture-hermes");
+        let [kanban, flag, board, show, id, json] = spec.args.as_slice() else {
+            panic!("unexpected Hermes command {:?}", spec.args);
+        };
         assert_eq!(
-            spec.args,
-            [
-                "kanban",
-                "--board",
-                "fixture-board",
-                "list",
-                "--archived",
-                "--json"
-            ]
+            [kanban, flag, board, show, json],
+            ["kanban", "--board", "fixture-board", "show", "--json"]
         );
-        Ok(self.0.clone())
-    }
-}
-
-struct MatureBoardSnapshot;
-
-impl pip_hermes::CommandRunner for MatureBoardSnapshot {
-    fn run(
-        &self,
-        spec: &pip_hermes::CommandSpec,
-    ) -> Result<pip_hermes::CommandOutput, pip_hermes::HermesError> {
-        if spec.max_output_bytes < 8 * 1024 * 1024 {
-            return Err(pip_hermes::HermesError::OutputTooLarge);
-        }
+        let (status, stdout) = match self.0.iter().find(|(task, _)| task == id) {
+            Some((_, Ok(status))) => (
+                0,
+                serde_json::to_vec(&json!({"task":
+                    {"id":id,"title":"Plan","body":"{}","status":status}}))
+                .unwrap(),
+            ),
+            Some((_, Err(code))) => (*code, b"not JSON".to_vec()),
+            None => (1, Vec::new()),
+        };
         Ok(pip_hermes::CommandOutput {
-            status: 0,
-            stdout: serde_json::to_vec(&json!([
-                {"id":"previous-plan","title":"Plan","body":"{}","status":"archived"}
-            ]))
-            .unwrap(),
+            status,
+            stdout,
             stderr: vec![],
             timed_out: false,
         })
     }
 }
 
-fn queue_snapshot(tasks: Value) -> QueueSnapshot {
-    QueueSnapshot(pip_hermes::CommandOutput {
-        status: 0,
-        stdout: serde_json::to_vec(&tasks).unwrap(),
-        stderr: vec![],
-        timed_out: false,
-    })
+fn quiescent(tasks: Vec<(&'static str, Result<&'static str, i32>)>, ids: &[&str]) -> bool {
+    prior_tasks_quiescent(
+        CaseTasks(tasks),
+        "fixture-hermes",
+        "fixture-board",
+        &ids.iter().map(|id| (*id).to_string()).collect::<Vec<_>>(),
+    )
 }
 
 #[test]
-fn reauthorization_queue_accepts_archived_and_other_terminal_tasks() {
-    for status in ["archived", "done", "cancelled"] {
-        let snapshot = queue_snapshot(json!([
-            {"id":"previous-plan","title":"Plan","body":"{}","status":status},
-            {"id":"unrelated-task","title":"Other case","body":"{}","status":"running"}
-        ]));
+fn reauthorization_accepts_terminal_and_blocked_case_tasks() {
+    for status in ["archived", "done", "cancelled", "blocked"] {
         assert!(
-            prior_tasks_quiescent(
-                snapshot,
-                "fixture-hermes",
-                "fixture-board",
-                &["previous-plan".into()]
-            ),
+            quiescent(vec![("previous-plan", Ok(status))], &["previous-plan"]),
             "{status}"
         );
     }
-    assert!(prior_tasks_quiescent(
-        queue_snapshot(json!([])),
-        "fixture-hermes",
-        "fixture-board",
-        &["removed-plan".into()]
-    ));
+    assert!(quiescent(vec![], &[]));
 }
 
 #[test]
-fn reauthorization_queue_supports_a_mature_bounded_board_snapshot() {
-    assert!(prior_tasks_quiescent(
-        MatureBoardSnapshot,
-        "fixture-hermes",
-        "fixture-board",
-        &["previous-plan".into()]
-    ));
-}
-
-#[test]
-fn reauthorization_queue_rejects_runnable_and_unknown_task_states() {
+fn reauthorization_rejects_runnable_and_unknown_task_states() {
     for status in [
         "triage",
         "todo",
         "scheduled",
         "ready",
         "running",
-        "blocked",
         "review",
         "unknown",
     ] {
-        let snapshot = queue_snapshot(json!([
-            {"id":"old-archived","title":"Old plan","body":"{}","status":"archived"},
-            {"id":"previous-plan","title":"Plan","body":"{}","status":status}
-        ]));
         assert!(
-            !prior_tasks_quiescent(
-                snapshot,
-                "fixture-hermes",
-                "fixture-board",
-                &["old-archived".into(), "previous-plan".into()]
+            !quiescent(
+                vec![
+                    ("old-archived", Ok("archived")),
+                    ("previous-plan", Ok(status))
+                ],
+                &["old-archived", "previous-plan"]
             ),
             "{status}"
         );
@@ -120,25 +82,12 @@ fn reauthorization_queue_rejects_runnable_and_unknown_task_states() {
 }
 
 #[test]
-fn reauthorization_queue_read_failures_remain_fail_closed() {
-    for fault in ["exit", "timeout", "json"] {
-        let mut snapshot = queue_snapshot(json!([]));
-        match fault {
-            "exit" => snapshot.0.status = 1,
-            "timeout" => snapshot.0.timed_out = true,
-            "json" => snapshot.0.stdout = b"not JSON".to_vec(),
-            _ => unreachable!(),
-        }
-        assert!(
-            !prior_tasks_quiescent(
-                snapshot,
-                "fixture-hermes",
-                "fixture-board",
-                &["previous-plan".into()]
-            ),
-            "{fault}"
-        );
-    }
+fn reauthorization_task_read_failures_remain_fail_closed() {
+    assert!(!quiescent(
+        vec![("previous-plan", Err(1))],
+        &["previous-plan"]
+    ));
+    assert!(!quiescent(vec![], &["missing-plan"]));
 }
 
 #[derive(Clone)]

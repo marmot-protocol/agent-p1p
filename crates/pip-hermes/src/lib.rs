@@ -178,6 +178,8 @@ pub enum HermesError {
     IncompleteTask,
     IncompleteRun,
     RetryLimitReached,
+    /// The worker stopped the task itself and gave this reason.
+    WorkerBlocked(String),
     InvalidRunMetadata,
     Process(String),
 }
@@ -202,6 +204,7 @@ impl fmt::Display for HermesError {
             Self::RetryLimitReached => {
                 formatter.write_str("Hermes task reached its configured retry limit")
             }
+            Self::WorkerBlocked(reason) => write!(formatter, "worker blocked the task: {reason}"),
             Self::InvalidRunMetadata => {
                 formatter.write_str("Hermes run metadata is not a JSON object")
             }
@@ -261,12 +264,53 @@ pub struct TaskEventSnapshot {
     pub payload: Value,
 }
 
+const BLOCK_REASON_BYTES: usize = 1024;
+
 impl TaskDetail {
     #[must_use]
     pub fn retry_limit_reached(&self) -> bool {
         self.task.status == "blocked"
             && (self.runs.last().and_then(|run| run.outcome.as_deref()) == Some("gave_up")
                 || self.has_crash_circuit_breaker())
+    }
+
+    /// A blocked Hermes task never runs again by itself. If its last run
+    /// failed, the failure is retryable; otherwise the worker blocked it.
+    #[must_use]
+    pub fn blocked_disposition(&self) -> Option<HermesError> {
+        if self.task.status != "blocked" {
+            return None;
+        }
+        if self.retry_limit_reached()
+            || matches!(
+                self.runs.last().and_then(|run| run.outcome.as_deref()),
+                Some("crashed" | "timed_out" | "spawn_failed" | "gave_up" | "failed")
+            )
+        {
+            return Some(HermesError::RetryLimitReached);
+        }
+        Some(HermesError::WorkerBlocked(self.block_reason()))
+    }
+
+    fn block_reason(&self) -> String {
+        let reason = self
+            .events
+            .iter()
+            .rev()
+            .filter(|event| event.kind.contains("block") && !event.kind.contains("unblock"))
+            .find_map(|event| {
+                ["reason", "message", "note", "comment"]
+                    .iter()
+                    .find_map(|key| event.payload.get(key)?.as_str())
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+            })
+            .unwrap_or("the worker blocked the task without a reason");
+        let mut end = reason.len().min(BLOCK_REASON_BYTES);
+        while !reason.is_char_boundary(end) {
+            end -= 1;
+        }
+        reason[..end].to_string()
     }
 
     fn has_crash_circuit_breaker(&self) -> bool {
@@ -462,8 +506,8 @@ impl<R: CommandRunner> HermesReader<R> {
         if detail.task.id != task_id {
             return Err(HermesError::IncompleteTask);
         }
-        if detail.retry_limit_reached() {
-            return Err(HermesError::RetryLimitReached);
+        if let Some(disposition) = detail.blocked_disposition() {
+            return Err(disposition);
         }
         if detail.task.status != "done" {
             return Err(HermesError::IncompleteTask);

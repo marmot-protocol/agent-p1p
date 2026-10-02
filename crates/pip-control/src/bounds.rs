@@ -28,6 +28,8 @@ pub enum OperationalBound {
     ProviderUnavailable,
     /// The pinned model is unavailable to the provider account.
     ModelUnavailable,
+    /// A worker stopped its own task and named a reason.
+    WorkerBlocked,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

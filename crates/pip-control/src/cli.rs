@@ -642,8 +642,8 @@ where
             now,
             false,
             |task_ids| {
-                // Old ready/running/blocked jobs can still execute. Only terminal
-                // or removed jobs permit a distinct, freshly authorized generation.
+                // Old ready/running jobs can still execute. Only terminal or
+                // blocked jobs permit a distinct, freshly authorized generation.
                 prior_tasks_quiescent(
                     pip_hermes::ProcessRunner::default(),
                     options
@@ -796,9 +796,18 @@ where
                 authorization_valid: work_authorized && !conversation_pending,
             },
         ));
+        let worker_retry = cycle_observation(crate::project_task_retries(
+            &mut store,
+            scope,
+            pip_hermes::ProcessRunner::default(),
+            required(&options, "--hermes")?,
+            now,
+            work_authorized && !conversation_pending,
+        ));
         let mut case_report = json!({
             "case_key": case.case_key,
             "worker_result": result,
+            "worker_retry": worker_retry,
             "direct_worker": direct_worker,
             "ci": ci,
             "takeover": takeover,
@@ -1480,28 +1489,30 @@ fn required<'a>(options: &'a BTreeMap<String, String>, name: &str) -> Result<&'a
         .ok_or(CliError::Usage("required option is missing"))
 }
 
+/// Reads each of the case's own tasks rather than the whole board, so the
+/// check stays bounded however many tasks the board accumulates. A blocked
+/// task never runs again by itself; unknown states and read failures are not
+/// quiescent.
 fn prior_tasks_quiescent(
     runner: impl pip_hermes::CommandRunner,
     hermes: &str,
     board: &str,
     task_ids: &[String],
 ) -> bool {
-    pip_hermes::HermesReader::new(
-        runner,
-        hermes,
-        Duration::from_secs(30),
-        HERMES_BOARD_SNAPSHOT_MAX_BYTES,
-    )
-    .and_then(|reader| reader.list_tasks(board))
-    .is_ok_and(|tasks| {
-        tasks
-            .iter()
-            .filter(|task| task_ids.contains(&task.id))
-            .all(|task| matches!(task.status.as_str(), "done" | "cancelled" | "archived"))
+    let Ok(reader) =
+        pip_hermes::HermesReader::new(runner, hermes, Duration::from_secs(30), 4 * 1024 * 1024)
+    else {
+        return false;
+    };
+    task_ids.iter().all(|task_id| {
+        reader.show_task(board, task_id).is_ok_and(|task| {
+            matches!(
+                task.status.as_str(),
+                "done" | "cancelled" | "archived" | "blocked"
+            )
+        })
     })
 }
-
-const HERMES_BOARD_SNAPSHOT_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 fn current_time() -> Result<u64, CliError> {
     SystemTime::now()

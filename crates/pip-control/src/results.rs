@@ -5,8 +5,11 @@ use std::time::Duration;
 
 use pip_contracts::{CaseIdentity, ReviewMode, WorkerBinding, WorkerResult, WorkerRole};
 use pip_controller::{IngestError, IngestResult, ingest_worker_result_with_policy};
-use pip_hermes::{CommandRunner, HermesError, HermesReader, ProcessRunner, TaskCreateSpec};
-use pip_store::{Store, StoreError, StoredCase};
+use pip_hermes::{
+    CommandRunner, HermesError, HermesProjector, HermesReader, ProcessRunner, ProjectionResult,
+    TaskCreateSpec,
+};
+use pip_store::{ProjectionRejection, Store, StoreError, StoredCase, TaskProjectionInput};
 use serde::Serialize;
 
 use crate::RepositoryPolicy;
@@ -25,6 +28,30 @@ pub enum ResultCycle {
     ProviderFailureEscalated {
         task_id: String,
     },
+    /// The result was rejected; a fresh task for the same job is scheduled.
+    RetryScheduled {
+        task_id: String,
+        retry_projection: String,
+        attempt: u32,
+    },
+    /// The worker blocked its own task; the case is parked with its reason.
+    WorkerBlocked {
+        task_id: String,
+    },
+}
+
+/// Delay before a rejected Hermes job is projected again.
+pub const RETRY_COOLDOWN_SECONDS: u64 = 120;
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum RetryProjectionCycle {
+    Idle,
+    Blocked,
+    Projected {
+        projection_id: String,
+        task_id: String,
+    },
 }
 
 #[derive(Debug)]
@@ -35,6 +62,7 @@ pub enum ResultCycleError {
     InvalidProjection,
     ProfileMismatch,
     MalformedResult(String),
+    Projection(String),
 }
 
 impl fmt::Display for ResultCycleError {
@@ -50,6 +78,7 @@ impl fmt::Display for ResultCycleError {
                 formatter.write_str("Hermes run profile differs from the stored projection")
             }
             Self::MalformedResult(error) => write!(formatter, "malformed worker result: {error}"),
+            Self::Projection(error) => write!(formatter, "Hermes retry projection failed: {error}"),
         }
     }
 }
@@ -172,46 +201,39 @@ pub fn reconcile_completed_once_with<'a, R: CommandRunner>(
             continue;
         }
         let metadata = if let Some(retained) = retained {
-            retained
+            Ok(retained)
         } else {
             let completed = match reader.show_completed_result(&policy.board, &projection.task_id) {
                 Ok(completed) => completed,
                 Err(HermesError::IncompleteTask | HermesError::IncompleteRun) => continue,
+                // Collection is not a workflow decision, including rejection.
+                Err(HermesError::RetryLimitReached | HermesError::WorkerBlocked(_)) if !advance => {
+                    continue;
+                }
                 Err(HermesError::RetryLimitReached) => {
-                    // Collection is not a workflow decision, including escalation.
-                    if !advance {
-                        continue;
-                    }
-                    let configured = policy
-                        .workflow_policy()
-                        .map_err(|_| ResultCycleError::InvalidProjection)?
-                        .roles()
-                        .iter()
-                        .find(|configured| configured.profile == desired.assignee)
-                        .cloned()
-                        .ok_or(ResultCycleError::InvalidProjection)?;
-                    crate::bounds::escalate_case_for_bound(
+                    return reject(
                         store,
                         policy,
+                        &projection,
+                        &desired,
                         case_key,
                         observed_at,
-                        crate::bounds::BoundObservation {
-                            bound: crate::OperationalBound::ProviderFailures,
-                            observed: u64::from(desired.max_retries),
-                            limit: u64::from(desired.max_retries),
-                            details: serde_json::json!({
-                                "source": "hermes-circuit-breaker",
-                                "task_id": projection.task_id,
-                                "profile": desired.assignee,
-                                "provider": configured.provider,
-                                "model": configured.model,
-                            }),
-                        },
-                    )
-                    .map_err(|error| ResultCycleError::MalformedResult(error.to_string()))?;
-                    return Ok(ResultCycle::ProviderFailureEscalated {
-                        task_id: projection.task_id,
-                    });
+                        Rejection::Failed(
+                            "the Hermes worker crashed, timed out, or exhausted its attempts"
+                                .into(),
+                        ),
+                    );
+                }
+                Err(HermesError::WorkerBlocked(reason)) => {
+                    return reject(
+                        store,
+                        policy,
+                        &projection,
+                        &desired,
+                        case_key,
+                        observed_at,
+                        Rejection::Blocked(reason),
+                    );
                 }
                 Err(error) => return Err(error.into()),
             };
@@ -224,27 +246,28 @@ pub fn reconcile_completed_once_with<'a, R: CommandRunner>(
             {
                 return Err(ResultCycleError::ProfileMismatch);
             }
-            completed.worker_contract_metadata()?
+            completed
+                .worker_contract_metadata()
+                .map_err(|error| error.to_string())
         };
         let binding = binding(&projection.task_id, &desired)?;
-        let result = WorkerResult::decode(metadata)
-            .map_err(|error| ResultCycleError::MalformedResult(error.to_string()))?;
-        result
-            .validate_binding(&binding)
-            .map_err(|error| ResultCycleError::MalformedResult(error.to_string()))?;
-        if desired.body.get("storage").is_some()
-            && let WorkerResult::Planner(plan) = &result
-            && !plan
-                .common
-                .evidence
-                .get("plan_markdown")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|text| !text.trim().is_empty() && text.len() <= 16 * 1024)
-        {
-            return Err(ResultCycleError::MalformedResult(
-                "managed-storage planners require a nonempty inline plan of at most 16 KiB".into(),
-            ));
-        }
+        let result =
+            match metadata.and_then(|metadata| validated_result(metadata, &binding, &desired)) {
+                Ok(result) => result,
+                // While collection is paused, leave the task for an authorized pass.
+                Err(_) if !advance => continue,
+                Err(reason) => {
+                    return reject(
+                        store,
+                        policy,
+                        &projection,
+                        &desired,
+                        case_key,
+                        observed_at,
+                        Rejection::Failed(format!("the worker result was invalid: {reason}")),
+                    );
+                }
+            };
         if !advance {
             let value = serde_json::to_value(&result)
                 .map_err(|error| ResultCycleError::MalformedResult(error.to_string()))?;
@@ -272,6 +295,193 @@ pub fn reconcile_completed_once_with<'a, R: CommandRunner>(
         });
     }
     Ok(ResultCycle::Idle)
+}
+
+fn validated_result(
+    metadata: serde_json::Value,
+    binding: &WorkerBinding,
+    desired: &TaskCreateSpec,
+) -> Result<WorkerResult, String> {
+    let result = WorkerResult::decode(metadata).map_err(|error| error.to_string())?;
+    result
+        .validate_binding(binding)
+        .map_err(|error| error.to_string())?;
+    if desired.body.get("storage").is_some()
+        && let WorkerResult::Planner(plan) = &result
+        && !plan
+            .common
+            .evidence
+            .get("plan_markdown")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|text| !text.trim().is_empty() && text.len() <= 16 * 1024)
+    {
+        return Err(
+            "managed-storage planners require a nonempty inline plan of at most 16 KiB".into(),
+        );
+    }
+    Ok(result)
+}
+
+enum Rejection {
+    /// Retryable: the job is projected again until the stage budget is spent.
+    Failed(String),
+    /// The worker stopped the job itself; retrying cannot change its reason.
+    Blocked(String),
+}
+
+/// Rejects one projection's result without touching peer jobs. A failure is
+/// retried with a fresh Hermes task; a worker block or a spent budget parks
+/// the case with the reason so a human can resume it.
+fn reject(
+    store: &mut Store,
+    policy: &RepositoryPolicy,
+    projection: &TaskProjectionInput,
+    desired: &TaskCreateSpec,
+    case_key: &str,
+    now: u64,
+    rejection: Rejection,
+) -> Result<ResultCycle, ResultCycleError> {
+    let configured = policy
+        .workflow_policy()
+        .map_err(|_| ResultCycleError::InvalidProjection)?
+        .roles()
+        .iter()
+        .find(|configured| configured.profile == desired.assignee)
+        .cloned()
+        .ok_or(ResultCycleError::InvalidProjection)?;
+    let (reason, budget) = match &rejection {
+        Rejection::Failed(reason) => (reason.clone(), policy.max_provider_failures),
+        Rejection::Blocked(reason) => (format!("worker blocked the task: {reason}"), 1),
+    };
+    let outcome = store.reject_task_projection(
+        &projection.projection_id,
+        now,
+        &reason,
+        budget,
+        RETRY_COOLDOWN_SECONDS,
+    )?;
+    let attempts = match outcome {
+        ProjectionRejection::Retry {
+            projection_id,
+            attempt,
+        } => {
+            return Ok(ResultCycle::RetryScheduled {
+                task_id: projection.task_id.clone(),
+                retry_projection: projection_id,
+                attempt,
+            });
+        }
+        ProjectionRejection::Exhausted { attempts } => attempts,
+    };
+    let blocked = matches!(rejection, Rejection::Blocked(_));
+    crate::bounds::escalate_case_for_bound(
+        store,
+        policy,
+        case_key,
+        now,
+        crate::bounds::BoundObservation {
+            bound: if blocked {
+                crate::OperationalBound::WorkerBlocked
+            } else {
+                crate::OperationalBound::ProviderFailures
+            },
+            observed: u64::from(attempts),
+            limit: u64::from(budget),
+            details: serde_json::json!({
+                "source": "hermes",
+                "task_id": projection.task_id,
+                "role": desired.body.get("role"),
+                "profile": desired.assignee,
+                "provider": configured.provider,
+                "model": configured.model,
+                "error": reason,
+            }),
+        },
+    )
+    .map_err(|error| ResultCycleError::MalformedResult(error.to_string()))?;
+    Ok(if blocked {
+        ResultCycle::WorkerBlocked {
+            task_id: projection.task_id.clone(),
+        }
+    } else {
+        ResultCycle::ProviderFailureEscalated {
+            task_id: projection.task_id.clone(),
+        }
+    })
+}
+
+/// Creates the Hermes task for one due retry projection of a current job.
+pub fn project_task_retries<'a, R: CommandRunner + Clone>(
+    store: &mut Store,
+    scope: impl Into<crate::RepositoryScope<'a>>,
+    runner: R,
+    hermes_program: &str,
+    now: u64,
+    authorized: bool,
+) -> Result<RetryProjectionCycle, ResultCycleError> {
+    if !authorized {
+        return Ok(RetryProjectionCycle::Blocked);
+    }
+    let scope = scope.into();
+    let policy = scope.policy;
+    for pending in store.pending_projection_retries(policy.repository.id, scope.case_key, now)? {
+        if pending.board != policy.board {
+            continue;
+        }
+        let spec: TaskCreateSpec = serde_json::from_value(pending.desired)
+            .map_err(|_| ResultCycleError::InvalidProjection)?;
+        let body = spec
+            .body
+            .as_object()
+            .ok_or(ResultCycleError::InvalidProjection)?;
+        let case = store
+            .case(text(body, "case_key")?)?
+            .ok_or(ResultCycleError::InvalidProjection)?;
+        let reviewer = matches!(
+            body.get("role").and_then(|value| value.as_str()),
+            Some("reviewer-general" | "reviewer-secperf")
+        );
+        // A retry for a job the case has moved past is never created.
+        if !current_job_generation(store, &case, number(body, "state_revision")?, reviewer)? {
+            continue;
+        }
+        let timeout = Duration::from_secs(20);
+        let bound = 4 * 1024 * 1024;
+        let projector = HermesProjector::new(runner.clone(), hermes_program, timeout, bound)
+            .map_err(|error| ResultCycleError::Projection(error.to_string()))?;
+        // The retry's own idempotency key makes a create after a crash return
+        // the task that was already created rather than a duplicate.
+        let task_id = match projector
+            .project(&spec, &[])
+            .map_err(|error| ResultCycleError::Projection(error.to_string()))?
+        {
+            ProjectionResult::Created(id) | ProjectionResult::Existing(id) => id,
+        };
+        let reader = HermesReader::new(runner.clone(), hermes_program, timeout, bound)?;
+        let detail = reader.show_task_detail(&policy.board, &task_id)?;
+        if projector
+            .reconcile(&spec, std::slice::from_ref(&detail.task))
+            .map_err(|error| ResultCycleError::Projection(error.to_string()))?
+            .as_deref()
+            != Some(task_id.as_str())
+        {
+            return Err(ResultCycleError::Projection(
+                "created retry task differs from its projection".into(),
+            ));
+        }
+        store.record_projection_task(
+            &pending.projection_id,
+            &task_id,
+            &serde_json::to_value(&detail.task)
+                .map_err(|error| ResultCycleError::Projection(error.to_string()))?,
+            now,
+        )?;
+        return Ok(RetryProjectionCycle::Projected {
+            projection_id: pending.projection_id,
+            task_id,
+        });
+    }
+    Ok(RetryProjectionCycle::Idle)
 }
 
 /// A peer review advances the ledger revision, not the job generation. Shared

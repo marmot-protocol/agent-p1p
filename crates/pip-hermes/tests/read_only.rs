@@ -149,7 +149,7 @@ fn dispatcher_circuit_breaker_is_a_typed_terminal_failure() {
 }
 
 #[test]
-fn crash_circuit_breaker_event_is_terminal_but_stale_or_unbounded_events_are_not() {
+fn crash_circuit_breaker_event_is_terminal_and_any_blocked_failed_run_is_retryable() {
     let payload = serde_json::json!({
         "task": {"id":"task-1", "title":"Plan", "status":"blocked", "assignee":"planner",
                  "created_by":"pip-controller", "body":"{}", "max_retries":1},
@@ -178,13 +178,52 @@ fn crash_circuit_breaker_event_is_terminal_but_stale_or_unbounded_events_are_not
         }
         let runner = FakeRunner::default();
         runner.output(&value.to_string());
-        assert!(
-            matches!(
-                reader(runner).show_completed_result("pip-mdk", "task-1"),
-                Err(HermesError::IncompleteTask)
-            ),
-            "accepted {mutation}"
-        );
+        let result = reader(runner).show_completed_result("pip-mdk", "task-1");
+        // A blocked task never runs again by itself. Whatever the exact breaker
+        // shape, a blocked task whose last run failed is a retryable failure,
+        // never an indefinite wait. A task that is not blocked is still running.
+        if mutation == "ready" {
+            assert!(
+                matches!(result, Err(HermesError::IncompleteTask)),
+                "{mutation}"
+            );
+        } else {
+            assert!(
+                matches!(result, Err(HermesError::RetryLimitReached)),
+                "{mutation}: {result:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_worker_blocked_task_reports_its_reason_instead_of_waiting_forever() {
+    for (events, expected) in [
+        (
+            serde_json::json!([{"kind":"claimed","payload":{}},{"kind":"blocked","payload":{"reason":"issue body is missing from the evidence bundle"}}]),
+            "issue body is missing from the evidence bundle",
+        ),
+        (
+            serde_json::json!([{"kind":"blocked","payload":{"message":"cannot run tests without scratch"}}]),
+            "cannot run tests without scratch",
+        ),
+        (
+            serde_json::json!([]),
+            "the worker blocked the task without a reason",
+        ),
+    ] {
+        let payload = serde_json::json!({
+            "task": {"id":"task-1", "title":"Plan", "status":"blocked", "assignee":"planner",
+                     "created_by":"pip-controller", "body":"{}", "max_retries":1},
+            "runs": [{"outcome":"blocked", "profile":"planner", "metadata":{}}],
+            "events": events,
+        });
+        let runner = FakeRunner::default();
+        runner.output(&payload.to_string());
+        match reader(runner).show_completed_result("pip-mdk", "task-1") {
+            Err(HermesError::WorkerBlocked(reason)) => assert_eq!(reason, expected),
+            other => panic!("expected a worker block, got {other:?}"),
+        }
     }
 }
 
