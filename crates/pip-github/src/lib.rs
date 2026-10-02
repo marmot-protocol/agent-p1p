@@ -18,6 +18,7 @@ pub use write::{
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use hmac::{Hmac, KeyInit, Mac};
@@ -164,6 +165,8 @@ pub enum GitHubError {
     DuplicateOwnership,
     OwnershipConflict,
     MutationDisabled,
+    /// GitHub throttled the request; the value is its reset time (unix seconds).
+    RateLimited(u64),
     Transport(String),
 }
 
@@ -198,6 +201,12 @@ impl fmt::Display for GitHubError {
                 formatter.write_str("GitHub object has a Pip marker from an unexpected actor")
             }
             Self::MutationDisabled => formatter.write_str("GitHub mutation is disabled by policy"),
+            Self::RateLimited(reset) => {
+                write!(
+                    formatter,
+                    "GitHub rate limit reached until unix time {reset}"
+                )
+            }
             Self::Transport(error) => write!(formatter, "GitHub transport failed: {error}"),
         }
     }
@@ -789,12 +798,69 @@ struct GraphqlPageInfo {
     end_cursor: Option<String>,
 }
 
+/// Below this many remaining requests the controller stops reading until reset.
+pub const RATE_LIMIT_FLOOR: u64 = 200;
+
+/// The most recent rate-limit headers GitHub returned to this reader.
+#[derive(Debug, Default)]
+struct RateLimit {
+    known: AtomicBool,
+    remaining: AtomicU64,
+    reset: AtomicU64,
+}
+
+impl RateLimit {
+    fn observe(&self, headers: &BTreeMap<String, String>) {
+        let number = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|value| value.trim().parse().ok())
+        };
+        if let (Some(remaining), Some(reset)) =
+            (number("x-ratelimit-remaining"), number("x-ratelimit-reset"))
+        {
+            self.remaining.store(remaining, Ordering::Relaxed);
+            self.reset.store(reset, Ordering::Relaxed);
+            self.known.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Maps a throttled response to `RateLimited`, recording its reset time.
+fn throttled(response: &ReadResponse, limit: &RateLimit) -> Option<GitHubError> {
+    if !matches!(response.status, 403 | 429) {
+        return None;
+    }
+    let header = |name: &str| {
+        response
+            .headers
+            .get(name)
+            .and_then(|value| value.trim().parse::<u64>().ok())
+    };
+    let exhausted = header("x-ratelimit-remaining") == Some(0);
+    let retry_after = header("retry-after");
+    if !exhausted && retry_after.is_none() {
+        return None;
+    }
+    let reset = header("x-ratelimit-reset").unwrap_or_else(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |now| now.as_secs())
+            .saturating_add(retry_after.unwrap_or(60))
+    });
+    limit.remaining.store(0, Ordering::Relaxed);
+    limit.reset.store(reset, Ordering::Relaxed);
+    limit.known.store(true, Ordering::Relaxed);
+    Some(GitHubError::RateLimited(reset))
+}
+
 pub struct GitHubReader<T> {
     transport: T,
     base_url: String,
     token: String,
     max_response_bytes: usize,
     max_pages: usize,
+    rate_limit: RateLimit,
 }
 
 impl<T: ReadTransport> GitHubReader<T> {
@@ -820,7 +886,19 @@ impl<T: ReadTransport> GitHubReader<T> {
             token,
             max_response_bytes,
             max_pages,
+            rate_limit: RateLimit::default(),
         })
+    }
+
+    /// When GitHub's remaining request budget is nearly spent, the time it
+    /// resets. Callers should defer non-essential reads until then.
+    pub fn rate_limited_until(&self, now: u64) -> Option<u64> {
+        let limit = &self.rate_limit;
+        let reset = limit.reset.load(Ordering::Relaxed);
+        (limit.known.load(Ordering::Relaxed)
+            && limit.remaining.load(Ordering::Relaxed) < RATE_LIMIT_FLOOR
+            && reset > now)
+            .then_some(reset)
     }
 
     pub fn discover_open_issues(
@@ -1303,6 +1381,10 @@ impl<T: ReadTransport> GitHubReader<T> {
             body: Vec::new(),
             max_bytes: self.max_response_bytes,
         })?;
+        self.rate_limit.observe(&response.headers);
+        if let Some(error) = throttled(&response, &self.rate_limit) {
+            return Err(error);
+        }
         if !(200..300).contains(&response.status) {
             return Err(GitHubError::HttpStatus(response.status));
         }
@@ -1330,6 +1412,10 @@ impl<T: ReadTransport> GitHubReader<T> {
             body,
             max_bytes: self.max_response_bytes,
         })?;
+        self.rate_limit.observe(&response.headers);
+        if let Some(error) = throttled(&response, &self.rate_limit) {
+            return Err(error);
+        }
         if !(200..300).contains(&response.status) {
             return Err(GitHubError::HttpStatus(response.status));
         }

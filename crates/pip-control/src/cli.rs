@@ -758,34 +758,19 @@ where
                 )
                 .map_err(|error| CliError::Ledger(error.to_string()))?;
         let scope = crate::RepositoryScope::case(&case_policy, &case.case_key);
-        let takeover = crate::reconcile_takeover_once(&reader, scope, &mut store, now);
-        let authorization = crate::reconcile_active_authorization(&reader, scope, &mut store, now);
-        let bounds = crate::enforce_operational_bounds(&mut store, scope, now);
-        // Errors are observations, never authorization. Keep collection and unrelated
-        // capabilities available, but fail closed when a prerequisite cannot be checked.
-        let advancement_authorized = authorization
-            .as_ref()
-            .is_ok_and(|state| state.is_authorized())
-            && takeover.is_ok()
-            && bounds.is_ok();
-        // A resume may proceed when the only blocker is the policy change it
-        // fixes by rebinding the case to the current policy.
-        let resume_authorized = takeover.is_ok()
-            && authorization.as_ref().is_ok_and(|state| match state {
-                crate::ActiveAuthorization::Authorized { .. } => true,
-                crate::ActiveAuthorization::Blocked { cases } => cases.iter().all(|blocked| {
-                    blocked.error.is_none()
-                        && blocked
-                            .blockers
-                            .iter()
-                            .all(|blocker| blocker == "POLICY_REVISION_MISMATCH")
-                }),
-            });
+        if let Some(reset_at) = reader.rate_limited_until(now) {
+            // Near GitHub's rate limit: leave this case untouched until reset
+            // rather than turn throttled reads into failed checks.
+            case_reports.push(json!({
+                "case_key": case.case_key, "ok": true,
+                "rate_limited_until": reset_at,
+            }));
+            continue;
+        }
+        let parked = pip_store::PARKED_STATES.contains(&case.state.as_str());
         // Commands normally arrive by webhook; read a parked case's comments
         // now and then in case a delivery never arrived.
-        let control_poll = (now % crate::COMMAND_POLL_SECONDS < 30
-            && pip_store::PARKED_STATES.contains(&case.state.as_str()))
-        .then(|| {
+        let control_poll = (parked && now % crate::COMMAND_POLL_SECONDS < 60).then(|| {
             cycle_observation(crate::poll_control_commands(
                 &reader,
                 &mut store,
@@ -793,6 +778,48 @@ where
                 &case.case_key,
             ))
         });
+        // A parked case does nothing until a human acts, so its GitHub
+        // authorization and takeover are only checked when a command arrives.
+        let idle_parked = parked
+            && store
+                .pending_control_commands(policy.repository.id, Some(&case.case_key))
+                .map_err(|error| CliError::Ledger(error.to_string()))?
+                .is_empty();
+        let checks = (!idle_parked).then(|| {
+            (
+                crate::reconcile_takeover_once(&reader, scope, &mut store, now),
+                crate::reconcile_active_authorization(&reader, scope, &mut store, now),
+            )
+        });
+        let bounds = crate::enforce_operational_bounds(&mut store, scope, now);
+        let (takeover_ok, authorized, resume_authorized, authorization_has_errors) = match &checks {
+            Some((takeover, authorization)) => (
+                takeover.is_ok(),
+                authorization
+                    .as_ref()
+                    .is_ok_and(|state| state.is_authorized()),
+                // A resume may proceed when the only blocker is the policy
+                // change it fixes by rebinding the case to the current policy.
+                takeover.is_ok()
+                    && authorization.as_ref().is_ok_and(|state| match state {
+                        crate::ActiveAuthorization::Authorized { .. } => true,
+                        crate::ActiveAuthorization::Blocked { cases } => {
+                            cases.iter().all(|blocked| {
+                                blocked.error.is_none()
+                                    && blocked
+                                        .blockers
+                                        .iter()
+                                        .all(|blocker| blocker == "POLICY_REVISION_MISMATCH")
+                            })
+                        }
+                    }),
+                authorization.as_ref().is_ok_and(|state| state.has_errors()),
+            ),
+            None => (true, false, false, false),
+        };
+        // Errors are observations, never authorization. Keep collection and unrelated
+        // capabilities available, but fail closed when a prerequisite cannot be checked.
+        let advancement_authorized = authorized && takeover_ok && bounds.is_ok();
         let control = cycle_observation(crate::apply_control_commands_once(
             &reader,
             &writer,
@@ -804,9 +831,16 @@ where
                 authorized: resume_authorized,
             },
         ));
-        let takeover = cycle_observation(takeover);
-        let authorization_has_errors = authorization.as_ref().is_ok_and(|state| state.has_errors());
-        let authorization = cycle_observation(authorization);
+        let (takeover, authorization) = match checks {
+            Some((takeover, authorization)) => (
+                cycle_observation(takeover),
+                cycle_observation(authorization),
+            ),
+            None => {
+                let skipped = json!({"result": "skipped_while_parked"});
+                (skipped.clone(), skipped)
+            }
+        };
         let bounds = cycle_observation(bounds);
         let work_authorized = advancement_authorized && workspace_ready;
         if work_authorized && !conversation_pending {

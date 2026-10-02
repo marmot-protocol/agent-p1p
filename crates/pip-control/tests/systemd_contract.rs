@@ -72,7 +72,7 @@ fn staged_active_controller_template_uses_a_dedicated_shared_hermes_root() {
     assert!(!service.contains("github-reviewer-general.token"));
     assert!(!service.contains("github-reviewer-secperf.token"));
     assert!(!service.contains("/home/jeff"));
-    assert!(timer.contains("OnUnitInactiveSec=15s"));
+    assert!(timer.contains("OnUnitInactiveSec=30s"));
     assert!(!timer.contains("OnUnitActiveSec="));
 }
 

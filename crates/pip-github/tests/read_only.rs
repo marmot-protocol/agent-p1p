@@ -696,3 +696,42 @@ fn issue_comment_evidence_is_bound_to_numeric_actor_issue_and_content_digest() {
         Err(GitHubError::InvalidIdentity)
     ));
 }
+
+fn limited(status: u16, remaining: &str, reset: &str, body: &str) -> ReadResponse {
+    ReadResponse {
+        status,
+        headers: BTreeMap::from([
+            ("x-ratelimit-remaining".into(), remaining.into()),
+            ("x-ratelimit-reset".into(), reset.into()),
+        ]),
+        body: body.as_bytes().to_vec(),
+    }
+}
+
+#[test]
+fn the_reader_tracks_rate_limit_headroom_and_types_throttling() {
+    let transport = FakeTransport::default();
+    transport.push(limited(200, "4000", "2000", r#"{"login":"pip","id":7}"#));
+    transport.push(limited(200, "50", "2000", r#"{"login":"pip","id":7}"#));
+    transport.push(limited(
+        403,
+        "0",
+        "2100",
+        r#"{"message":"API rate limit exceeded"}"#,
+    ));
+    let reader = reader(transport);
+    assert_eq!(reader.rate_limited_until(1_000), None);
+
+    reader.read_actor_login(7).unwrap();
+    assert_eq!(reader.rate_limited_until(1_000), None);
+    // Little headroom left: pause until GitHub's reset.
+    reader.read_actor_login(7).unwrap();
+    assert_eq!(reader.rate_limited_until(1_000), Some(2_000));
+    assert_eq!(reader.rate_limited_until(2_000), None);
+
+    assert_eq!(
+        reader.read_actor_login(7),
+        Err(GitHubError::RateLimited(2_100))
+    );
+    assert_eq!(reader.rate_limited_until(1_000), Some(2_100));
+}
