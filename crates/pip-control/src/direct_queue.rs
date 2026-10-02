@@ -694,13 +694,17 @@ fn ingest_result<'a>(
             if let Some(cause) = outage_cause.as_deref()
                 && !detached_observer
             {
-                store.record_direct_unavailability_with_cause(
-                    attempt_id,
-                    &attempt.lease_owner,
-                    now,
-                    &error,
-                    cause,
-                )?;
+                // An attempt already closed (for example by lease expiry) has
+                // its outage recorded; a late report only needs archiving.
+                if attempt.status == DirectAttemptStatus::Running {
+                    store.record_direct_unavailability_with_cause(
+                        attempt_id,
+                        &attempt.lease_owner,
+                        now,
+                        &error,
+                        cause,
+                    )?;
+                }
                 queue.archive(attempt_id)?;
                 return Ok(DirectQueueCycle::Failed { attempt_id });
             }

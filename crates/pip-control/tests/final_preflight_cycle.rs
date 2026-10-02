@@ -1281,6 +1281,7 @@ fn accepted_source() -> FixtureSource {
                 conclusion: Some(CheckConclusion::Success),
                 started_at: None,
                 completed_at: None,
+                check_suite_id: None,
             }],
             commit_status_state: CommitStatusState::Pending,
             commit_statuses: Vec::new(),

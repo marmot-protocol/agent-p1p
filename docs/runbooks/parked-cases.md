@@ -3,7 +3,9 @@
 A case parks when Pip needs a human: it ran out of a budget, could not run for
 a long time, a worker reported it was blocked, a decision is open, or nothing
 happened for too long. Parked states are `ESCALATED`, `BLOCKED` and
-`WAITING_HUMAN`. A parked case does no work and does not hold an issue slot.
+`WAITING_HUMAN`. A parked case does no work and does not hold an issue slot. Pip still checks
+its issue and PR every few minutes, so a merge, closure or label removal is
+recorded.
 
 ## What Pip tells you
 
@@ -38,7 +40,8 @@ The flaky integration job is fixed on master; rebase onto it.
   it grants three more.
 - `replan` starts again from planning.
 - `abandon` stops the case. Removing and re-adding the authorization label later
-  restarts it, keeping its PR.
+  restarts it from planning, keeping its PR and its history (including spent
+  remediation rounds; a later `resume` grants more if it runs out).
 
 Edited comments and comments written before the pause are ignored. Pip replies
 with where it resumed, or says it is queued if the issue limit is full.

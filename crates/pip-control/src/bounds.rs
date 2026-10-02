@@ -116,7 +116,12 @@ pub fn enforce_operational_bounds<'a>(
                 },
             );
         }
-        let last_activity = store.last_case_activity(&case.case_key)?;
+        // Time while the controller was paused or down is not the case's.
+        let last_activity = store.last_case_activity(&case.case_key)?.max(
+            store
+                .controller_running_since(case.repository_id)?
+                .unwrap_or(0),
+        );
         let stalled = now.saturating_sub(last_activity);
         let pending = store.pending_effect_types(&case.case_key)?;
         // Waiting for a worker slot that other cases are using is queueing,

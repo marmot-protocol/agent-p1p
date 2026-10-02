@@ -310,3 +310,33 @@ fn an_incompatible_policy_change_parks_the_case_instead_of_freezing_it() {
         "ESCALATED"
     );
 }
+
+#[test]
+fn time_the_controller_was_paused_does_not_count_as_a_stall() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path().join("ledger.db")).unwrap();
+    let mut policy = policy();
+    policy.max_case_elapsed_seconds = 7 * 86_400;
+    create_case(&mut store, 100);
+    // The controller was paused for a day and has just started again.
+    let restarted = 100 + 86_400;
+    store
+        .record_controller_cycle(policy.repository.id, restarted)
+        .unwrap();
+    assert_eq!(
+        enforce_operational_bounds(&mut store, &policy, restarted + 60).unwrap(),
+        OperationalBoundsCycle::Idle
+    );
+    assert!(matches!(
+        enforce_operational_bounds(
+            &mut store,
+            &policy,
+            restarted + policy.stall_limit_seconds()
+        )
+        .unwrap(),
+        OperationalBoundsCycle::Escalated {
+            bound: OperationalBound::NoProgress,
+            ..
+        }
+    ));
+}

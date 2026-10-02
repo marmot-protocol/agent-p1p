@@ -234,3 +234,26 @@ fn activity_pending_work_and_finding_windows_follow_the_ledger() {
     // A resume starts a fresh age window.
     assert_eq!(store.case_work_started_at(CASE).unwrap(), Some(500));
 }
+
+#[test]
+fn the_controller_heartbeat_restarts_after_a_gap() {
+    let (_directory, mut store) = open();
+    assert_eq!(store.controller_running_since(984_321).unwrap(), None);
+    assert_eq!(
+        store.record_controller_cycle(984_321, 1_000).unwrap(),
+        1_000
+    );
+    assert_eq!(
+        store.record_controller_cycle(984_321, 1_030).unwrap(),
+        1_000
+    );
+    let resumed = 1_030 + pip_store::CONTROLLER_GAP_SECONDS + 1;
+    assert_eq!(
+        store.record_controller_cycle(984_321, resumed).unwrap(),
+        resumed
+    );
+    assert_eq!(
+        store.controller_running_since(984_321).unwrap(),
+        Some(resumed)
+    );
+}

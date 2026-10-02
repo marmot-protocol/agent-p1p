@@ -145,6 +145,27 @@ impl Store {
         })
     }
 
+    /// Which attempt at its job a projection is (the original is attempt 1).
+    pub fn projection_attempt(&self, projection_id: &str) -> Result<u32> {
+        let desired: String = self
+            .connection
+            .query_row(
+                "SELECT desired_json FROM task_projections WHERE projection_id = ?1",
+                [projection_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::InvalidInput("unknown task projection"))?;
+        let desired: Value = serde_json::from_str(&desired)?;
+        if desired.get(RETRY_OF).is_none() {
+            return Ok(1);
+        }
+        desired["attempt"]
+            .as_u64()
+            .and_then(|attempt| u32::try_from(attempt).ok())
+            .ok_or(StoreError::InvalidInput("invalid retry projection"))
+    }
+
     /// Retry projections whose cooldown has passed and that have no task yet.
     pub fn pending_projection_retries(
         &self,

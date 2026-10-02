@@ -638,6 +638,7 @@ fn check(conclusion: CheckConclusion) -> CheckRunSnapshot {
         conclusion: Some(conclusion),
         started_at: None,
         completed_at: None,
+        check_suite_id: None,
     }
 }
 

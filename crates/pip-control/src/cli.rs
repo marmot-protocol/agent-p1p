@@ -698,6 +698,11 @@ where
     };
     let mut store = Store::open(required(&options, "--database")?)
         .map_err(|error| CliError::Ledger(error.to_string()))?;
+    // Mark this active cycle; the stall watchdog ignores time the
+    // controller spent paused or down.
+    store
+        .record_controller_cycle(policy.repository.id, now)
+        .map_err(|error| CliError::Ledger(error.to_string()))?;
     let workspace_lifecycle = crate::reconcile_workspace_lifecycle_once(&mut store, &policy, now);
     let workspace_ready = workspace_lifecycle.as_ref().is_ok_and(|state| state.ready);
     let workspace_lifecycle = cycle_observation(workspace_lifecycle);
@@ -768,9 +773,10 @@ where
             continue;
         }
         let parked = pip_store::PARKED_STATES.contains(&case.state.as_str());
+        let poll_tick = now % crate::COMMAND_POLL_SECONDS < 60;
         // Commands normally arrive by webhook; read a parked case's comments
         // now and then in case a delivery never arrived.
-        let control_poll = (parked && now % crate::COMMAND_POLL_SECONDS < 60).then(|| {
+        let control_poll = (parked && poll_tick).then(|| {
             cycle_observation(crate::poll_control_commands(
                 &reader,
                 &mut store,
@@ -778,16 +784,44 @@ where
                 &case.case_key,
             ))
         });
-        // A parked case does nothing until a human acts, so its GitHub
-        // authorization and takeover are only checked when a command arrives.
+        // A parked case does nothing until a human acts. Check its GitHub
+        // authorization and takeover only when a command or real work (such
+        // as publishing the reviews that parked it) is pending, and otherwise
+        // at the poll cadence so a merge, closure or label removal is noticed.
         let idle_parked = parked
+            && !poll_tick
             && store
                 .pending_control_commands(policy.repository.id, Some(&case.case_key))
                 .map_err(|error| CliError::Ledger(error.to_string()))?
-                .is_empty();
+                .is_empty()
+            && store
+                .pending_effect_types(&case.case_key)
+                .map_err(|error| CliError::Ledger(error.to_string()))?
+                .iter()
+                .all(|effect| {
+                    matches!(
+                        effect.as_str(),
+                        "ESCALATE" | "HOLD_FOR_HUMAN" | "RECORD_BLOCK"
+                    )
+                });
+        // Takeover is judged under the policy the case accepted, so a policy
+        // change cannot make a paused case look invalid and block its resume.
+        let accepted_policy = if case_policy.revision == case.policy_revision {
+            None
+        } else {
+            store
+                .accepted_policy(case.repository_id, case.policy_revision)
+                .ok()
+                .and_then(|value| serde_json::to_vec(&value).ok())
+                .and_then(|bytes| crate::load_repository_policy(&bytes).ok())
+        };
+        let takeover_scope = crate::RepositoryScope::case(
+            accepted_policy.as_ref().unwrap_or(&case_policy),
+            &case.case_key,
+        );
         let checks = (!idle_parked).then(|| {
             (
-                crate::reconcile_takeover_once(&reader, scope, &mut store, now),
+                crate::reconcile_takeover_once(&reader, takeover_scope, &mut store, now),
                 crate::reconcile_active_authorization(&reader, scope, &mut store, now),
             )
         });

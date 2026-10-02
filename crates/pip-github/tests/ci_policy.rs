@@ -233,6 +233,7 @@ fn check(
         conclusion,
         started_at: None,
         completed_at: None,
+        check_suite_id: None,
     }
 }
 
@@ -245,4 +246,47 @@ fn status(id: u64, context: &str, state: CommitStatusState) -> CommitStatusSnaps
         created_at: "2026-08-20T00:00:00Z".into(),
         updated_at: "2026-08-20T00:01:00Z".into(),
     }
+}
+
+#[test]
+fn same_named_jobs_in_different_workflows_are_judged_separately() {
+    let mut failing = check(
+        1,
+        "test",
+        CheckStatus::Completed,
+        Some(CheckConclusion::Failure),
+    );
+    failing.check_suite_id = Some(10);
+    let mut passing = check(
+        2,
+        "test",
+        CheckStatus::Completed,
+        Some(CheckConclusion::Success),
+    );
+    passing.check_suite_id = Some(20);
+    let evaluated = evaluate_ci(
+        &evidence(vec![failing, passing], CommitStatusState::Success, vec![]),
+        &"b".repeat(40),
+        &[],
+    );
+    assert_eq!(evaluated.verdict, CiVerdict::Failed);
+    assert_eq!(evaluated.blockers, ["CHECK_FAILED:test"]);
+}
+
+#[test]
+fn a_queued_rerun_supersedes_the_failed_attempt_it_replaces() {
+    let mut failed = check(
+        1,
+        "test",
+        CheckStatus::Completed,
+        Some(CheckConclusion::Failure),
+    );
+    failed.started_at = Some("2026-08-20T00:00:00Z".into());
+    let rerun = check(2, "test", CheckStatus::Queued, None);
+    let evaluated = evaluate_ci(
+        &evidence(vec![failed, rerun], CommitStatusState::Success, vec![]),
+        &"b".repeat(40),
+        &["test".into()],
+    );
+    assert_eq!(evaluated.verdict, CiVerdict::Pending);
 }

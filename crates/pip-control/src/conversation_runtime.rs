@@ -472,7 +472,11 @@ fn handoff<S: IntakeSource, W: DispositionWriter>(
             "case head or plan changed during conversation; operator reassessment required".into(),
         );
     }
-    let bounded = case.remediation_round >= policy.max_remediation_rounds;
+    // Rounds a human granted on resume count, as they do in the ledger.
+    let bounded = case.remediation_round
+        >= policy
+            .max_remediation_rounds
+            .saturating_add(store.granted_remediation_rounds(&case.case_key)?);
     if state == CaseState::ShadowReady {
         let status = store.status(now)?;
         let active = status

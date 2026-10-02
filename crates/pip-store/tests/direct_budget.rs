@@ -131,9 +131,31 @@ fn an_expired_worker_lease_is_an_outage_not_a_work_failure() {
     let claimed = store.claim_effect("worker", 1000, 60).unwrap().unwrap();
     store.begin_direct_attempt(&claimed, "task", 1000).unwrap();
     // The worker died; another claim after lease expiry closes the attempt.
-    attempt(&mut store, "worker", 1100);
+    let second = attempt(&mut store, "worker", 1100);
     assert_eq!(store.direct_stage_failure_count(CASE).unwrap(), 0);
+    // The replacement is running, so there is no outage right now.
+    assert_eq!(store.direct_stage_outage(CASE).unwrap(), None);
+    // If it also cannot run, the outage dates from the expired lease.
+    store
+        .record_direct_unavailability(second, "worker", 1105, "network error")
+        .unwrap();
     let outage = store.direct_stage_outage(CASE).unwrap().unwrap();
-    assert_eq!(outage.cause, "LEASE_EXPIRED");
     assert_eq!(outage.since, 1100);
+    assert_eq!(outage.cause, "PROVIDER_UNAVAILABLE");
+}
+
+#[test]
+fn a_worker_that_starts_after_an_outage_ends_it() {
+    let (_directory, mut store) = open();
+    let first = attempt(&mut store, "worker", 1000);
+    store
+        .record_direct_unavailability(first, "worker", 1005, "status 503")
+        .unwrap();
+    assert_eq!(
+        store.direct_stage_outage(CASE).unwrap().unwrap().since,
+        1005
+    );
+    // The provider recovered and a long build is now running.
+    attempt(&mut store, "worker", 1100);
+    assert_eq!(store.direct_stage_outage(CASE).unwrap(), None);
 }

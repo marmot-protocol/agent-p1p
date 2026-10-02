@@ -326,6 +326,10 @@ pub struct CheckRunSnapshot {
     pub conclusion: Option<CheckConclusion>,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
+    /// The suite (for Actions, the workflow run) this attempt belongs to.
+    /// Re-runs stay in their suite; different workflows do not share one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub check_suite_id: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -452,12 +456,14 @@ pub fn evaluate_ci(
     }
     // A re-run supersedes earlier attempts of the same check, and a newer
     // status supersedes earlier ones for its context. Judge only the latest.
+    // Check run ids only increase, so the highest id is the latest attempt,
+    // including a queued re-run that has not started yet.
     let mut latest_checks = std::collections::BTreeMap::new();
     for check in &evidence.check_runs {
         latest_checks
-            .entry((check.app_id, check.name.as_str()))
+            .entry((check.app_id, check.check_suite_id, check.name.as_str()))
             .and_modify(|current: &mut &CheckRunSnapshot| {
-                if (&check.started_at, check.id) > (&current.started_at, current.id) {
+                if check.id > current.id {
                     *current = check;
                 }
             })
@@ -691,6 +697,13 @@ struct CheckRunDto {
     started_at: Option<String>,
     completed_at: Option<String>,
     app: AppDto,
+    #[serde(default)]
+    check_suite: Option<CheckSuiteDto>,
+}
+
+#[derive(Deserialize)]
+struct CheckSuiteDto {
+    id: u64,
 }
 
 #[derive(Deserialize)]
@@ -1139,6 +1152,7 @@ impl<T: ReadTransport> GitHubReader<T> {
                 conclusion: check.conclusion,
                 started_at: check.started_at,
                 completed_at: check.completed_at,
+                check_suite_id: check.check_suite.map(|suite| suite.id),
             });
         }
 

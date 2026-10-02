@@ -368,26 +368,28 @@ fn reject(
         Rejection::Failed(reason) => (reason.clone(), policy.max_provider_failures),
         Rejection::Blocked(reason) => (format!("worker blocked the task: {reason}"), 1),
     };
-    let outcome = store.reject_task_projection(
-        &projection.projection_id,
-        now,
-        &reason,
-        budget,
-        RETRY_COOLDOWN_SECONDS,
-    )?;
-    let attempts = match outcome {
-        ProjectionRejection::Retry {
-            projection_id,
-            attempt,
-        } => {
-            return Ok(ResultCycle::RetryScheduled {
+    let attempts = store.projection_attempt(&projection.projection_id)?;
+    if attempts < budget {
+        return match store.reject_task_projection(
+            &projection.projection_id,
+            now,
+            &reason,
+            budget,
+            RETRY_COOLDOWN_SECONDS,
+        )? {
+            ProjectionRejection::Retry {
+                projection_id,
+                attempt,
+            } => Ok(ResultCycle::RetryScheduled {
                 task_id: projection.task_id.clone(),
                 retry_projection: projection_id,
                 attempt,
-            });
-        }
-        ProjectionRejection::Exhausted { attempts } => attempts,
-    };
+            }),
+            ProjectionRejection::Exhausted { .. } => Err(ResultCycleError::InvalidProjection),
+        };
+    }
+    // Park before recording the rejection: a recorded rejection hides the
+    // projection, so a crash in between must not leave the case waiting.
     let blocked = matches!(rejection, Rejection::Blocked(_));
     crate::bounds::escalate_case_for_bound(
         store,
@@ -414,6 +416,13 @@ fn reject(
         },
     )
     .map_err(|error| ResultCycleError::MalformedResult(error.to_string()))?;
+    store.reject_task_projection(
+        &projection.projection_id,
+        now,
+        &reason,
+        budget,
+        RETRY_COOLDOWN_SECONDS,
+    )?;
     Ok(if blocked {
         ResultCycle::WorkerBlocked {
             task_id: projection.task_id.clone(),

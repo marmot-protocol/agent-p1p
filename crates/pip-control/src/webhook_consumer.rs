@@ -106,4 +106,4 @@ pub fn consume_webhook_spool_once<S: IntakeSource>(
 }
 
 /// How long a delivery may keep failing before it is set aside.
-pub const DEAD_LETTER_AFTER_SECONDS: u64 = 15 * 60;
+pub const DEAD_LETTER_AFTER_SECONDS: u64 = 6 * 60 * 60;

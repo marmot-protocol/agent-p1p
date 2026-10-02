@@ -16,7 +16,16 @@ CREATE TABLE IF NOT EXISTS control_commands (
     resolved_at INTEGER
 ) STRICT;
 CREATE INDEX IF NOT EXISTS control_commands_pending ON control_commands(repository_id, status, received_at);
+CREATE TABLE IF NOT EXISTS controller_heartbeats (
+    repository_id INTEGER PRIMARY KEY CHECK (repository_id > 0),
+    last_cycle_at INTEGER NOT NULL,
+    running_since INTEGER NOT NULL
+) STRICT;
 "#;
+
+/// A gap this long between active controller cycles means the controller was
+/// paused or down; time before it cannot count as a case being stuck.
+pub const CONTROLLER_GAP_SECONDS: u64 = 10 * 60;
 
 const MAX_GUIDANCE_BYTES: usize = 8 * 1024;
 
@@ -240,6 +249,53 @@ impl Store {
             |row| row.get(0),
         )?;
         Ok(value.map(unsigned).unwrap_or(0))
+    }
+
+    /// Records an active controller cycle and returns since when the
+    /// controller has been running without a long gap.
+    pub fn record_controller_cycle(&mut self, repository_id: u64, now: u64) -> Result<u64> {
+        self.ensure_writable()?;
+        let previous: Option<(i64, i64)> = self
+            .connection
+            .query_row(
+                "SELECT last_cycle_at, running_since FROM controller_heartbeats
+                 WHERE repository_id = ?1",
+                [sql_u64(repository_id)?],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let running_since = match previous {
+            Some((last, since)) if now.saturating_sub(unsigned(last)) <= CONTROLLER_GAP_SECONDS => {
+                unsigned(since)
+            }
+            _ => now,
+        };
+        self.connection.execute(
+            "INSERT INTO controller_heartbeats(repository_id, last_cycle_at, running_since)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(repository_id) DO UPDATE SET
+                 last_cycle_at = excluded.last_cycle_at,
+                 running_since = excluded.running_since",
+            params![
+                sql_u64(repository_id)?,
+                sql_u64(now)?,
+                sql_u64(running_since)?
+            ],
+        )?;
+        Ok(running_since)
+    }
+
+    /// Since when the controller has been running without a long gap.
+    pub fn controller_running_since(&self, repository_id: u64) -> Result<Option<u64>> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT running_since FROM controller_heartbeats WHERE repository_id = ?1",
+                [sql_u64(repository_id)?],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(unsigned))
     }
 
     /// Effect types still waiting to be delivered for a case.

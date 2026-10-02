@@ -29,7 +29,8 @@ mod dispatch_intents;
 mod reauthorization;
 mod task_results;
 pub use control::{
-    ControlCommand, ControlCommandInput, ControlCommandStatus, PARKED_STATES, ParkingEvent,
+    CONTROLLER_GAP_SECONDS, ControlCommand, ControlCommandInput, ControlCommandStatus,
+    PARKED_STATES, ParkingEvent,
 };
 pub use dispatch_intents::{CreateReservation, DispatchIntent, DispatchTransport};
 pub use projection_retry::{PendingProjection, ProjectionRejection};
@@ -2651,7 +2652,9 @@ impl Store {
     }
 
     /// The oldest uninterrupted execution outage on a pending direct work
-    /// effect: outages after the effect's latest real work attempt.
+    /// effect: outages after the latest attempt that actually ran (running,
+    /// failed or complete without an outage). A worker that is running now
+    /// therefore ends the outage.
     pub fn direct_stage_outage(&self, case_key: &str) -> Result<Option<DirectOutage>> {
         if case_key.trim().is_empty() {
             return Err(StoreError::InvalidInput("case key is required"));
@@ -2662,8 +2665,8 @@ impl Store {
              WHERE e.case_key = ?1 AND e.kind = 'DIRECT_RUNTIME_UNAVAILABLE'
                AND o.effect_type != 'RUN_DIRECT_OBSERVER'
                AND o.delivered_at IS NULL AND o.superseded_at IS NULL
-               AND e.observed_at >= COALESCE((SELECT MAX(a.completed_at) FROM direct_attempts a
-                   WHERE a.effect_id = o.effect_id AND a.status = 'FAILED'
+               AND e.observed_at > COALESCE((SELECT MAX(a.started_at) FROM direct_attempts a
+                   WHERE a.effect_id = o.effect_id
                      AND NOT EXISTS (SELECT 1 FROM evidence u
                          WHERE u.evidence_id = 'direct-unavailable:' || a.attempt_id
                            AND u.kind = 'DIRECT_RUNTIME_UNAVAILABLE')), 0)
