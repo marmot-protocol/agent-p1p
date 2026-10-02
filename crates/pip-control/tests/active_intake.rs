@@ -151,7 +151,7 @@ fn another_assignee_blocks_intake_even_alongside_pip() {
 }
 
 #[test]
-fn human_review_ready_releases_admission_but_other_nonterminal_states_do_not() {
+fn ready_and_parked_cases_release_admission_but_active_work_does_not() {
     for state in [
         "SHADOW_READY",
         "PLANNING",
@@ -192,7 +192,14 @@ fn human_review_ready_releases_admission_but_other_nonterminal_states_do_not() {
             reconcile_intake(&source(&[42, 43, 44]), &policy, &mut store, 100, false).unwrap();
             assert_eq!(
                 store.status(100).unwrap().cases.len(),
-                if state == "SHADOW_READY" { 2 } else { 1 },
+                if matches!(
+                    state,
+                    "SHADOW_READY" | "WAITING_HUMAN" | "BLOCKED" | "ESCALATED"
+                ) {
+                    2
+                } else {
+                    1
+                },
                 "{state} same_repository={same_repository}"
             );
             assert_eq!(

@@ -345,17 +345,7 @@ fn reconcile_validated_evidence<S: IntakeSource>(
     admission_lock
         .lock()
         .map_err(|e| ActiveIntakeError::Coordination(e.to_string()))?;
-    let mut case_policy = policy.clone();
-    case_policy.conversations_enabled = false;
-    case_policy.conversation_model = None;
-    let policy_value = serde_json::to_value(&case_policy)
-        .map_err(|error| ActiveIntakeError::Serialization(error.to_string()))?;
-    let policy_result = store.record_policy(&PolicyInput {
-        repository_id: policy.repository.id,
-        revision: policy.revision,
-        accepted_at: observed_at,
-        payload: policy_value,
-    })?;
+    let policy_result = record_case_policy(store, policy, observed_at)?;
     let mut mutation_count = u64::from(policy_result == ApplyResult::Applied);
     let mut candidates = Vec::with_capacity(validated_evidence.len());
     for mut evidence in validated_evidence {
@@ -616,11 +606,38 @@ fn case_id(policy: &RepositoryPolicy, issue_number: u64) -> Result<CaseId, Activ
     ))
 }
 
+/// Records the live policy as a case policy: operational switches such as the
+/// conversation inbox are not part of what a case accepted.
+pub(crate) fn record_case_policy(
+    store: &mut Store,
+    policy: &RepositoryPolicy,
+    observed_at: u64,
+) -> Result<ApplyResult, ActiveIntakeError> {
+    let mut case_policy = policy.clone();
+    case_policy.conversations_enabled = false;
+    case_policy.conversation_model = None;
+    let policy_value = serde_json::to_value(&case_policy)
+        .map_err(|error| ActiveIntakeError::Serialization(error.to_string()))?;
+    Ok(store.record_policy(&PolicyInput {
+        repository_id: policy.repository.id,
+        revision: policy.revision,
+        accepted_at: observed_at,
+        payload: policy_value,
+    })?)
+}
+
 pub(crate) fn active_state(state: &str) -> bool {
-    // Readiness is still tracked for merges and feedback, but is no longer
-    // work in progress. Unknown and held states remain conservative.
+    // Readiness is still tracked for merges and feedback, and a parked case
+    // waits for a human; neither is work in progress, so neither holds a slot.
+    // A resume re-acquires capacity. Unknown states remain conservative.
     !matches!(
         state,
-        "SHADOW_READY" | "COMPLETED" | "ABANDONED" | "TAKEN_OVER"
+        "SHADOW_READY"
+            | "COMPLETED"
+            | "ABANDONED"
+            | "TAKEN_OVER"
+            | "ESCALATED"
+            | "BLOCKED"
+            | "WAITING_HUMAN"
     )
 }

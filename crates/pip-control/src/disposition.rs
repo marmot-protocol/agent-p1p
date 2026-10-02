@@ -9,13 +9,11 @@ use pip_store::{ApplyResult, EvidenceInput, Store, StoreError, StoredCase};
 use serde::Serialize;
 use serde_json::json;
 
-const LOCAL_EFFECTS: [&str; 4] = [
-    "RECORD_COMPLETION",
-    "RECORD_ABANDONMENT",
-    "RECORD_BLOCK",
-    "RECORD_TAKEOVER",
-];
-const COMMENT_EFFECTS: [&str; 3] = ["HOLD_FOR_HUMAN", "NOTIFY_SHADOW_READY", "ESCALATE"];
+const LOCAL_EFFECTS: [&str; 3] = ["RECORD_COMPLETION", "RECORD_ABANDONMENT", "RECORD_TAKEOVER"];
+/// Comments that only tell a human what happened. They post even while
+/// advancement is blocked: a parked case must always say why it stopped.
+const INFORMATIONAL_EFFECTS: [&str; 3] = ["HOLD_FOR_HUMAN", "ESCALATE", "RECORD_BLOCK"];
+const COMMENT_EFFECTS: [&str; 1] = ["NOTIFY_SHADOW_READY"];
 
 pub trait DispositionWriter {
     fn ensure_comment(&self, spec: &CommentSpec) -> Result<MutationResult, GitHubError>;
@@ -127,14 +125,11 @@ pub fn consume_disposition_once<'a, S: crate::FinalPreflightSource, W: Dispositi
 ) -> Result<DispositionCycle, DispositionError> {
     let scope = scope.into();
     let policy = scope.policy;
-    let allowed = if authorization_valid {
-        LOCAL_EFFECTS
-            .into_iter()
-            .chain(COMMENT_EFFECTS)
-            .collect::<Vec<_>>()
-    } else {
-        LOCAL_EFFECTS.to_vec()
-    };
+    let allowed = LOCAL_EFFECTS
+        .into_iter()
+        .chain(INFORMATIONAL_EFFECTS)
+        .chain(COMMENT_EFFECTS.into_iter().filter(|_| authorization_valid))
+        .collect::<Vec<_>>();
     let Some(claimed) = scope.claim(store, owner, now, lease_seconds, allowed.as_slice())? else {
         return Ok(if authorization_valid {
             DispositionCycle::Idle
@@ -145,8 +140,10 @@ pub fn consume_disposition_once<'a, S: crate::FinalPreflightSource, W: Dispositi
     let case = store
         .case(&claimed.case_key)?
         .ok_or(DispositionError::InvalidCase)?;
+    let informational = INFORMATIONAL_EFFECTS.contains(&claimed.effect_type.as_str());
+    // A policy change parks a case; explaining that must not need the old policy.
     if case.repository_id != policy.repository.id
-        || case.policy_revision != policy.revision
+        || (case.policy_revision != policy.revision && !informational)
         || case.state_revision != claimed.state_revision
     {
         store.release_effect(&claimed.effect_id, owner)?;
@@ -207,6 +204,14 @@ pub fn consume_disposition_once<'a, S: crate::FinalPreflightSource, W: Dispositi
     };
     let (target_number, body) = if let Some(pr) = takeover_notice {
         (pr, "This PR was marked ready for review before I finished my checks, so I’m handing it over to you. I won’t start further automated builds or reviews for this PR. Please finish the remaining review and CI checks before merging.".into())
+    } else if informational {
+        match human_notice(source, store, policy, &case) {
+            Ok(notice) => notice,
+            Err(error) => {
+                store.release_effect(&claimed.effect_id, owner)?;
+                return Err(error);
+            }
+        }
     } else {
         disposition_comment(&case, &claimed.effect_type)?
     };
@@ -434,18 +439,26 @@ fn disposition_comment(
                 ),
             ))
         }
-        "HOLD_FOR_HUMAN" => Ok((
-            case.issue_number,
-            format!(
-                "## Pip is waiting for a human decision\n\n{identity} cannot continue until the issue's authoritative human resolves the recorded scope or product decision."
-            ),
-        )),
-        "ESCALATE" => Ok((
-            case.issue_number,
-            format!(
-                "## Pip workflow escalated\n\n{identity} reached a configured remediation or review bound. Automation is held for human disposition."
-            ),
-        )),
         _ => Err(DispositionError::InvalidCase),
     }
+}
+
+/// Park comments: what stopped and how a trusted human can act.
+fn human_notice<S: crate::FinalPreflightSource>(
+    source: &S,
+    store: &Store,
+    policy: &crate::RepositoryPolicy,
+    case: &StoredCase,
+) -> Result<(u64, String), DispositionError> {
+    let login = policy
+        .github
+        .automation_actor_id
+        .and_then(|id| source.actor_login(id).ok());
+    let park = store
+        .parking_event(&case.case_key)?
+        .ok_or(DispositionError::InvalidCase)?;
+    Ok((
+        case.issue_number,
+        crate::park::comment(&park, case, login.as_deref()),
+    ))
 }

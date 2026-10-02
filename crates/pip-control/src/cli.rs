@@ -768,6 +768,30 @@ where
             .is_ok_and(|state| state.is_authorized())
             && takeover.is_ok()
             && bounds.is_ok();
+        // A resume may proceed when the only blocker is the policy change it
+        // fixes by rebinding the case to the current policy.
+        let resume_authorized = takeover.is_ok()
+            && authorization.as_ref().is_ok_and(|state| match state {
+                crate::ActiveAuthorization::Authorized { .. } => true,
+                crate::ActiveAuthorization::Blocked { cases } => cases.iter().all(|blocked| {
+                    blocked.error.is_none()
+                        && blocked
+                            .blockers
+                            .iter()
+                            .all(|blocker| blocker == "POLICY_REVISION_MISMATCH")
+                }),
+            });
+        let control = cycle_observation(crate::apply_control_commands_once(
+            &reader,
+            &writer,
+            &mut store,
+            &crate::ResumeContext {
+                policy: &policy,
+                case_key: &case.case_key,
+                now,
+                authorized: resume_authorized,
+            },
+        ));
         let takeover = cycle_observation(takeover);
         let authorization_has_errors = authorization.as_ref().is_ok_and(|state| state.has_errors());
         let authorization = cycle_observation(authorization);
@@ -873,6 +897,7 @@ where
         ));
         let mut case_report = json!({
             "case_key": case.case_key,
+            "control": control,
             "worker_result": result,
             "worker_retry": worker_retry,
             "direct_worker": direct_worker,

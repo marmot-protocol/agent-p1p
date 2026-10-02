@@ -297,8 +297,6 @@ pub enum Effect {
     RecordBlock,
     RecordTakeover,
     Escalate,
-    /// Tell the human who resumed a case where it continues.
-    AcknowledgeResume,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -391,7 +389,7 @@ pub fn transition(
             _ => return Err(TransitionError::InvalidTransition { state, event }),
         };
         let target = context.resume_target.unwrap_or(state);
-        return decision(target, &[dispatch, Effect::AcknowledgeResume]);
+        return decision(target, &[dispatch]);
     }
 
     use CaseState as State;

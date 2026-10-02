@@ -19,6 +19,7 @@ mod draft_pr;
 mod final_preflight;
 mod follow_up_recovery;
 mod native_review_retry;
+mod park;
 pub use native_review_retry::authorize_native_review_retry;
 pub use native_review_retry::authorize_review_coordination_recovery;
 mod hermes_scratch;
@@ -36,6 +37,7 @@ mod publication_retry;
 mod publication_text;
 mod release;
 mod results;
+mod resume;
 mod review_workspace;
 mod reviews;
 mod runtime;
@@ -108,6 +110,9 @@ pub use results::{
     RETRY_COOLDOWN_SECONDS, ResultCycle, ResultCycleError, RetryProjectionCycle,
     ingest_completed_once, ingest_completed_once_with, project_task_retries,
     reconcile_completed_once_with,
+};
+pub use resume::{
+    RESUME_GRANTED_ROUNDS, ResumeContext, ResumeCycle, ResumeError, apply_control_commands_once,
 };
 pub use reviews::{
     ReviewPublicationCycle, ReviewPublicationError, ReviewWriter, publish_reviews_once,

@@ -7,10 +7,23 @@ use pip_github::{CommentSpec, GitHubError, MutationResult};
 use pip_store::{EffectInput, EventInput, NewCase, Store, TransitionInput};
 use serde_json::{Value, json};
 
+/// Park comments only look up the bot's login to tell humans what to type.
 struct NoReads;
 impl pip_github::ReadTransport for NoReads {
-    fn get(&self, _: pip_github::ReadRequest) -> Result<pip_github::ReadResponse, GitHubError> {
-        panic!("non-ready dispositions do not need readiness reads")
+    fn get(
+        &self,
+        request: pip_github::ReadRequest,
+    ) -> Result<pip_github::ReadResponse, GitHubError> {
+        assert!(
+            request.url.contains("/user/"),
+            "non-ready dispositions do not need readiness reads"
+        );
+        let id = request.url.rsplit('/').next().unwrap();
+        Ok(pip_github::ReadResponse {
+            status: 200,
+            headers: Default::default(),
+            body: format!(r#"{{"login":"agent-p1p","id":{id}}}"#).into_bytes(),
+        })
     }
 }
 
@@ -104,13 +117,22 @@ fn waiting_human_publishes_one_issue_comment_and_records_evidence() {
     let comments = writer.comments.borrow();
     assert_eq!(comments.len(), 1);
     assert_eq!(comments[0].issue_number, 1240);
-    assert!(comments[0].body.contains("human decision"));
+    assert!(
+        comments[0].body.contains("Pip paused this case"),
+        "{}",
+        comments[0].body
+    );
+    assert!(
+        comments[0].body.contains("`@agent-p1p resume`"),
+        "{}",
+        comments[0].body
+    );
     assert_eq!(store.evidence_count().unwrap(), 1);
     assert_eq!(store.status(100).unwrap().outbox_delivered, 1);
 }
 
 #[test]
-fn invalid_authorization_leaves_comment_effect_unclaimed() {
+fn a_paused_case_explains_itself_even_when_advancement_is_blocked() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = disposition_store(
         directory.path().join("ledger.db"),
@@ -118,7 +140,7 @@ fn invalid_authorization_leaves_comment_effect_unclaimed() {
         "HOLD_FOR_HUMAN",
     );
     let writer = FixtureWriter::default();
-    assert_eq!(
+    assert!(matches!(
         consume_disposition_once(
             (&unused_source(), &writer),
             &active_policy(),
@@ -129,15 +151,9 @@ fn invalid_authorization_leaves_comment_effect_unclaimed() {
             false,
         )
         .unwrap(),
-        DispositionCycle::AuthorizationBlocked
-    );
-    assert!(writer.comments.borrow().is_empty());
-    assert!(
-        store
-            .claim_effect_matching("retry", 100, 30, &["HOLD_FOR_HUMAN"])
-            .unwrap()
-            .is_some()
-    );
+        DispositionCycle::Published { .. }
+    ));
+    assert_eq!(writer.comments.borrow().len(), 1);
 }
 
 #[test]

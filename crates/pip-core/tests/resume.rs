@@ -23,7 +23,7 @@ fn resume(state: CaseState, target: Option<CaseState>) -> Result<(CaseState, Vec
 }
 
 #[test]
-fn a_parked_case_resumes_at_the_chosen_stage_and_acknowledges_the_human() {
+fn a_parked_case_resumes_at_the_chosen_stage() {
     for state in PARKED {
         for (target, dispatch) in [
             (CaseState::Planning, Effect::DispatchPlanner),
@@ -33,7 +33,7 @@ fn a_parked_case_resumes_at_the_chosen_stage_and_acknowledges_the_human() {
         ] {
             assert_eq!(
                 resume(state, Some(target)).unwrap(),
-                (target, vec![dispatch, Effect::AcknowledgeResume]),
+                (target, vec![dispatch]),
                 "{state} -> {target}"
             );
         }

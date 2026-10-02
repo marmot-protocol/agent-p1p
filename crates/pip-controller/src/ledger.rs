@@ -333,7 +333,6 @@ fn effect_name(effect: Effect) -> &'static str {
         Effect::RecordBlock => "RECORD_BLOCK",
         Effect::RecordTakeover => "RECORD_TAKEOVER",
         Effect::Escalate => "ESCALATE",
-        Effect::AcknowledgeResume => "ACKNOWLEDGE_RESUME",
     }
 }
 
