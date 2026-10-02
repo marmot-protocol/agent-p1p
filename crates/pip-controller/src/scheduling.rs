@@ -892,10 +892,12 @@ fn valid_role_policy(role: &RolePolicy) -> bool {
         && role.skills.len() == 2
         && role.skills.iter().all(|skill| valid_id(skill))
         && role.skills.iter().any(|skill| skill == "workflow-contract")
-        && role
-            .skills
-            .iter()
-            .any(|skill| skill == role_skill_name(role.role))
+        && role.skills.iter().any(|skill| {
+            skill == role_skill_name(role.role)
+                // Policies accepted before the builder skill was renamed stay
+                // loadable; cases keep their history across upgrades.
+                || (role.role == WorkerRole::Builder && skill == "builder-grok")
+        })
 }
 
 const fn is_reviewer(role: WorkerRole) -> bool {

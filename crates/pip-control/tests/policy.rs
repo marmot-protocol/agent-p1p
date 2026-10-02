@@ -431,3 +431,17 @@ fn policy_rejects_unknown_fields_model_fallback_and_shadow_merge_authority() {
         ));
     }
 }
+
+#[test]
+fn policies_accepted_before_the_builder_skill_rename_still_load() {
+    let mut raw: serde_json::Value = serde_json::from_slice(include_bytes!(
+        "../../../config/target/repositories/mdk.json"
+    ))
+    .unwrap();
+    for role in raw["roles"].as_array_mut().unwrap() {
+        if role["role"] == "builder" {
+            role["skills"] = serde_json::json!(["workflow-contract", "builder-grok"]);
+        }
+    }
+    assert!(load_repository_policy(&serde_json::to_vec(&raw).unwrap()).is_ok());
+}
