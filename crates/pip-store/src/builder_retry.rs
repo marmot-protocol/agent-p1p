@@ -255,13 +255,4 @@ impl Store {
         )?;
         Ok(base.max(granted.map(unsigned).unwrap_or(0)))
     }
-
-    pub fn accepted_policy(&self, repository_id: u64, revision: u64) -> Result<Value> {
-        let value: String = self.connection.query_row(
-            "SELECT payload_json FROM policies WHERE repository_id=?1 AND revision=?2",
-            params![sql_u64(repository_id)?, sql_u64(revision)?],
-            |row| row.get(0),
-        )?;
-        Ok(serde_json::from_str(&value)?)
-    }
 }

@@ -172,7 +172,7 @@ impl WorkspacePreparer for GitWorkspacePreparer {
         )?;
         allocator.allocate(&spec, &expected_remote)?;
         if (claimed.effect_type == "DISPATCH_BUILDER"
-            && store.failed_direct_attempt_count_for_case(&case.case_key)? > 0)
+            && store.builder_dispatched_before(&case.case_key, claimed.state_revision)?)
             || preserve_for_replanning(
                 &claimed.effect_type,
                 &case.state,

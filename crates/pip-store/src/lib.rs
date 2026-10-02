@@ -897,6 +897,15 @@ impl Store {
         Ok(ApplyResult::Applied)
     }
 
+    pub fn accepted_policy(&self, repository_id: u64, revision: u64) -> Result<Value> {
+        let value: String = self.connection.query_row(
+            "SELECT payload_json FROM policies WHERE repository_id=?1 AND revision=?2",
+            params![sql_u64(repository_id)?, sql_u64(revision)?],
+            |row| row.get(0),
+        )?;
+        Ok(serde_json::from_str(&value)?)
+    }
+
     pub fn record_webhook_delivery(&mut self, input: &WebhookDeliveryInput) -> Result<ApplyResult> {
         self.ensure_writable()?;
         if !valid_identifier(&input.delivery_id, 128)
@@ -1497,14 +1506,16 @@ impl Store {
     }
 
     pub fn current_review_runs_for_case(&self, case_key: &str) -> Result<Vec<StoredRun>> {
-        // A same-head operator recovery starts a fresh review set without
-        // changing the remediation budget or rewriting the earlier runs.
+        // Every entry into CI observation or review starts a fresh review
+        // cohort, even on the same head and round (final review returning
+        // work, or a resume). Earlier runs stay in history but never join it.
         let mut statement = self.connection.prepare(
             "SELECT r.run_id,r.case_key,r.event_id,r.task_id,r.role,r.payload_json,r.payload_sha256,r.accepted_at
              FROM runs r JOIN events e ON e.event_id=r.event_id AND e.case_key=r.case_key
              WHERE r.case_key=?1 AND r.role IN ('reviewer-general','reviewer-secperf')
                AND e.state_revision > COALESCE((SELECT MAX(state_revision) FROM events
-                 WHERE case_key=?1 AND event_type='REVIEW_COORDINATION_RECOVERY_AUTHORIZED'),0)
+                 WHERE case_key=?1 AND next_state IN ('WAITING_CI','REVIEWING')
+                   AND previous_state IS NOT next_state),0)
              ORDER BY r.accepted_at,r.run_id")?;
         statement
             .query_map([case_key], stored_run)?
@@ -2496,6 +2507,21 @@ impl Store {
             |row| row.get(0),
         )?;
         Ok(unsigned(value))
+    }
+
+    /// Whether a builder was dispatched for this case before `state_revision`.
+    /// Its worktree may then hold retained work that a new builder pass must
+    /// continue from rather than treat as an unexpected modification.
+    pub fn builder_dispatched_before(&self, case_key: &str, state_revision: u64) -> Result<bool> {
+        if case_key.trim().is_empty() {
+            return Err(StoreError::InvalidInput("case key is required"));
+        }
+        Ok(self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM outbox
+             WHERE case_key = ?1 AND effect_type = 'DISPATCH_BUILDER' AND state_revision < ?2)",
+            params![case_key, sql_u64(state_revision)?],
+            |row| row.get(0),
+        )?)
     }
 
     pub fn release_effect(&mut self, effect_id: &str, owner: &str) -> Result<()> {
