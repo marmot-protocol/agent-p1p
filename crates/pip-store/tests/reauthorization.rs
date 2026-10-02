@@ -170,3 +170,77 @@ fn historical_policy_lookup_is_exact_and_survives_reauthorization() {
             .is_err()
     );
 }
+
+#[test]
+fn a_case_abandoned_by_command_restarts_from_a_fresh_label_keeping_its_pr() {
+    // Reuse the fixture's fresh-label reauthorization against a case that a
+    // human abandoned by command while it had a PR.
+    let scratch = tempfile::tempdir().unwrap();
+    let (_, mut reauthorize) = fixture(&scratch.path().join("ledger.db"));
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    for revision in [1, 2] {
+        store
+            .record_policy(&PolicyInput {
+                repository_id: 123,
+                revision,
+                accepted_at: 1,
+                payload: json!({"revision":revision,"intake":{"label":"approved","trusted_actor_ids":[100]}}),
+            })
+            .unwrap();
+    }
+    store
+        .create_case(&NewCase {
+            case_key: "repo:123#45@1".into(),
+            repository_id: 123,
+            issue_number: 45,
+            workflow_version: 1,
+            policy_revision: 1,
+            initial_state: "ESCALATED".into(),
+            observed_at: 10,
+            event: EventInput {
+                event_id: "initial".into(),
+                event_type: "ISSUE_AUTHORIZED".into(),
+                payload: json!({"label_event_id":10}),
+            },
+            effects: vec![],
+        })
+        .unwrap();
+    store
+        .apply_transition(
+            &TransitionInput {
+                case_key: "repo:123#45@1".into(),
+                expected_revision: 1,
+                next_state: "ABANDONED".into(),
+                remediation_round: 2,
+                plan_version: 1,
+                pr_number: Some(77),
+                head_sha: Some("b".repeat(40)),
+                observed_at: 20,
+                event: EventInput {
+                    event_id: "abandoned".into(),
+                    event_type: "HUMAN_ABANDONED".into(),
+                    payload: json!({"comment_id": 9}),
+                },
+                run: None,
+                evidence: vec![],
+                findings: vec![],
+                effects: vec![],
+            },
+            None,
+        )
+        .unwrap();
+    reauthorize.remediation_round = 2;
+    // Without the PR binding the new generation would orphan its PR.
+    assert!(store.apply_transition(&reauthorize, None).is_err());
+    reauthorize.pr_number = Some(77);
+    reauthorize.head_sha = Some("b".repeat(40));
+    assert_eq!(
+        store.apply_transition(&reauthorize, None).unwrap(),
+        ApplyResult::Applied
+    );
+    let case = store.case("repo:123#45@1").unwrap().unwrap();
+    assert_eq!(case.state, "PLANNING");
+    assert_eq!(case.pr_number, Some(77));
+    assert_eq!(case.policy_revision, 2);
+}

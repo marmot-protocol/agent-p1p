@@ -377,6 +377,62 @@ fn live_github_failure_leaves_the_item_pending_for_a_replay_safe_retry() {
 }
 
 #[test]
+fn a_delivery_that_keeps_failing_is_set_aside_so_later_ones_flow() {
+    let directory = tempfile::tempdir().unwrap();
+    let spool_root = directory.path().join("spool");
+    prepare_spool(&spool_root);
+    let spool = WebhookSpool::open(&spool_root).unwrap();
+    for (delivery, issue) in [
+        ("01234567-89ab-cdef-0123-456789abcdef", 42),
+        ("21234567-89ab-cdef-0123-456789abcdef", 43),
+    ] {
+        let payload = webhook_payload(issue);
+        spool
+            .store(
+                WebhookSpoolInput {
+                    delivery_id: delivery,
+                    event_name: "issues",
+                    signature: &signature(b"webhook-secret", &payload),
+                    payload: &payload,
+                    received_at: 100,
+                },
+                b"webhook-secret",
+            )
+            .unwrap();
+    }
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    let consume = |store: &mut Store, now: u64| {
+        consume_webhook_spool_once(
+            &source(true),
+            &active_policy(),
+            store,
+            &spool,
+            b"webhook-secret",
+            now,
+            false,
+        )
+    };
+    // A fresh failure is retried.
+    assert!(consume(&mut store, 101).is_err());
+    // After the dead-letter window it is set aside and the next one is read.
+    let set_aside = consume(&mut store, 100 + pip_control::DEAD_LETTER_AFTER_SECONDS).unwrap();
+    assert!(
+        set_aside.result.starts_with("DEAD_LETTERED"),
+        "{}",
+        set_aside.result
+    );
+    assert_eq!(
+        set_aside.delivery_id.as_deref(),
+        Some("01234567-89ab-cdef-0123-456789abcdef")
+    );
+    let next = consume(&mut store, 100 + pip_control::DEAD_LETTER_AFTER_SECONDS).unwrap();
+    assert_eq!(
+        next.delivery_id.as_deref(),
+        Some("21234567-89ab-cdef-0123-456789abcdef")
+    );
+}
+
+#[test]
 fn a_tampered_spool_envelope_is_never_read_as_a_webhook() {
     let directory = tempfile::tempdir().unwrap();
     let spool_root = directory.path().join("spool");

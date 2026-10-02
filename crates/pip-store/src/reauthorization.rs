@@ -10,10 +10,11 @@ fn eligible(
     Ok(connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM cases c JOIN events e
           ON e.case_key=c.case_key AND e.state_revision=c.state_revision
-          WHERE c.case_key=?1 AND c.state='ABANDONED' AND c.pr_number IS NULL AND c.head_sha IS NULL
-          AND e.event_type='AUTHORIZATION_REMOVED'
-          AND EXISTS(SELECT 1 FROM json_each(e.payload_json,'$.blockers')
-              WHERE value IN ('REQUIRED_LABEL_MISSING','LATEST_AUTHORIZATION_REMOVED'))
+          WHERE c.case_key=?1 AND c.state='ABANDONED'
+          AND ((e.event_type='AUTHORIZATION_REMOVED' AND c.pr_number IS NULL AND c.head_sha IS NULL
+                AND EXISTS(SELECT 1 FROM json_each(e.payload_json,'$.blockers')
+                    WHERE value IN ('REQUIRED_LABEL_MISSING','LATEST_AUTHORIZATION_REMOVED')))
+               OR e.event_type='HUMAN_ABANDONED')
           AND ?2 > ?3 AND ?3 > COALESCE((SELECT MAX(json_extract(payload_json,'$.label_event_id'))
               FROM events WHERE case_key=?1 AND event_type IN ('ISSUE_AUTHORIZED','ISSUE_REAUTHORIZED')),9223372036854775807)
           AND NOT EXISTS(SELECT 1 FROM direct_attempts WHERE case_key=?1 AND status='RUNNING')
@@ -41,8 +42,8 @@ pub(crate) fn validate(
     )? || input.next_state != "PLANNING"
         || input.plan_version != current.plan_version
         || input.remediation_round != current.remediation_round
-        || input.pr_number.is_some()
-        || input.head_sha.is_some()
+        || input.pr_number != current.pr_number
+        || input.head_sha != current.head_sha
         || input.run.is_some()
         || !input.findings.is_empty()
         || !input.evidence.is_empty()
@@ -52,7 +53,7 @@ pub(crate) fn validate(
             != serde_json::json!({"case_key":current.case_key,"state_revision":current.state_revision+1,"effect":"DISPATCH_PLANNER"})
     {
         return Err(StoreError::InvalidInput(
-            "reauthorization requires withdrawn pre-PR work, fresh label evidence and an unleased generation",
+            "reauthorization requires withdrawn or abandoned work, fresh label evidence and an unleased generation",
         ));
     }
     let policy: String = transaction.query_row(

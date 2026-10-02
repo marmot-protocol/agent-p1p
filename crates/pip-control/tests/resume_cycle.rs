@@ -5,7 +5,8 @@ use pip_control::{
     apply_control_commands_once, load_repository_policy,
 };
 use pip_github::{
-    CommentSpec, GitHubError, IntakeSnapshot, IssueSnapshot, MutationResult, PullRequestReadySpec,
+    CommentSpec, GitHubError, IntakeSnapshot, IssueCommentSnapshot, IssueContentSnapshot,
+    IssueSnapshot, MutationResult, PullRequestReadySpec, RepositorySnapshot,
 };
 use pip_store::{
     ControlCommandInput, EffectInput, EventInput, NewCase, PolicyInput, Store, TransitionInput,
@@ -15,6 +16,63 @@ use serde_json::json;
 const CASE: &str = "repo:1055628515#42@2";
 
 struct Source;
+
+/// A source whose issue carries the given comments.
+struct Commented(Vec<IssueCommentSnapshot>);
+
+impl IntakeSource for Commented {
+    fn actor_login(&self, id: u64) -> Result<String, GitHubError> {
+        Source.actor_login(id)
+    }
+    fn discover(&self, _: &str, _: &str, _: &str) -> Result<Vec<IssueSnapshot>, GitHubError> {
+        unreachable!()
+    }
+    fn intake(&self, _: &str, _: &str, number: u64) -> Result<IntakeSnapshot, GitHubError> {
+        Ok(IntakeSnapshot {
+            repository: RepositorySnapshot {
+                id: 1_055_628_515,
+                full_name: "marmot-protocol/mdk".into(),
+                default_branch: "master".into(),
+            },
+            issue: IssueSnapshot {
+                assignee_ids: Default::default(),
+                id: 5_000_000_042,
+                number,
+                open: true,
+                is_pull_request: false,
+                labels: Default::default(),
+            },
+            issue_content: IssueContentSnapshot {
+                author_id: 1001,
+                title: "Fixture".into(),
+                body: "Fixture".into(),
+                created_at: "1970-01-01T00:00:00Z".into(),
+                updated_at: "1970-01-01T00:00:00Z".into(),
+            },
+            label_events: vec![],
+            comments: self.0.clone(),
+        })
+    }
+}
+
+fn comment(
+    id: u64,
+    actor_id: u64,
+    body: &str,
+    created: &str,
+    updated: &str,
+) -> IssueCommentSnapshot {
+    IssueCommentSnapshot {
+        id,
+        actor_id,
+        issue_number: 42,
+        html_url: format!("https://github.test/comment/{id}"),
+        body: body.into(),
+        body_sha256: "0".repeat(64),
+        created_at: created.into(),
+        updated_at: updated.into(),
+    }
+}
 
 impl IntakeSource for Source {
     fn actor_login(&self, id: u64) -> Result<String, GitHubError> {
@@ -274,4 +332,67 @@ fn stale_or_misdirected_commands_are_ignored() {
     ));
     assert_eq!(store.case(CASE).unwrap().unwrap().state, "ESCALATED");
     assert!(writer.0.borrow().is_empty());
+}
+
+#[test]
+fn polling_records_trusted_commands_posted_after_the_pause() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+    let policy = policy(11);
+    record(&mut store, &policy);
+    parked_case(&mut store, &policy, CASE, 42);
+    // The case parked at unix time 200 (1970-01-01T00:03:20Z).
+    let source = Commented(vec![
+        comment(
+            1,
+            202_880,
+            "@agent-p1p resume",
+            "1970-01-01T00:01:00Z",
+            "1970-01-01T00:01:00Z",
+        ),
+        comment(
+            2,
+            999,
+            "@agent-p1p resume",
+            "1970-01-01T00:05:00Z",
+            "1970-01-01T00:05:00Z",
+        ),
+        comment(
+            3,
+            202_880,
+            "@agent-p1p resume",
+            "1970-01-01T00:05:00Z",
+            "1970-01-01T00:06:00Z",
+        ),
+        comment(
+            4,
+            202_880,
+            "Thanks!",
+            "1970-01-01T00:05:00Z",
+            "1970-01-01T00:05:00Z",
+        ),
+        comment(
+            5,
+            202_880,
+            "@agent-p1p replan\nscope it to the parser",
+            "1970-01-01T00:05:00Z",
+            "1970-01-01T00:05:00Z",
+        ),
+    ]);
+    assert_eq!(
+        pip_control::poll_control_commands(&source, &mut store, &policy, CASE).unwrap(),
+        1
+    );
+    // Polling again records nothing new.
+    assert_eq!(
+        pip_control::poll_control_commands(&source, &mut store, &policy, CASE).unwrap(),
+        0
+    );
+    let pending = store
+        .pending_control_commands(policy.repository.id, Some(CASE))
+        .unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].comment_id, 5);
+    assert_eq!(pending[0].command, "REPLAN");
+    assert_eq!(pending[0].guidance, "scope it to the parser");
 }

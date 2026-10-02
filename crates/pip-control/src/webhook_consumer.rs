@@ -64,7 +64,7 @@ pub fn consume_webhook_spool_once<S: IntakeSource>(
             intake: None,
         });
     };
-    let intake = ingest_webhook(
+    let intake = match ingest_webhook(
         source,
         policy,
         store,
@@ -78,7 +78,24 @@ pub fn consume_webhook_spool_once<S: IntakeSource>(
         secret,
         observed_at,
         global_paused,
-    )?;
+    ) {
+        Ok(intake) => intake,
+        // One delivery that keeps failing must not block every later one.
+        // Intake re-reads live GitHub state and the controller also polls, so
+        // setting an old failure aside loses no authorization or command.
+        Err(error)
+            if observed_at.saturating_sub(pending.received_at) >= DEAD_LETTER_AFTER_SECONDS =>
+        {
+            spool.mark_processed(&pending.delivery_id)?;
+            return Ok(WebhookSpoolCycle {
+                report_format: 1,
+                result: format!("DEAD_LETTERED: {error}"),
+                delivery_id: Some(pending.delivery_id),
+                intake: None,
+            });
+        }
+        Err(error) => return Err(error.into()),
+    };
     spool.mark_processed(&pending.delivery_id)?;
     Ok(WebhookSpoolCycle {
         report_format: 1,
@@ -87,3 +104,6 @@ pub fn consume_webhook_spool_once<S: IntakeSource>(
         intake: Some(intake),
     })
 }
+
+/// How long a delivery may keep failing before it is set aside.
+pub const DEAD_LETTER_AFTER_SECONDS: u64 = 15 * 60;

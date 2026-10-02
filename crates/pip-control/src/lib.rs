@@ -112,7 +112,8 @@ pub use results::{
     reconcile_completed_once_with,
 };
 pub use resume::{
-    RESUME_GRANTED_ROUNDS, ResumeContext, ResumeCycle, ResumeError, apply_control_commands_once,
+    COMMAND_POLL_SECONDS, RESUME_GRANTED_ROUNDS, ResumeContext, ResumeCycle, ResumeError,
+    apply_control_commands_once, poll_control_commands,
 };
 pub use reviews::{
     ReviewPublicationCycle, ReviewPublicationError, ReviewWriter, publish_reviews_once,
@@ -122,7 +123,8 @@ pub use scope::RepositoryScope;
 pub use shadow::{IntakeSource, ShadowCandidate, ShadowError, ShadowReport, reconcile_read_only};
 pub use takeover::{TakeoverCycle, TakeoverError, reconcile_takeover_once};
 pub use webhook_consumer::{
-    WebhookSpoolConsumerError, WebhookSpoolCycle, consume_webhook_spool_once,
+    DEAD_LETTER_AFTER_SECONDS, WebhookSpoolConsumerError, WebhookSpoolCycle,
+    consume_webhook_spool_once,
 };
 pub use webhook_http::{
     WebhookIngressError, WebhookIngressState, run_webhook_ingress_cli, webhook_ingress_router,

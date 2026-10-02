@@ -781,6 +781,18 @@ where
                             .all(|blocker| blocker == "POLICY_REVISION_MISMATCH")
                 }),
             });
+        // Commands normally arrive by webhook; read a parked case's comments
+        // now and then in case a delivery never arrived.
+        let control_poll = (now % crate::COMMAND_POLL_SECONDS < 30
+            && pip_store::PARKED_STATES.contains(&case.state.as_str()))
+        .then(|| {
+            cycle_observation(crate::poll_control_commands(
+                &reader,
+                &mut store,
+                &policy,
+                &case.case_key,
+            ))
+        });
         let control = cycle_observation(crate::apply_control_commands_once(
             &reader,
             &writer,
@@ -898,6 +910,7 @@ where
         let mut case_report = json!({
             "case_key": case.case_key,
             "control": control,
+            "control_poll": control_poll,
             "worker_result": result,
             "worker_retry": worker_retry,
             "direct_worker": direct_worker,

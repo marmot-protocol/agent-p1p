@@ -558,8 +558,10 @@ fn reconcile_validated_evidence<S: IntakeSource>(
                             next_state: "PLANNING".into(),
                             remediation_round: case.remediation_round,
                             plan_version: case.plan_version,
-                            pr_number: None,
-                            head_sha: None,
+                            // A case abandoned by command may keep its PR; the
+                            // new generation continues on that PR.
+                            pr_number: case.pr_number,
+                            head_sha: case.head_sha.clone(),
                             observed_at,
                             event: input.event,
                             run: None,

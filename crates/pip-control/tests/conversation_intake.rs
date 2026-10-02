@@ -685,3 +685,87 @@ fn signed_mentions_route_without_a_label_or_workflow_and_ignore_untrusted_bots()
         assert_eq!(store.outbox_count().unwrap(), 0);
     }
 }
+
+#[test]
+fn control_commands_on_a_paused_case_bypass_the_conversation_inbox() {
+    for (state, recorded) in [("ESCALATED", 1), ("PLANNING", 0)] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+        let mut policy = load_repository_policy(include_bytes!("fixtures/mdk-rev11.json")).unwrap();
+        // Commands work even with the conversation inbox switched off.
+        policy.conversations_enabled = false;
+        policy.github.automation_actor_id = Some(88);
+        policy.intake.trusted_actor_ids = vec![99];
+        store
+            .create_case(&pip_store::NewCase {
+                case_key: format!("repo:{}#42@2", policy.repository.id),
+                repository_id: policy.repository.id,
+                issue_number: 42,
+                workflow_version: 2,
+                policy_revision: policy.revision,
+                initial_state: state.into(),
+                observed_at: 50,
+                event: pip_store::EventInput {
+                    event_id: "seed".into(),
+                    event_type: "ISSUE_AUTHORIZED".into(),
+                    payload: json!({}),
+                },
+                effects: vec![],
+            })
+            .unwrap();
+        let body = "@pip-renamed resume\nThe flaky job is fixed on master.";
+        let source = Source {
+            comment: DiscussionComment {
+                id: 500,
+                actor_id: 99,
+                human: true,
+                body: body.into(),
+                updated_at: "2026-09-08T12:00:00Z".into(),
+                reply_to: None,
+                context: serde_json::Value::Null,
+            },
+        };
+        let bytes = serde_json::to_vec(&json!({"action":"created","repository":{"id":policy.repository.id,"full_name":policy.repository.full_name()},"issue":{"id":123,"number":42},"comment":{"id":500,"body":body,"user":{"id":99}},"sender":{"id":99}})).unwrap();
+        let mut mac = Hmac::<Sha256>::new_from_slice(b"secret").unwrap();
+        mac.update(&bytes);
+        let signature = format!(
+            "sha256={}",
+            mac.finalize()
+                .into_bytes()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        );
+        let report = ingest_webhook(
+            &source,
+            &policy,
+            &mut store,
+            WebhookEnvelope {
+                delivery_id: "01234567-89ab-cdef-0123-456789abcdef",
+                event_name: "issue_comment",
+                signature: &signature,
+                payload: &bytes,
+                received_at: 100,
+            },
+            b"secret",
+            101,
+            false,
+        )
+        .unwrap();
+        let pending = store
+            .pending_control_commands(policy.repository.id, None)
+            .unwrap();
+        assert_eq!(pending.len(), recorded, "{state}: {report:?}");
+        if recorded == 1 {
+            assert_eq!(pending[0].command, "RESUME");
+            assert_eq!(pending[0].guidance, "The flaky job is fixed on master.");
+            assert_eq!(pending[0].received_at, 100);
+        }
+        assert!(
+            store
+                .conversations(policy.repository.id, 10)
+                .unwrap()
+                .is_empty()
+        );
+    }
+}

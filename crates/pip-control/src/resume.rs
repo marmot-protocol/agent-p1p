@@ -206,6 +206,103 @@ pub fn apply_control_commands_once<S: IntakeSource, W: DispositionWriter>(
     applied(store, &case.case_key, &command, context.now)
 }
 
+/// How often a parked case's issue comments are read as a fallback for
+/// webhook deliveries that never arrived.
+pub const COMMAND_POLL_SECONDS: u64 = 300;
+
+/// Records `@pip` commands on a parked case's issue that the webhook missed.
+/// Runs roughly every `COMMAND_POLL_SECONDS`; idempotent per comment.
+pub fn poll_control_commands<S: IntakeSource>(
+    source: &S,
+    store: &mut Store,
+    policy: &RepositoryPolicy,
+    case_key: &str,
+) -> Result<u64, ResumeError> {
+    let Some(case) = store.case(case_key)? else {
+        return Ok(0);
+    };
+    let Some(park) = store.parking_event(case_key)? else {
+        return Ok(0);
+    };
+    let Some(automation) = policy.github.automation_actor_id else {
+        return Ok(0);
+    };
+    let evidence = |error: GitHubError| ResumeError::Invalid(error.to_string());
+    let login = source.actor_login(automation).map_err(evidence)?;
+    let snapshot = source
+        .intake(
+            &policy.repository.owner,
+            &policy.repository.name,
+            case.issue_number,
+        )
+        .map_err(evidence)?;
+    let mut recorded = 0;
+    for comment in snapshot.comments {
+        let Some(created) = unix_seconds(&comment.created_at) else {
+            continue;
+        };
+        if created < park.observed_at
+            || comment.created_at != comment.updated_at
+            || comment.actor_id == automation
+            || !policy.intake.trusted_actor_ids.contains(&comment.actor_id)
+        {
+            continue;
+        }
+        let Some((command, guidance)) =
+            crate::conversations::parse_control_command(&comment.body, &login)
+        else {
+            continue;
+        };
+        let result = store.record_control_command(&pip_store::ControlCommandInput {
+            comment_id: comment.id,
+            repository_id: policy.repository.id,
+            thread_number: case.issue_number,
+            case_key: Some(case.case_key.clone()),
+            actor_id: comment.actor_id,
+            command: command.into(),
+            guidance,
+            received_at: created,
+        })?;
+        recorded += u64::from(result == pip_store::ApplyResult::Applied);
+    }
+    Ok(recorded)
+}
+
+/// Parses GitHub's `YYYY-MM-DDTHH:MM:SSZ` timestamps.
+pub(crate) fn unix_seconds(value: &str) -> Option<u64> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 20
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+        || bytes[19] != b'Z'
+    {
+        return None;
+    }
+    let field = |range: std::ops::Range<usize>| value.get(range)?.parse::<i64>().ok();
+    let (year, month, day) = (field(0..4)?, field(5..7)?, field(8..10)?);
+    let (hour, minute, second) = (field(11..13)?, field(14..16)?, field(17..19)?);
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 60
+    {
+        return None;
+    }
+    // Days from the civil date (Howard Hinnant's algorithm).
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let month_index = (month + 9) % 12;
+    let day_of_year = (153 * month_index + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+    u64::try_from(days * 86_400 + hour * 3_600 + minute * 60 + second).ok()
+}
+
 fn apply(
     store: &mut Store,
     case: &pip_store::StoredCase,
@@ -338,4 +435,24 @@ fn acknowledge<S: IntakeSource, W: DispositionWriter>(
 
 fn digest_prefix(message: &str) -> String {
     crate::conversations::digest(message.as_bytes())[..12].to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unix_seconds;
+
+    #[test]
+    fn github_timestamps_parse_to_unix_seconds() {
+        assert_eq!(unix_seconds("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(unix_seconds("2026-09-07T00:00:00Z"), Some(1_788_739_200));
+        assert_eq!(unix_seconds("2024-02-29T12:34:56Z"), Some(1_709_210_096));
+        for invalid in [
+            "2026-09-07",
+            "2026-13-01T00:00:00Z",
+            "2026-09-07T24:00:00Z",
+            "",
+        ] {
+            assert_eq!(unix_seconds(invalid), None, "{invalid}");
+        }
+    }
 }
