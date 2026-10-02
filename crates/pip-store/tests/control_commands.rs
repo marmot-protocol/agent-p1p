@@ -192,3 +192,45 @@ fn a_resume_cannot_rebind_to_an_unknown_or_older_policy() {
         assert!(result.is_err(), "{revision}");
     }
 }
+
+#[test]
+fn activity_pending_work_and_finding_windows_follow_the_ledger() {
+    let (_directory, mut store) = open();
+    assert_eq!(store.last_case_activity(CASE).unwrap(), 100);
+    assert_eq!(store.finding_window_start(CASE).unwrap(), 0);
+    transition(&mut store, 1, "CI_FAILED", "ESCALATED", json!({}));
+    assert_eq!(store.last_case_activity(CASE).unwrap(), 101);
+    store
+        .apply_transition(
+            &TransitionInput {
+                case_key: CASE.into(),
+                expected_revision: 2,
+                next_state: "WAITING_CI".into(),
+                remediation_round: 10,
+                plan_version: 1,
+                pr_number: Some(77),
+                head_sha: Some("b".repeat(40)),
+                observed_at: 500,
+                event: EventInput {
+                    event_id: "resume".into(),
+                    event_type: "HUMAN_RESUMED".into(),
+                    payload: json!({"policy_revision": 1, "granted_rounds": 0}),
+                },
+                run: None,
+                evidence: vec![],
+                findings: vec![],
+                effects: vec![pip_store::EffectInput {
+                    effect_id: "observe-ci".into(),
+                    effect_type: "OBSERVE_CI".into(),
+                    payload: json!({}),
+                }],
+            },
+            None,
+        )
+        .unwrap();
+    assert_eq!(store.last_case_activity(CASE).unwrap(), 500);
+    assert_eq!(store.finding_window_start(CASE).unwrap(), 500);
+    assert_eq!(store.pending_effect_types(CASE).unwrap(), ["OBSERVE_CI"]);
+    // A resume starts a fresh age window.
+    assert_eq!(store.case_work_started_at(CASE).unwrap(), Some(500));
+}

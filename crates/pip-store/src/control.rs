@@ -225,6 +225,49 @@ impl Store {
     }
 }
 
+impl Store {
+    /// The latest sign of work on a case: a workflow event, a worker attempt
+    /// starting, a Hermes task being projected, or controller evidence. A
+    /// case with no activity for long enough is stuck, whatever the cause.
+    pub fn last_case_activity(&self, case_key: &str) -> Result<u64> {
+        let value: Option<i64> = self.connection.query_row(
+            "SELECT MAX(at) FROM (
+                SELECT MAX(observed_at) AS at FROM events WHERE case_key = ?1
+                UNION ALL SELECT MAX(started_at) FROM direct_attempts WHERE case_key = ?1
+                UNION ALL SELECT MAX(reconciled_at) FROM task_projections WHERE case_key = ?1
+                UNION ALL SELECT MAX(observed_at) FROM evidence WHERE case_key = ?1)",
+            [case_key],
+            |row| row.get(0),
+        )?;
+        Ok(value.map(unsigned).unwrap_or(0))
+    }
+
+    /// Effect types still waiting to be delivered for a case.
+    pub fn pending_effect_types(&self, case_key: &str) -> Result<Vec<String>> {
+        let mut statement = self.connection.prepare(
+            "SELECT DISTINCT effect_type FROM outbox
+             WHERE case_key = ?1 AND delivered_at IS NULL AND superseded_at IS NULL
+             ORDER BY effect_type",
+        )?;
+        statement
+            .query_map([case_key], |row| row.get(0))?
+            .collect::<std::result::Result<_, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Repeated review findings count from the latest replan or human resume:
+    /// a human who resumed has seen them, and a new plan is a new approach.
+    pub fn finding_window_start(&self, case_key: &str) -> Result<u64> {
+        let value: Option<i64> = self.connection.query_row(
+            "SELECT MAX(observed_at) FROM events WHERE case_key = ?1
+               AND (event_type = 'HUMAN_RESUMED' OR next_state = 'PLANNING')",
+            [case_key],
+            |row| row.get(0),
+        )?;
+        Ok(value.map(unsigned).unwrap_or(0))
+    }
+}
+
 /// A resume rebinds the case to a recorded policy revision no older than its
 /// own: a human explicitly accepted the current settings for this case.
 pub(crate) fn validate_resume(

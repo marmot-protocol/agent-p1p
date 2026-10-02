@@ -48,6 +48,8 @@ fn fixture_with_stage(
     paused.revision = 7;
     // This historical recovery fixture deliberately exhausts a three-round policy.
     paused.max_remediation_rounds = 3;
+    // It reaches the age limit with no activity; keep the stall watchdog out of it.
+    paused.max_stall_seconds = Some(u64::MAX / 4);
     let mut active = paused.clone();
     active.intake.enabled = true;
     active.intake.paused = false;

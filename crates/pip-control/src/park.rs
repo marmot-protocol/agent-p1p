@@ -98,8 +98,33 @@ pub(crate) fn explain(park: &ParkingEvent, case: &StoredCase) -> String {
                 duration(number(&payload["observed"])),
                 duration(number(&payload["limit"]))
             ),
+            "NO_PROGRESS" => {
+                let pending = details["pending"]
+                    .as_array()
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(|item| item.to_ascii_lowercase().replace('_', " "))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .filter(|items| !items.is_empty())
+                    .map(|items| format!(" Waiting on: {}.", prose(&items)))
+                    .unwrap_or_default();
+                format!(
+                    "Nothing has happened on this case for {} (limit {}).{pending}",
+                    duration(number(&payload["observed"])),
+                    duration(number(&payload["limit"]))
+                )
+            }
+            "POLICY_CHANGED" => format!(
+                "Pip's configuration changed (revision {} to {}) in a way this case did not accept, such as a different model or reviewer. Resuming continues under the new configuration.",
+                number(&payload["limit"]),
+                number(&payload["observed"])
+            ),
             "REPEATED_FINDING_FINGERPRINT" => format!(
-                "A reviewer raised the same finding {} times; the builder has not resolved it.",
+                "A reviewer raised the same finding on {} successive revisions; the builder has not resolved it.",
                 number(&payload["observed"])
             ),
             other => format!("Pip reached an operational limit ({}).", prose(other)),

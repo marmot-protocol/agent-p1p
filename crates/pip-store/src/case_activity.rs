@@ -33,6 +33,16 @@ impl Store {
         Ok(unsigned(count))
     }
 
+    /// Direct attempts that may still be executing for any case.
+    pub fn live_direct_attempts(&self, now: u64) -> Result<u64> {
+        let count: i64 = self.connection.query_row(
+            "SELECT COUNT(*) FROM direct_attempts WHERE status = 'RUNNING' AND lease_until >= ?1",
+            [crate::sql_u64(now)?],
+            |row| row.get(0),
+        )?;
+        Ok(unsigned(count))
+    }
+
     /// Newest first, at most eight records per history. No leases are acquired.
     pub fn case_activity(&self, case_key: &str) -> Result<CaseActivity> {
         let mut events = self.connection.prepare(

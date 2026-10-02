@@ -108,21 +108,22 @@ fn repeated_finding_fingerprints_and_provider_failures_are_bounded() {
         create_case(&mut store, 100);
 
         if scenario == "finding" {
+            // The same finding, reviewed on two successive heads the builder produced.
             for revision in 1..=2 {
                 store
                     .apply_transition(
                         &TransitionInput {
                             case_key: "repo:1055628515#42@2".into(),
                             expected_revision: revision,
-                            next_state: "PLANNING".into(),
+                            next_state: "REVIEWING".into(),
                             remediation_round: 0,
-                            plan_version: 0,
-                            pr_number: None,
-                            head_sha: None,
+                            plan_version: 1,
+                            pr_number: Some(77),
+                            head_sha: Some(revision.to_string().repeat(40)),
                             observed_at: 100 + revision,
                             event: EventInput {
                                 event_id: format!("finding-event-{revision}"),
-                                event_type: "PLAN_RECORDED".into(),
+                                event_type: "REVIEW_RECORDED".into(),
                                 payload: json!({}),
                             },
                             run: None,
@@ -130,7 +131,7 @@ fn repeated_finding_fingerprints_and_provider_failures_are_bounded() {
                             findings: vec![FindingInput {
                                 finding_id: format!("F-{revision}"),
                                 origin_role: "reviewer-general".into(),
-                                reviewed_head_sha: "a".repeat(40),
+                                reviewed_head_sha: revision.to_string().repeat(40),
                                 payload: json!({
                                     "id": format!("F-{revision}"),
                                     "defect": "same defect",
@@ -201,4 +202,111 @@ fn create_case(store: &mut Store, observed_at: u64) {
             }],
         })
         .unwrap();
+}
+
+#[test]
+fn a_finding_repeated_on_the_same_head_is_a_re_review_not_a_failed_fix() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path().join("ledger.db")).unwrap();
+    let mut policy = policy();
+    policy.max_repeated_finding_fingerprint = 2;
+    create_case(&mut store, 100);
+    for revision in 1..=3 {
+        store
+            .apply_transition(
+                &TransitionInput {
+                    case_key: "repo:1055628515#42@2".into(),
+                    expected_revision: revision,
+                    next_state: "REVIEWING".into(),
+                    remediation_round: 0,
+                    plan_version: 1,
+                    pr_number: Some(77),
+                    head_sha: Some("a".repeat(40)),
+                    observed_at: 100 + revision,
+                    event: EventInput {
+                        event_id: format!("review-{revision}"),
+                        event_type: "REVIEW_RECORDED".into(),
+                        payload: json!({}),
+                    },
+                    run: None,
+                    evidence: vec![],
+                    findings: vec![FindingInput {
+                        finding_id: format!("F-{revision}"),
+                        origin_role: "reviewer-general".into(),
+                        reviewed_head_sha: "a".repeat(40),
+                        payload: json!({"defect": "d", "consequence": "c", "corrective_direction": "x"}),
+                    }],
+                    effects: vec![],
+                },
+                None,
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        enforce_operational_bounds(&mut store, &policy, 200).unwrap(),
+        OperationalBoundsCycle::Idle
+    );
+}
+
+#[test]
+fn a_case_with_no_activity_parks_as_stuck_with_what_it_was_waiting_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path().join("ledger.db")).unwrap();
+    let mut policy = policy();
+    policy.max_case_elapsed_seconds = 7 * 86_400;
+    create_case(&mut store, 100);
+    let limit = policy.stall_limit_seconds();
+    assert!(limit >= 4 * 3_600);
+    assert_eq!(
+        enforce_operational_bounds(&mut store, &policy, 100 + limit - 1).unwrap(),
+        OperationalBoundsCycle::Idle
+    );
+    assert!(matches!(
+        enforce_operational_bounds(&mut store, &policy, 100 + limit).unwrap(),
+        OperationalBoundsCycle::Escalated {
+            bound: OperationalBound::NoProgress,
+            ..
+        }
+    ));
+    let event = store
+        .immutable_history_for_case("repo:1055628515#42@2")
+        .unwrap()
+        .events
+        .pop()
+        .unwrap();
+    assert_eq!(
+        event.payload["details"]["pending"],
+        json!(["DISPATCH_PLANNER"])
+    );
+}
+
+#[test]
+fn an_incompatible_policy_change_parks_the_case_instead_of_freezing_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path().join("ledger.db")).unwrap();
+    let accepted = policy();
+    store
+        .record_policy(&pip_store::PolicyInput {
+            repository_id: accepted.repository.id,
+            revision: accepted.revision,
+            accepted_at: 1,
+            payload: serde_json::to_value(&accepted).unwrap(),
+        })
+        .unwrap();
+    create_case(&mut store, 100);
+    let mut live = policy();
+    live.revision += 1;
+    live.roles[0].model = "a-different-model".into();
+    assert!(live.execution_policy_for(&accepted).is_none());
+    assert!(matches!(
+        enforce_operational_bounds(&mut store, &live, 101).unwrap(),
+        OperationalBoundsCycle::Escalated {
+            bound: OperationalBound::PolicyChanged,
+            ..
+        }
+    ));
+    assert_eq!(
+        store.case("repo:1055628515#42@2").unwrap().unwrap().state,
+        "ESCALATED"
+    );
 }

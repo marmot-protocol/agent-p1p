@@ -30,6 +30,10 @@ pub enum OperationalBound {
     ModelUnavailable,
     /// A worker stopped its own task and named a reason.
     WorkerBlocked,
+    /// Nothing happened on the case for longer than the stall limit.
+    NoProgress,
+    /// The live policy changed in a way the case did not accept.
+    PolicyChanged,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -92,8 +96,50 @@ pub fn enforce_operational_bounds<'a>(
     let mut cases = store.status(now)?.cases;
     cases.sort_by(|left, right| left.case_key.cmp(&right.case_key));
     for case in cases {
-        if !scope.matches(&case) || !automated_state(&case.state) {
+        let ready_with_work =
+            case.state == "SHADOW_READY" && !store.pending_effect_types(&case.case_key)?.is_empty();
+        if !scope.matches(&case) || !(automated_state(&case.state) || ready_with_work) {
             continue;
+        }
+        // An incompatible policy edit would otherwise stall the case silently.
+        if case.policy_revision != policy.revision {
+            return escalate(
+                store,
+                policy,
+                &case,
+                now,
+                BoundObservation {
+                    bound: OperationalBound::PolicyChanged,
+                    observed: policy.revision,
+                    limit: case.policy_revision,
+                    details: json!({"source": "controller"}),
+                },
+            );
+        }
+        let last_activity = store.last_case_activity(&case.case_key)?;
+        let stalled = now.saturating_sub(last_activity);
+        let pending = store.pending_effect_types(&case.case_key)?;
+        // Waiting for a worker slot that other cases are using is queueing,
+        // not a stall.
+        let queued_for_worker = pending.iter().any(|effect| effect == "RUN_DIRECT_WORKER")
+            && store.live_direct_attempts(now)? > 0;
+        if stalled >= policy.stall_limit_seconds() && !queued_for_worker {
+            return escalate(
+                store,
+                policy,
+                &case,
+                now,
+                BoundObservation {
+                    bound: OperationalBound::NoProgress,
+                    observed: stalled,
+                    limit: policy.stall_limit_seconds(),
+                    details: json!({
+                        "source": "controller",
+                        "since": last_activity,
+                        "pending": pending,
+                    }),
+                },
+            );
         }
         let work_started_at = store
             .case_work_started_at(&case.case_key)?
@@ -176,7 +222,7 @@ pub fn enforce_operational_bounds<'a>(
                 );
             }
         }
-        let repeated = repeated_finding_count(store, &case.case_key)?;
+        let repeated = repeated_finding_heads(store, &case.case_key)?;
         let repeated_limit = u64::from(policy.max_repeated_finding_fingerprint);
         if repeated >= repeated_limit {
             return escalate(
@@ -211,9 +257,18 @@ fn automated_state(state: &str) -> bool {
     )
 }
 
-fn repeated_finding_count(store: &Store, case_key: &str) -> Result<u64, StoreError> {
-    let mut counts = BTreeMap::<String, u64>::new();
-    for finding in store.immutable_history_for_case(case_key)?.findings {
+/// The most heads on which one reviewer raised the same finding, counted from
+/// the latest replan or human resume. Repeating a finding on the same head (a
+/// re-review) is not the builder failing to fix it.
+fn repeated_finding_heads(store: &Store, case_key: &str) -> Result<u64, StoreError> {
+    let since = store.finding_window_start(case_key)?;
+    let mut heads = BTreeMap::<String, std::collections::BTreeSet<String>>::new();
+    for finding in store
+        .immutable_history_for_case(case_key)?
+        .findings
+        .into_iter()
+        .filter(|finding| finding.recorded_at >= since)
+    {
         let Some(payload) = finding.payload.as_object() else {
             continue;
         };
@@ -228,9 +283,16 @@ fn repeated_finding_count(store: &Store, case_key: &str) -> Result<u64, StoreErr
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
-        *counts.entry(fingerprint).or_default() += 1;
+        heads
+            .entry(fingerprint)
+            .or_default()
+            .insert(finding.reviewed_head_sha);
     }
-    Ok(counts.values().copied().max().unwrap_or(0))
+    Ok(heads
+        .values()
+        .map(|heads| heads.len() as u64)
+        .max()
+        .unwrap_or(0))
 }
 
 fn escalate(
@@ -293,7 +355,18 @@ fn escalate(
         evidence: Vec::new(),
         findings: Vec::new(),
     };
-    LedgerController::apply(store, &policy.case_policy(), &command)?;
+    // Park under the policy the case accepted: the live one may have changed.
+    let case_policy = if case.policy_revision == policy.revision {
+        policy.case_policy()
+    } else {
+        let accepted = store.accepted_policy(case.repository_id, case.policy_revision)?;
+        crate::load_repository_policy(
+            &serde_json::to_vec(&accepted).map_err(|_| OperationalBoundsError::InvalidCase)?,
+        )
+        .map_err(|_| OperationalBoundsError::InvalidCase)?
+        .case_policy()
+    };
+    LedgerController::apply(store, &case_policy, &command)?;
     Ok(OperationalBoundsCycle::Escalated {
         case_key: case.case_key.clone(),
         bound: observation.bound,

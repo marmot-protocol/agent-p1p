@@ -175,6 +175,10 @@ pub struct RepositoryPolicy {
     /// outage, throttling, expired login) before the case parks for a human.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_outage_seconds: Option<u64>,
+    /// How long a case may go without any activity before it parks as stuck.
+    /// Defaults to the longest role runtime plus two hours, at least four.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_stall_seconds: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hermes_scratch_root: Option<String>,
     pub max_repeated_finding_fingerprint: u32,
@@ -189,6 +193,24 @@ impl RepositoryPolicy {
     pub fn outage_limit_seconds(&self) -> u64 {
         self.max_outage_seconds
             .unwrap_or(DEFAULT_MAX_OUTAGE_SECONDS)
+    }
+
+    pub fn stall_limit_seconds(&self) -> u64 {
+        self.max_stall_seconds.unwrap_or_else(|| {
+            let longest = self
+                .roles
+                .iter()
+                .filter_map(|role| {
+                    role.max_runtime
+                        .strip_prefix("PT")?
+                        .strip_suffix('M')?
+                        .parse::<u64>()
+                        .ok()
+                })
+                .max()
+                .unwrap_or(0);
+            (longest * 60 + 2 * 60 * 60).max(4 * 60 * 60)
+        })
     }
 
     /// Old policies retain their planner binding; new replies may opt into an
@@ -206,9 +228,11 @@ impl RepositoryPolicy {
         }
         Some(role)
     }
-    /// Capacity changes and a longer builder ceiling may apply to new cases.
-    /// Existing cases retain their accepted builder duration and every other
-    /// authority binding, including the exact model, retry budgets and paths.
+    /// Operational settings (capacity, retry and time limits, the
+    /// conversation inbox) apply to existing cases immediately. A longer
+    /// builder ceiling applies only to new cases. Everything that defines what
+    /// a case accepted (models, actors, label, paths, merge mode, remediation
+    /// rounds) stays pinned; changing it parks existing cases for a human.
     pub fn execution_policy_for(&self, accepted: &Self) -> Option<Self> {
         let normalize = |policy: &Self| {
             let mut policy = policy.clone();
@@ -218,6 +242,12 @@ impl RepositoryPolicy {
             policy.intake.global_active_limit = 1;
             policy.conversations_enabled = false;
             policy.conversation_model = None;
+            policy.max_case_elapsed_seconds = 1;
+            policy.max_provider_failures = 1;
+            policy.max_hermes_attempts = None;
+            policy.max_repeated_finding_fingerprint = 1;
+            policy.max_outage_seconds = None;
+            policy.max_stall_seconds = None;
             serde_json::to_value(policy).ok()
         };
         let mut compatible = self.clone();
@@ -464,6 +494,7 @@ fn validate_policy(policy: &RepositoryPolicy) -> Result<(), PolicyError> {
         && policy.max_provider_failures > 0
         && policy.max_hermes_attempts != Some(0)
         && policy.max_outage_seconds != Some(0)
+        && policy.max_stall_seconds != Some(0)
         && policy.max_repeated_finding_fingerprint > 0
         && sensitive_scope.len() == policy.sensitive_scope_categories.len()
         && sensitive_scope.iter().all(|category| {

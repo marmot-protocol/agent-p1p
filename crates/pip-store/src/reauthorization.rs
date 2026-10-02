@@ -122,7 +122,7 @@ pub(crate) fn work_started_at(connection: &Connection, case_key: &str) -> Result
     connection
         .query_row(
             "SELECT MAX(created_at,COALESCE((SELECT MAX(observed_at) FROM events WHERE case_key=?1
-         AND (event_type='ISSUE_REAUTHORIZED' OR
+         AND (event_type IN ('ISSUE_REAUTHORIZED','HUMAN_RESUMED') OR
               (event_type='HUMAN_FEEDBACK_RECEIVED' AND previous_state='SHADOW_READY'
                AND next_state='PLANNING' AND pr_number IS NOT NULL AND head_sha IS NOT NULL
                AND json_type(payload_json,'$.fresh_work_window')='true'
