@@ -251,23 +251,24 @@ pub fn reconcile_completed_once_with<'a, R: CommandRunner>(
                 .map_err(|error| error.to_string())
         };
         let binding = binding(&projection.task_id, &desired)?;
-        let result =
-            match metadata.and_then(|metadata| validated_result(metadata, &binding, &desired)) {
-                Ok(result) => result,
-                // While collection is paused, leave the task for an authorized pass.
-                Err(_) if !advance => continue,
-                Err(reason) => {
-                    return reject(
-                        store,
-                        policy,
-                        &projection,
-                        &desired,
-                        case_key,
-                        observed_at,
-                        Rejection::Failed(format!("the worker result was invalid: {reason}")),
-                    );
-                }
-            };
+        let result = match metadata
+            .and_then(|metadata| validated_result(metadata, &binding, &desired, observed_at))
+        {
+            Ok(result) => result,
+            // While collection is paused, leave the task for an authorized pass.
+            Err(_) if !advance => continue,
+            Err(reason) => {
+                return reject(
+                    store,
+                    policy,
+                    &projection,
+                    &desired,
+                    case_key,
+                    observed_at,
+                    Rejection::Failed(format!("the worker result was invalid: {reason}")),
+                );
+            }
+        };
         if !advance {
             let value = serde_json::to_value(&result)
                 .map_err(|error| ResultCycleError::MalformedResult(error.to_string()))?;
@@ -298,10 +299,24 @@ pub fn reconcile_completed_once_with<'a, R: CommandRunner>(
 }
 
 fn validated_result(
-    metadata: serde_json::Value,
+    mut metadata: serde_json::Value,
     binding: &WorkerBinding,
     desired: &TaskCreateSpec,
+    observed_at: u64,
 ) -> Result<WorkerResult, String> {
+    // Native reviewers still attest the head they reviewed: unlike the direct
+    // executor, nothing else proves which checkout a Hermes worker examined.
+    pip_contracts::fill_binding(
+        &mut metadata,
+        &pip_contracts::BindingFill {
+            binding,
+            task_body: &desired.body,
+            run_times: None,
+            now: observed_at,
+            reviewed_head_from_binding: false,
+        },
+    )
+    .map_err(|error| error.to_string())?;
     let result = WorkerResult::decode(metadata).map_err(|error| error.to_string())?;
     result
         .validate_binding(binding)

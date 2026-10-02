@@ -43,7 +43,13 @@ fn frozen_python_invalid_recipes_still_fail_closed_after_mapping() {
         "../../../migration/legacy-v1/invalid-contracts.json"
     ))
     .unwrap();
+    // The target contract deliberately stopped trusting a model's self-reported
+    // name; substitution is enforced by the pinned provider flag and probe.
+    let retired = ["builder model substitution fails closed"];
     for recipe in recipes["cases"].as_array().unwrap() {
+        if retired.contains(&recipe["name"].as_str().unwrap()) {
+            continue;
+        }
         let source = recipe["source"].as_str().unwrap();
         let mut value = happy["results"][source].clone();
         for field in recipe

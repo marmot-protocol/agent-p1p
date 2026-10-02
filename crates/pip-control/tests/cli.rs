@@ -44,9 +44,73 @@ fn workers_can_validate_results_without_ledger_or_provider_access() {
     let output = run(&wrong);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("expected a sequence"));
-    let mut wrong = fixtures["results"][1].clone();
-    wrong["actual_model"] = serde_json::json!("cursor/auto");
-    assert!(!run(&wrong).status.success());
+    // A model's self-reported name is not evidence either way.
+    let mut renamed = fixtures["results"][1].clone();
+    renamed["actual_model"] = serde_json::json!("cursor/auto");
+    assert!(run(&renamed).status.success());
+}
+
+#[test]
+fn workers_validate_a_payload_only_result_against_their_task_input() {
+    let dir = tempfile::tempdir().unwrap();
+    let fixtures: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../migration/target-v1/worker-results.json"
+    ))
+    .unwrap();
+    let full = &fixtures["results"][1];
+    let task = serde_json::json!({
+        "binding": {
+            "case": full["case"], "task_id": "builder-1", "role": "builder",
+            "requested_model": "cursor/composer-2.5",
+            "skills_repository_commit": full["skills_repository_commit"], "plan_version": 1,
+        },
+        "input": {"build_round": 1},
+    });
+    let task_path = dir.path().join("task-input.json");
+    fs::write(&task_path, serde_json::to_vec(&task).unwrap()).unwrap();
+    let mut payload = serde_json::Map::new();
+    for key in ["outcome", "head_sha", "local_checks", "finding_resolutions"] {
+        payload.insert(key.into(), full[key].clone());
+    }
+    let path = dir.path().join("worker-result.json");
+    fs::write(&path, serde_json::to_vec(&payload).unwrap()).unwrap();
+    let validate = || {
+        Command::new(env!("CARGO_BIN_EXE_pip-control"))
+            .args([
+                "validate-worker-result",
+                "--input",
+                path.to_str().unwrap(),
+                "--task-input",
+                task_path.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap()
+    };
+    let output = validate();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // A native worker without a task file checks just its own fields.
+    let output = Command::new(env!("CARGO_BIN_EXE_pip-control"))
+        .args([
+            "validate-worker-result",
+            "--input",
+            path.to_str().unwrap(),
+            "--role",
+            "builder",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    payload.insert("outcome".into(), serde_json::json!("SHIP_IT"));
+    fs::write(&path, serde_json::to_vec(&payload).unwrap()).unwrap();
+    assert!(!validate().status.success());
 }
 
 #[test]

@@ -71,7 +71,7 @@ fn oversized_evidence_is_rejected_before_starting_a_provider() {
         json!({"records": "x".repeat(pip_contracts::MAX_EVIDENCE_BUNDLE_BYTES)});
     assert!(matches!(
         executor(runner.clone()).execute(&health("composer-2.5"), &input, &worktree, &artifacts),
-        Err(CursorExecutionError::UnsafeSecretInput)
+        Err(CursorExecutionError::InputTooLarge)
     ));
     assert!(runner.commands.borrow().is_empty());
     assert!(!artifacts.join("immutable-evidence.json").exists());
@@ -432,7 +432,8 @@ fn builder_runs_once_in_fresh_exact_model_mode_and_retains_complete_artifacts() 
     let prompt = fs::read_to_string(command.stdin_file.as_ref().unwrap()).unwrap();
     assert!(prompt.contains("# Workflow Contract"));
     assert!(prompt.contains("# Role Contract"));
-    assert!(prompt.contains("review-ready structured result contract"));
+    assert!(prompt.contains("Pip fills in the task, case, model"));
+    assert!(prompt.contains("--task-input"));
     assert!(prompt.contains(artifacts.to_str().unwrap()));
     assert!(prompt.contains("worker-result.json"));
     assert_eq!(
@@ -515,7 +516,7 @@ fn review_mutation_guard(role: WorkerRole, index: usize) {
 }
 
 #[test]
-fn model_or_task_binding_mismatch_is_never_accepted() {
+fn health_must_match_the_task_model_and_results_carry_the_task_binding() {
     let tmp = tempfile::tempdir().unwrap();
     let worktree = tmp.path().join("worktree");
     fs::create_dir(&worktree).unwrap();
@@ -531,51 +532,47 @@ fn model_or_task_binding_mismatch_is_never_accepted() {
     ));
     assert!(runner.commands.borrow().is_empty());
 
+    // Bookkeeping a model guesses wrong is replaced by the task's own binding.
     let mut wrong = results()[1].clone();
     wrong["task_id"] = json!("another-task");
+    wrong["requested_model"] = json!("cursor/auto");
     runner.push(envelope(&wrong));
-    assert!(matches!(
-        executor(runner).execute(
+    let bound = task(WorkerRole::Builder, "composer-2.5", 1);
+    let result = executor(runner)
+        .execute(
             &health("composer-2.5"),
-            &task(WorkerRole::Builder, "composer-2.5", 1),
+            &bound,
             &worktree,
             &tmp.path().join("artifacts-2"),
-        ),
-        Err(CursorExecutionError::InvalidResult(_))
-    ));
+        )
+        .unwrap();
+    assert_eq!(result.common().task_id, bound.binding.task_id);
+    assert_eq!(
+        result.common().requested_model,
+        bound.binding.requested_model
+    );
 }
 
 #[test]
-fn secret_input_is_rejected_before_artifacts_and_timeout_remains_incomplete() {
+fn repository_text_is_not_scanned_and_timeout_remains_incomplete() {
     let tmp = tempfile::tempdir().unwrap();
     let worktree = tmp.path().join("worktree");
     fs::create_dir(&worktree).unwrap();
     let runner = FakeRunner::default();
-    let mut unsafe_task = task(WorkerRole::Builder, "composer-2.5", 1);
-    unsafe_task.immutable_input = json!({"canary": format!("ghp_{}", "a".repeat(30))});
-    let unsafe_artifacts = tmp.path().join("unsafe-artifacts");
-    assert!(matches!(
-        executor(runner.clone()).execute(
+    // Cryptographic test vectors in a target repository are ordinary input.
+    let mut vector_task = task(WorkerRole::Builder, "composer-2.5", 1);
+    vector_task.immutable_input["immutable_evidence_bundle"] = json!({
+        "issue": "-----BEGIN PRIVATE KEY----- test vector nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+    });
+    runner.push(envelope(&results()[1]));
+    executor(runner.clone())
+        .execute(
             &health("composer-2.5"),
-            &unsafe_task,
+            &vector_task,
             &worktree,
-            &unsafe_artifacts,
-        ),
-        Err(CursorExecutionError::UnsafeSecretInput)
-    ));
-    assert!(!unsafe_artifacts.exists());
-    unsafe_task.immutable_input =
-        json!({"immutable_evidence_bundle": {"canary": format!("ghp_{}", "a".repeat(30))}});
-    assert!(matches!(
-        executor(runner.clone()).execute(
-            &health("composer-2.5"),
-            &unsafe_task,
-            &worktree,
-            &unsafe_artifacts
-        ),
-        Err(CursorExecutionError::UnsafeSecretInput)
-    ));
-    assert!(!unsafe_artifacts.exists());
+            &tmp.path().join("vector-artifacts"),
+        )
+        .unwrap();
 
     runner.outputs.borrow_mut().push_back(Ok(ProcessOutput {
         status: -1,
@@ -686,7 +683,7 @@ fn valid_durable_result_recovers_empty_success_stdout() {
 }
 
 #[test]
-fn stdout_and_durable_result_must_agree_exactly() {
+fn the_durable_artifact_wins_when_stdout_retypes_the_result_differently() {
     let tmp = tempfile::tempdir().unwrap();
     let worktree = tmp.path().join("worktree");
     fs::create_dir(&worktree).unwrap();
@@ -704,23 +701,22 @@ fn stdout_and_durable_result_must_agree_exactly() {
         result: serde_json::to_vec_pretty(&artifact_result).unwrap(),
     };
 
-    assert!(matches!(
-        artifact_executor(runner).execute(
+    let result = artifact_executor(runner)
+        .execute(
             &health("composer-2.5"),
             &task(WorkerRole::Builder, "composer-2.5", 1),
             &worktree,
             &artifacts,
-        ),
-        Err(CursorExecutionError::ResultConflict)
-    ));
+        )
+        .unwrap();
+    assert_eq!(result.common().evidence["fixture"], json!(false));
     assert_eq!(
         serde_json::from_slice::<Value>(
             &fs::read(artifacts.join("execution-outcome.json")).unwrap()
         )
         .unwrap()["classification"],
-        "RESULT_CONFLICT"
+        "STDOUT_AND_ARTIFACT_RESULT"
     );
-    assert!(!artifacts.join("result.json").exists());
 }
 
 #[test]
@@ -746,7 +742,7 @@ fn malformed_durable_result_never_converts_a_timeout_to_success() {
             &worktree,
             &artifacts,
         ),
-        Err(CursorExecutionError::InvalidResultArtifact(_))
+        Err(CursorExecutionError::TimedOut)
     ));
     assert!(!artifacts.join("result.json").exists());
 }
@@ -836,4 +832,36 @@ fn ordinary_failures_and_model_prose_are_not_provider_outages() {
         !matches!(error, CursorExecutionError::ProviderUnavailable(_)),
         "{error:?}"
     );
+}
+
+#[test]
+fn a_result_carrying_a_credential_is_rejected_and_logs_are_masked() {
+    let tmp = tempfile::tempdir().unwrap();
+    let worktree = tmp.path().join("worktree");
+    fs::create_dir(&worktree).unwrap();
+    let artifacts = tmp.path().join("artifacts");
+    let token = format!("ghp_{}", "a".repeat(30));
+    let mut leaked = results()[1].clone();
+    leaked["local_checks"] = json!([format!("used {token} to push")]);
+    let runner = FakeRunner::default();
+    runner.outputs.borrow_mut().push_back(Ok(ProcessOutput {
+        status: 0,
+        stdout: envelope(&leaked),
+        stderr: format!("debug token={token}\n").into_bytes(),
+        timed_out: false,
+    }));
+    assert_eq!(
+        executor(runner)
+            .execute(
+                &health("composer-2.5"),
+                &task(WorkerRole::Builder, "composer-2.5", 1),
+                &worktree,
+                &artifacts,
+            )
+            .unwrap_err(),
+        CursorExecutionError::UnsafeSecretOutput
+    );
+    let stderr = fs::read_to_string(artifacts.join("stderr.log")).unwrap();
+    assert!(!stderr.contains(&token), "{stderr}");
+    assert!(stderr.contains("debug"), "{stderr}");
 }

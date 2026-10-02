@@ -141,7 +141,7 @@ fn paused_native_collection_rejects_a_foreign_result_before_retention() {
     project_planner(&mut store);
     let before = store.status(10).unwrap();
     let mut result = planner_result();
-    result["task_id"] = json!("foreign-task");
+    result["outcome"] = json!("NOT_A_PLANNER_OUTCOME");
     let runner = FakeRunner::default();
     runner.json(completed_planner("planner", result));
     // Paused collection never retains it, and records no rejection either:
@@ -479,17 +479,35 @@ fn stock_hermes_completion_annotations_are_not_worker_contract_fields() {
 }
 
 #[test]
-fn transport_annotations_never_hide_unknown_fields_bad_shapes_or_binding_drift() {
+fn bookkeeping_and_unknown_fields_are_tolerated_but_bad_annotations_are_retried() {
+    // Controller-owned fields are filled from the binding; unknown keys are ignored.
     for (field, value) in [
         ("invented_contract_field", json!(true)),
         ("_invented_transport_field", json!(true)),
+        ("task_id", json!("foreign-task")),
+        ("actual_model", json!("openai-codex/auto")),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
+        project_planner(&mut store);
+        let mut result = planner_result();
+        result[field] = value;
+        let runner = FakeRunner::default();
+        runner.json(completed_planner("planner", result));
+        let outcome =
+            ingest_completed_once_with(&mut store, &active_policy(), runner, "hermes", 10).unwrap();
+        assert!(
+            matches!(outcome, ResultCycle::Ingested { .. }),
+            "rejected {field}: {outcome:?}"
+        );
+    }
+    // Malformed transport annotations are invalid results: retried, never accepted.
+    for (field, value) in [
         ("worker_session_id", json!({"forged": true})),
         ("worker_session_id", json!("")),
         ("artifacts", json!({"path": "/tmp/result"})),
         ("artifacts", json!([false])),
         ("_staged_artifacts", json!("/tmp/result")),
-        ("task_id", json!("foreign-task")),
-        ("actual_model", json!("openai-codex/auto")),
     ] {
         let directory = tempfile::tempdir().unwrap();
         let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
@@ -514,7 +532,7 @@ fn transport_annotations_never_hide_unknown_fields_bad_shapes_or_binding_drift()
 }
 
 #[test]
-fn wrong_profile_or_self_described_model_never_mutates_the_case() {
+fn foreign_profiles_are_rejected_and_self_described_models_are_overwritten() {
     for (profile, mutate) in [("foreign", false), ("planner", true)] {
         let directory = tempfile::tempdir().unwrap();
         let mut store = Store::open(directory.path().join("ledger.db")).unwrap();
@@ -530,17 +548,24 @@ fn wrong_profile_or_self_described_model_never_mutates_the_case() {
         let outcome =
             ingest_completed_once_with(&mut store, &active_policy(), runner, "hermes", 10);
         if mutate {
-            // A self-described model change is an invalid result: retried, never accepted.
-            assert!(matches!(outcome, Ok(ResultCycle::RetryScheduled { .. })));
+            // The model's claim is replaced by the job's pinned model binding.
+            assert!(matches!(outcome, Ok(ResultCycle::Ingested { .. })));
+            let history = store
+                .immutable_history_for_case("repo:984321#1240@1")
+                .unwrap();
+            assert_eq!(
+                history.runs[0].payload["requested_model"],
+                "openai-codex/gpt-6-astra"
+            );
         } else {
             // A task run by a foreign profile is not this job's result at all.
             assert!(outcome.is_err());
+            assert_eq!(store.run_count().unwrap(), 0);
+            assert_eq!(
+                store.case("repo:984321#1240@1").unwrap().unwrap().state,
+                "PLANNING"
+            );
         }
-        assert_eq!(store.run_count().unwrap(), 0);
-        assert_eq!(
-            store.case("repo:984321#1240@1").unwrap().unwrap().state,
-            "PLANNING"
-        );
     }
 }
 
@@ -1023,7 +1048,7 @@ fn a_due_retry_creates_one_fresh_task_carrying_the_previous_error() {
         spec.parent_task_ids.clear();
     });
     let mut invalid = planner_result();
-    invalid["requested_model"] = json!("openai-codex/auto");
+    invalid["outcome"] = json!("NOT_A_PLANNER_OUTCOME");
     let runner = FakeRunner::default();
     runner.json(completed_planner("planner", invalid));
     let ResultCycle::RetryScheduled {

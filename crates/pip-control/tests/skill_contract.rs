@@ -62,35 +62,25 @@ fn worker_field_guide_is_a_packaged_shared_skill_resource() {
 }
 
 #[test]
-fn shared_skill_requires_every_immutable_common_binding() {
+fn shared_skill_leaves_bookkeeping_to_the_controller() {
     let shared = ROLE_SKILLS[0].1;
-    for field in [
-        "contract_version",
-        "workflow_version",
-        "repository_id",
-        "issue_number",
-        "task_id",
-        "role",
-        "requested_model",
-        "actual_model",
-        "skills_repository_commit",
-        "started_at_unix",
-        "completed_at_unix",
-        "evidence",
+    assert!(shared.contains("Pip fills in the case, task, model, plan, round and timing"));
+    for retired in [
+        "BLOCKED_UNEXPECTED_MODEL",
+        "Copy the case identity",
+        "Requested and actual models match",
     ] {
-        assert!(
-            shared.contains(&format!("`{field}`")),
-            "shared skill omits required common field {field}"
-        );
+        assert!(!shared.contains(retired), "shared skill still says {retired}");
     }
     for field in [
         "immutable_evidence_bundle",
         "bound_state_revision",
         "sha256",
+        "previous_result_error",
     ] {
         assert!(
             shared.contains(&format!("`{field}`")),
-            "shared skill omits immutable task evidence field {field}"
+            "shared skill omits task evidence field {field}"
         );
     }
 }

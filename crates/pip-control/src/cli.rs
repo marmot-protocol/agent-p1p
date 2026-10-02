@@ -112,16 +112,83 @@ pub fn run_cli(arguments: impl IntoIterator<Item = String>) -> Result<Value, Cli
     }
 }
 
+/// Lets a worker check its own result exactly as the controller will: the
+/// task's binding is filled in from `--task-input` before validation.
 fn validate_worker_result(arguments: &[String]) -> Result<Value, CliError> {
-    let options = options(arguments, &["--input"], &[])?;
+    let options = options(arguments, &["--input"], &["--task-input", "--role"])?;
     let bytes = read_bounded(Path::new(required(&options, "--input")?), 4 * 1024 * 1024)?;
-    let value =
+    let mut value: Value =
         serde_json::from_slice(&bytes).map_err(|error| CliError::Contract(error.to_string()))?;
-    let result = pip_contracts::WorkerResult::decode(value)
-        .map_err(|error| CliError::Contract(error.to_string()))?;
-    result
-        .validate()
-        .map_err(|error| CliError::Contract(error.to_string()))?;
+    let contract = |error: &dyn std::fmt::Display| CliError::Contract(error.to_string());
+    let binding = match options.get("--task-input") {
+        Some(path) => {
+            let task: Value =
+                serde_json::from_slice(&read_bounded(Path::new(path), 16 * 1024 * 1024)?)
+                    .map_err(|error| contract(&error))?;
+            let binding: pip_contracts::WorkerBinding =
+                serde_json::from_value(task["binding"].clone())
+                    .map_err(|error| contract(&error))?;
+            let now = current_time()?;
+            pip_contracts::fill_binding(
+                &mut value,
+                &pip_contracts::BindingFill {
+                    binding: &binding,
+                    task_body: &task["input"],
+                    run_times: Some((now, now)),
+                    now,
+                    reviewed_head_from_binding: binding.role != pip_contracts::WorkerRole::Builder,
+                },
+            )
+            .map_err(|error| contract(&error))?;
+            Some(binding)
+        }
+        None => {
+            // Without the task, check only the worker's own fields: supply
+            // placeholders for any bookkeeping the worker left to Pip.
+            let object = value
+                .as_object_mut()
+                .ok_or_else(|| CliError::Contract("a result must be a JSON object".into()))?;
+            if let Some(role) = options.get("--role") {
+                object.insert("role".into(), json!(role));
+            }
+            let reviewed = !matches!(
+                object.get("role").and_then(Value::as_str),
+                Some("planner" | "builder")
+            );
+            let mut placeholders = vec![
+                ("contract_version", json!(pip_contracts::CONTRACT_VERSION)),
+                ("workflow_version", json!(1)),
+                (
+                    "case",
+                    json!({"repository_id":1,"issue_number":1,"workflow_version":1}),
+                ),
+                ("task_id", json!("unbound")),
+                ("requested_model", json!("unbound/unbound")),
+                ("actual_model", json!("unbound/unbound")),
+                ("skills_repository_commit", json!("0".repeat(40))),
+                ("started_at_unix", json!(0)),
+                ("completed_at_unix", json!(0)),
+                ("evidence", json!({})),
+                ("plan_version", json!(1)),
+                ("build_round", json!(1)),
+                ("review_round", json!(1)),
+                ("final_review_round", json!(1)),
+            ];
+            if reviewed {
+                placeholders.extend([("pr_number", json!(1)), ("reviewer_id", json!("unbound"))]);
+            }
+            for (key, placeholder) in placeholders {
+                object.entry(key).or_insert(placeholder);
+            }
+            None
+        }
+    };
+    let result = pip_contracts::WorkerResult::decode(value).map_err(|error| contract(&error))?;
+    match &binding {
+        Some(binding) => result.validate_binding(binding),
+        None => result.validate(),
+    }
+    .map_err(|error| contract(&error))?;
     Ok(
         json!({"ok":true,"role":result.common().role,"task_id":result.common().task_id,"workflow_authorized":false}),
     )

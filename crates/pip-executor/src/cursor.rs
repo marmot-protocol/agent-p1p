@@ -5,14 +5,14 @@ use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
-use pip_contracts::{WorkerBinding, WorkerResult, WorkerRole};
+use pip_contracts::{BindingFill, WorkerBinding, WorkerResult, WorkerRole, fill_binding};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -37,7 +37,9 @@ pub enum CursorExecutionError {
     ArtifactExists,
     ArtifactIo(String),
     TemporaryIo(String),
-    UnsafeSecretInput,
+    /// The frozen task input exceeds its transport bound.
+    InputTooLarge,
+    /// The worker's result contains a credential-shaped token.
     UnsafeSecretOutput,
     HealthBindingMismatch,
     Process(ProcessError),
@@ -53,7 +55,6 @@ pub enum CursorExecutionError {
     MalformedEnvelope(String),
     InvalidResult(String),
     InvalidResultArtifact(String),
-    ResultConflict,
     ReviewerDirtyBaseline,
     ReviewerHeadMismatch,
     ReviewerMutation,
@@ -72,11 +73,9 @@ impl fmt::Display for CursorExecutionError {
             Self::TemporaryIo(error) => {
                 write!(formatter, "worker temporary storage failed: {error}")
             }
-            Self::UnsafeSecretInput => {
-                formatter.write_str("worker input contains credential-like material")
-            }
+            Self::InputTooLarge => formatter.write_str("worker input exceeds its transport bound"),
             Self::UnsafeSecretOutput => {
-                formatter.write_str("worker output contains credential-like material")
+                formatter.write_str("worker result contains a credential-shaped token")
             }
             Self::HealthBindingMismatch => {
                 formatter.write_str("provider health does not match the exact task model")
@@ -102,9 +101,6 @@ impl fmt::Display for CursorExecutionError {
             Self::InvalidResult(error) => write!(formatter, "invalid bound worker result: {error}"),
             Self::InvalidResultArtifact(error) => {
                 write!(formatter, "invalid durable worker result artifact: {error}")
-            }
-            Self::ResultConflict => {
-                formatter.write_str("Cursor stdout and durable worker result artifact disagree")
             }
             Self::ReviewerDirtyBaseline => {
                 formatter.write_str("reviewer worktree was dirty before execution")
@@ -201,17 +197,17 @@ impl<R: ProcessRunner> CursorExecutor<R> {
                 let compact = serde_json::to_vec(&bundle)
                     .map_err(|error| CursorExecutionError::InvalidResult(error.to_string()))?;
                 if compact.len() > pip_contracts::MAX_EVIDENCE_BUNDLE_BYTES {
-                    return Err(CursorExecutionError::UnsafeSecretInput);
+                    return Err(CursorExecutionError::InputTooLarge);
                 }
                 serde_json::to_vec_pretty(&bundle)
                     .map_err(|error| CursorExecutionError::InvalidResult(error.to_string()))
             })
             .transpose()?;
         if let Some(bytes) = &evidence {
-            if bytes.len() > pip_contracts::MAX_EVIDENCE_ARTIFACT_BYTES
-                || contains_secret(&String::from_utf8_lossy(bytes))
-            {
-                return Err(CursorExecutionError::UnsafeSecretInput);
+            // Repository and issue text are untrusted input that workers may
+            // read anyway, and workers hold no credentials; only size is bound.
+            if bytes.len() > pip_contracts::MAX_EVIDENCE_ARTIFACT_BYTES {
+                return Err(CursorExecutionError::InputTooLarge);
             }
             let digest: String = Sha256::digest(bytes)
                 .iter()
@@ -230,12 +226,8 @@ impl<R: ProcessRunner> CursorExecutor<R> {
         .map_err(|error| CursorExecutionError::InvalidResult(error.to_string()))?
             + "\n";
         let prompt = render_prompt(task, &task_input, artifact_dir, temporary.path());
-        if task_input.len() > self.max_output_bytes
-            || prompt.len() > self.max_output_bytes
-            || contains_secret(&task_input)
-            || contains_secret(&prompt)
-        {
-            return Err(CursorExecutionError::UnsafeSecretInput);
+        if task_input.len() > self.max_output_bytes || prompt.len() > self.max_output_bytes {
+            return Err(CursorExecutionError::InputTooLarge);
         }
 
         create_artifact_dir(artifact_dir)?;
@@ -307,6 +299,7 @@ impl<R: ProcessRunner> CursorExecutor<R> {
             None
         };
 
+        let started_unix = unix_now();
         let output = self.runner.run(&ProcessSpec {
             program: self.program.clone(),
             args,
@@ -316,23 +309,10 @@ impl<R: ProcessRunner> CursorExecutor<R> {
             timeout: self.timeout,
             max_output_bytes: self.max_output_bytes,
         })?;
-        let unsafe_output = contains_secret(&String::from_utf8_lossy(&output.stdout))
-            || contains_secret(&String::from_utf8_lossy(&output.stderr));
-        if unsafe_output {
-            write_artifact(
-                artifact_dir,
-                "stdout.log",
-                b"[REDACTED unsafe provider output]\n",
-            )?;
-            write_artifact(
-                artifact_dir,
-                "stderr.log",
-                b"[REDACTED unsafe provider output]\n",
-            )?;
-            return Err(CursorExecutionError::UnsafeSecretOutput);
-        }
-        write_artifact(artifact_dir, "stdout.log", &output.stdout)?;
-        write_artifact(artifact_dir, "stderr.log", &output.stderr)?;
+        let completed_unix = unix_now().max(started_unix);
+        // Logs keep their diagnostics; only credential-shaped tokens are masked.
+        write_artifact(artifact_dir, "stdout.log", &redact_secrets(&output.stdout))?;
+        write_artifact(artifact_dir, "stderr.log", &redact_secrets(&output.stderr))?;
 
         if let Some(before) = reviewer_before {
             let after = self.git_snapshot(&worktree)?;
@@ -341,79 +321,69 @@ impl<R: ProcessRunner> CursorExecutor<R> {
             }
         }
 
+        // The worker reports only its judgement; the controller completes the
+        // bookkeeping it already knows before decoding and binding the result.
+        let bind = |mut value: Value| -> Result<WorkerResult, String> {
+            fill_binding(
+                &mut value,
+                &BindingFill {
+                    binding: &task.binding,
+                    task_body: &task.immutable_input,
+                    run_times: Some((started_unix, completed_unix)),
+                    now: completed_unix,
+                    reviewed_head_from_binding: task.binding.role != WorkerRole::Builder,
+                },
+            )
+            .map_err(|error| error.to_string())?;
+            let result = WorkerResult::decode(value).map_err(|error| error.to_string())?;
+            result
+                .validate_binding(&task.binding)
+                .map_err(|error| error.to_string())?;
+            Ok(result)
+        };
+
         let transport_error = validate_output(&output, self.max_output_bytes).err();
         let provider_failure = provider_failure(&output);
         let stdout_result = if output.stdout.len() <= self.max_output_bytes
             && output.stderr.len() <= self.max_output_bytes
         {
-            parse_envelope(&output.stdout).and_then(|(result, envelope)| {
-                result
-                    .validate_binding(&task.binding)
-                    .map_err(|error| CursorExecutionError::InvalidResult(error.to_string()))?;
-                Ok((result, envelope))
+            parse_envelope(&output.stdout).and_then(|(value, envelope)| {
+                Ok((
+                    bind(value).map_err(CursorExecutionError::InvalidResult)?,
+                    envelope,
+                ))
             })
         } else {
             Err(CursorExecutionError::OutputTooLarge)
         };
         let artifact_result =
-            match read_result_artifact(artifact_dir, self.max_output_bytes, &task.binding) {
-                Ok(result) => result,
-                Err(error) => {
-                    write_execution_outcome(artifact_dir, "INVALID_RESULT_ARTIFACT", &output)?;
-                    return Err(error);
-                }
-            };
+            read_result_artifact(artifact_dir, self.max_output_bytes).and_then(|value| {
+                value
+                    .map(|value| bind(value).map_err(CursorExecutionError::InvalidResultArtifact))
+                    .transpose()
+            });
 
+        // The durable artifact is authoritative; stdout is the fallback. A
+        // model that retypes its result in prose cannot fail an otherwise
+        // valid run by disagreeing with the file it saved.
         let (result, envelope, classification) = match (stdout_result, artifact_result) {
-            (Ok((stdout, _envelope)), Some(artifact)) if stdout != artifact => {
-                write_execution_outcome(artifact_dir, "RESULT_CONFLICT", &output)?;
-                return Err(CursorExecutionError::ResultConflict);
-            }
-            (Ok((stdout, envelope)), Some(_)) => {
+            (stdout, Ok(Some(artifact))) => {
                 let classification = match transport_error {
                     Some(CursorExecutionError::TimedOut) => "ARTIFACT_RECOVERY_AFTER_TIMEOUT",
                     Some(CursorExecutionError::CommandFailed(_)) => {
                         "ARTIFACT_RECOVERY_AFTER_PROVIDER_FAILURE"
                     }
                     Some(_) => "ARTIFACT_RECOVERY_AFTER_TRANSPORT_FAILURE",
-                    None => "STDOUT_AND_ARTIFACT_RESULT",
-                };
-                (stdout, Some(envelope), classification)
-            }
-            (Err(_), Some(artifact)) => {
-                let classification = match transport_error {
-                    Some(CursorExecutionError::TimedOut) => "ARTIFACT_RECOVERY_AFTER_TIMEOUT",
-                    Some(CursorExecutionError::CommandFailed(_)) => {
-                        "ARTIFACT_RECOVERY_AFTER_PROVIDER_FAILURE"
-                    }
-                    Some(_) => "ARTIFACT_RECOVERY_AFTER_TRANSPORT_FAILURE",
+                    None if stdout.is_ok() => "STDOUT_AND_ARTIFACT_RESULT",
                     None => "ARTIFACT_RECOVERY_AFTER_INVALID_STDOUT",
                 };
-                (artifact, None, classification)
+                let envelope = stdout.ok().map(|(_, envelope)| envelope);
+                (artifact, envelope, classification)
             }
-            (Ok((stdout, envelope)), None) => {
-                if let Some(error) = transport_error {
-                    if let Some(failure) = provider_failure {
-                        write_execution_outcome(
-                            artifact_dir,
-                            "PROVIDER_UNAVAILABLE_NO_RESULT",
-                            &output,
-                        )?;
-                        return Err(failure);
-                    }
-                    let classification = match error {
-                        CursorExecutionError::TimedOut => "TIMEOUT_WITHOUT_DURABLE_RESULT",
-                        CursorExecutionError::CommandFailed(_) => {
-                            "PROVIDER_FAILURE_WITHOUT_DURABLE_RESULT"
-                        }
-                        _ => "TRANSPORT_FAILURE_WITHOUT_DURABLE_RESULT",
-                    };
-                    write_execution_outcome(artifact_dir, classification, &output)?;
-                    return Err(error);
-                }
+            (Ok((stdout, envelope)), Ok(None) | Err(_)) if transport_error.is_none() => {
                 (stdout, Some(envelope), "STDOUT_RESULT")
             }
-            (Err(stdout_error), None) => {
+            (stdout, artifact) => {
                 if let Some(failure) = provider_failure {
                     write_execution_outcome(
                         artifact_dir,
@@ -422,17 +392,35 @@ impl<R: ProcessRunner> CursorExecutor<R> {
                     )?;
                     return Err(failure);
                 }
-                let error = transport_error.unwrap_or(stdout_error);
-                let classification = match error {
-                    CursorExecutionError::TimedOut => "TIMEOUT_NO_RESULT",
-                    CursorExecutionError::CommandFailed(_) => "PROVIDER_FAILURE_NO_RESULT",
-                    CursorExecutionError::OutputTooLarge => "OUTPUT_TOO_LARGE_NO_RESULT",
-                    _ => "INVALID_STDOUT_NO_RESULT",
+                let (classification, error) = match (transport_error, artifact) {
+                    (Some(CursorExecutionError::TimedOut), _) => {
+                        ("TIMEOUT_NO_RESULT", CursorExecutionError::TimedOut)
+                    }
+                    (Some(error @ CursorExecutionError::CommandFailed(_)), _) => {
+                        ("PROVIDER_FAILURE_NO_RESULT", error)
+                    }
+                    (Some(error @ CursorExecutionError::OutputTooLarge), _) => {
+                        ("OUTPUT_TOO_LARGE_NO_RESULT", error)
+                    }
+                    (Some(error), _) => ("TRANSPORT_FAILURE_NO_RESULT", error),
+                    (None, Err(error)) => ("INVALID_RESULT_ARTIFACT", error),
+                    (None, Ok(_)) => (
+                        "INVALID_STDOUT_NO_RESULT",
+                        stdout.err().unwrap_or_else(|| {
+                            CursorExecutionError::InvalidResult("no worker result".into())
+                        }),
+                    ),
                 };
                 write_execution_outcome(artifact_dir, classification, &output)?;
                 return Err(error);
             }
         };
+        let serialized = serde_json::to_string(&result)
+            .map_err(|error| CursorExecutionError::InvalidResult(error.to_string()))?;
+        if contains_secret(&serialized) {
+            write_execution_outcome(artifact_dir, "UNSAFE_RESULT", &output)?;
+            return Err(CursorExecutionError::UnsafeSecretOutput);
+        }
 
         if let Some(envelope) = envelope {
             write_json(artifact_dir, "cursor-envelope.json", &envelope)?;
@@ -502,8 +490,7 @@ impl<R: ProcessRunner> CursorExecutor<R> {
 fn read_result_artifact(
     artifact_dir: &Path,
     max_bytes: usize,
-    binding: &WorkerBinding,
-) -> Result<Option<WorkerResult>, CursorExecutionError> {
+) -> Result<Option<Value>, CursorExecutionError> {
     let path = artifact_dir.join("worker-result.json");
     let metadata = match fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
@@ -547,19 +534,9 @@ fn read_result_artifact(
             "worker-result.json changed while it was read".into(),
         ));
     }
-    if contains_secret(&String::from_utf8_lossy(&bytes)) {
-        return Err(CursorExecutionError::InvalidResultArtifact(
-            "worker-result.json contains credential-like material".into(),
-        ));
-    }
     let value: Value = serde_json::from_slice(&bytes)
         .map_err(|error| CursorExecutionError::InvalidResultArtifact(error.to_string()))?;
-    let result = WorkerResult::decode(value)
-        .map_err(|error| CursorExecutionError::InvalidResultArtifact(error.to_string()))?;
-    result
-        .validate_binding(binding)
-        .map_err(|error| CursorExecutionError::InvalidResultArtifact(error.to_string()))?;
-    Ok(Some(result))
+    Ok(Some(value))
 }
 
 fn write_execution_outcome(
@@ -608,12 +585,12 @@ fn render_prompt(
     temporary: &Path,
 ) -> String {
     let mut prompt = format!(
-        "{}\n\n{}\n\n# Immutable Task Input\n\n```json\n{}```\n\n# Result Requirement\n\nReturn only the review-ready structured result contract bound to this exact task. Set requested_model to `{}` and report the model identity visible in the runtime as actual_model. A mismatch must use BLOCKED_UNEXPECTED_MODEL. Do not resume or reuse any prior session.\n\nRun artifact directory: `{}`. Save your contract there as `worker-result.json`, outside the source checkout, and validate it with `/opt/pip/current/bin/pip-control validate-worker-result --input <absolute-path-to-worker-result.json>` before returning the same JSON object. The direct runtime captures your response; no Hermes completion tool is needed.\n",
+        "{}\n\n{}\n\n# Immutable Task Input\n\n```json\n{}```\n\n# Result\n\nReturn one JSON object describing your work: `outcome` and the role-specific fields from the field guide. Pip fills in the task, case, model, plan version, round, reviewed head and timing fields itself, so you do not need to copy them. Do not resume or reuse any prior session.\n\nSave the object as `worker-result.json` in the run artifact directory `{}`, outside the source checkout, and check it with `/opt/pip/current/bin/pip-control validate-worker-result --input <absolute-path-to-worker-result.json> --task-input {}`. Pip reads the saved file; your final message is only a fallback. No Hermes completion tool is needed.\n",
         task.workflow_skill,
         task.role_skill,
         task_input,
-        task.binding.requested_model,
         artifact_dir.display(),
+        artifact_dir.join("task-input.json").display(),
     );
     prompt.push_str(&format!(
         "\nTemporary storage: `{}` is assigned through TMPDIR, TMP and TEMP. Preserve these variables for tests and Unix sockets; do not replace them with a long case/artifact path. This directory is private, disposable and removed after this run. Keep build caches in the assigned managed workspace and retained evidence in the run artifact directory, never in temporary storage.\n",
@@ -737,7 +714,7 @@ fn bounded_detail(text: &str) -> String {
     text[..end].to_string()
 }
 
-fn parse_envelope(stdout: &[u8]) -> Result<(WorkerResult, Value), CursorExecutionError> {
+fn parse_envelope(stdout: &[u8]) -> Result<(Value, Value), CursorExecutionError> {
     let envelope_value: Value = serde_json::from_slice(stdout)
         .map_err(|error| CursorExecutionError::MalformedEnvelope(error.to_string()))?;
     let envelope: CursorEnvelope = serde_json::from_value(envelope_value.clone())
@@ -749,15 +726,14 @@ fn parse_envelope(stdout: &[u8]) -> Result<(WorkerResult, Value), CursorExecutio
     }
     let _ = envelope.extra;
     let result = match envelope.result {
-        Value::String(text) => WorkerResult::decode(result_from_transcript(&text)?),
-        value @ Value::Object(_) => WorkerResult::decode(value),
+        Value::String(text) => result_from_transcript(&text)?,
+        value @ Value::Object(_) => value,
         _ => {
             return Err(CursorExecutionError::MalformedEnvelope(
                 "result is neither an object nor encoded object".into(),
             ));
         }
-    }
-    .map_err(|error| CursorExecutionError::InvalidResult(error.to_string()))?;
+    };
     Ok((result, envelope_value))
 }
 
@@ -895,16 +871,53 @@ fn sync_directory(path: &Path) -> Result<(), CursorExecutionError> {
         .map_err(|error| CursorExecutionError::ArtifactIo(error.to_string()))
 }
 
+/// Credential shapes Pip or its hosts could actually leak. Cryptographic test
+/// vectors (PEM blocks, Nostr keys) are legitimate content in target repos.
+fn token_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
+}
+
+fn secret_token(token: &str) -> bool {
+    ["ghp_", "gho_", "ghs_", "ghu_", "github_pat_", "sk-"]
+        .iter()
+        .any(|prefix| token.starts_with(prefix) && token.len() >= 24)
+        || (token.starts_with("AKIA") && token.len() == 20)
+}
+
 fn contains_secret(text: &str) -> bool {
-    if text.contains("PRIVATE KEY") {
-        return true;
+    text.split(|character: char| !token_character(character))
+        .any(secret_token)
+}
+
+fn redact_secrets(bytes: &[u8]) -> Vec<u8> {
+    let text = String::from_utf8_lossy(bytes);
+    if !contains_secret(&text) {
+        return bytes.to_vec();
     }
-    text.split(|character: char| character.is_whitespace() || matches!(character, '"' | '\''))
-        .any(|token| {
-            (token.starts_with("ghp_") && token.len() >= 24)
-                || (token.starts_with("gho_") && token.len() >= 24)
-                || (token.starts_with("sk-") && token.len() >= 24)
-                || (token.starts_with("AKIA") && token.len() == 20)
-                || (token.starts_with("nsec1") && token.len() >= 25)
-        })
+    let mut redacted = String::with_capacity(text.len());
+    let mut token = String::new();
+    let flush = |token: &mut String, redacted: &mut String| {
+        if secret_token(token) {
+            redacted.push_str("[REDACTED]");
+        } else {
+            redacted.push_str(token);
+        }
+        token.clear();
+    };
+    for character in text.chars() {
+        if !token_character(character) {
+            flush(&mut token, &mut redacted);
+            redacted.push(character);
+        } else {
+            token.push(character);
+        }
+    }
+    flush(&mut token, &mut redacted);
+    redacted.into_bytes()
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs())
 }

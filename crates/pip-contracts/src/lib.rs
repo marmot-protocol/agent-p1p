@@ -103,8 +103,8 @@ pub struct WorkerBinding {
     pub expected_head_sha: Option<String>,
 }
 
+/// Unknown fields are ignored: a stray key from a model must not discard its work.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct CommonResult {
     pub contract_version: u32,
     pub workflow_version: u32,
@@ -147,8 +147,8 @@ pub enum SensitiveScope {
     PushPayloadContext,
 }
 
+/// Unknown fields are ignored: a stray key from a model must not discard its work.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct PlannerResult {
     #[serde(flatten)]
     pub common: CommonResult,
@@ -183,8 +183,8 @@ pub struct FindingResolution {
     pub tests: Vec<String>,
 }
 
+/// Unknown fields are ignored: a stray key from a model must not discard its work.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct BuilderResult {
     #[serde(flatten)]
     pub common: CommonResult,
@@ -240,8 +240,8 @@ pub struct FindingConfirmation {
     pub evidence: Vec<String>,
 }
 
+/// Unknown fields are ignored: a stray key from a model must not discard its work.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct ReviewResult {
     #[serde(flatten)]
     pub common: CommonResult,
@@ -269,8 +269,8 @@ pub enum FinalOutcome {
     BlockedUnexpectedModel,
 }
 
+/// Unknown fields are ignored: a stray key from a model must not discard its work.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct FinalResult {
     #[serde(flatten)]
     pub common: CommonResult,
@@ -283,13 +283,113 @@ pub struct FinalResult {
     pub decision_rationale: String,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum WorkerResult {
     Planner(PlannerResult),
     Builder(BuilderResult),
     Review(ReviewResult),
     Final(FinalResult),
+}
+
+/// Results decode by their declared role, never by guessing which shape fits.
+impl<'de> Deserialize<'de> for WorkerResult {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::decode(Value::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Everything the controller already knows about a job, used to complete a
+/// worker's result so the model only has to report its actual work.
+pub struct BindingFill<'a> {
+    pub binding: &'a WorkerBinding,
+    /// The frozen task body; supplies review, build, and final-review rounds.
+    pub task_body: &'a Value,
+    /// Start and end times measured by the executor, when it measures them.
+    pub run_times: Option<(u64, u64)>,
+    /// When the controller observed the result; an upper bound for worker times.
+    pub now: u64,
+    /// Fill `reviewed_head_sha` from the binding. Only for executors that
+    /// verify the reviewed checkout themselves; otherwise the worker attests it.
+    pub reviewed_head_from_binding: bool,
+}
+
+/// Overwrites or inserts the controller-owned fields of a worker result.
+/// Worker-produced data (outcomes, findings, a builder's new head) is kept.
+pub fn fill_binding(value: &mut Value, fill: &BindingFill<'_>) -> Result<(), ContractError> {
+    let binding = fill.binding;
+    let object = value.as_object_mut().ok_or(ContractError::RoleMismatch)?;
+    let case = serde_json::to_value(&binding.case).map_err(|_| ContractError::InvalidIdentity)?;
+    let role = serde_json::to_value(binding.role).map_err(|_| ContractError::RoleMismatch)?;
+    object.insert("contract_version".into(), CONTRACT_VERSION.into());
+    object.insert(
+        "workflow_version".into(),
+        binding.case.workflow_version.into(),
+    );
+    object.insert("case".into(), case);
+    object.insert("task_id".into(), binding.task_id.clone().into());
+    object.insert("role".into(), role);
+    object.insert(
+        "requested_model".into(),
+        binding.requested_model.clone().into(),
+    );
+    object.insert(
+        "actual_model".into(),
+        binding.requested_model.clone().into(),
+    );
+    object.insert(
+        "skills_repository_commit".into(),
+        binding.skills_repository_commit.clone().into(),
+    );
+    object.insert("plan_version".into(), binding.plan_version.into());
+    object
+        .entry("evidence")
+        .or_insert_with(|| Value::Object(Map::new()));
+    let reviewed = matches!(
+        binding.role,
+        WorkerRole::ReviewerGeneral | WorkerRole::ReviewerSecperf | WorkerRole::FinalReviewer
+    );
+    if reviewed {
+        if let Some(pr_number) = binding.pr_number {
+            object.insert("pr_number".into(), pr_number.into());
+        }
+        if fill.reviewed_head_from_binding
+            && let Some(head) = &binding.expected_head_sha
+        {
+            object.insert("reviewed_head_sha".into(), head.clone().into());
+        }
+    }
+    if let Some(reviewer_id) = &binding.reviewer_id {
+        object.insert("reviewer_id".into(), reviewer_id.clone().into());
+    }
+    let round = |key: &str| fill.task_body.get(key).and_then(Value::as_u64);
+    let rounds: &[&str] = match binding.role {
+        WorkerRole::Builder => &["build_round"],
+        WorkerRole::ReviewerGeneral | WorkerRole::ReviewerSecperf => &["review_round"],
+        WorkerRole::FinalReviewer => &["final_review_round"],
+        WorkerRole::Planner => &[],
+    };
+    for key in rounds {
+        if let Some(value) = round(key) {
+            object.insert((*key).into(), value.into());
+        }
+    }
+    let (started, completed) = fill.run_times.unwrap_or_else(|| {
+        let completed = object
+            .get("completed_at_unix")
+            .and_then(Value::as_u64)
+            .filter(|completed| *completed > 0 && *completed <= fill.now)
+            .unwrap_or(fill.now);
+        let started = object
+            .get("started_at_unix")
+            .and_then(Value::as_u64)
+            .filter(|started| *started > 0 && *started <= completed)
+            .unwrap_or(completed);
+        (started, completed)
+    });
+    object.insert("started_at_unix".into(), started.into());
+    object.insert("completed_at_unix".into(), completed.into());
+    Ok(())
 }
 
 fn is_hex(value: &str, length: usize) -> bool {
@@ -304,11 +404,7 @@ fn not_blank(value: &str) -> bool {
 }
 
 impl CommonResult {
-    fn validate(
-        &self,
-        expected_role: WorkerRole,
-        blocked_unexpected: bool,
-    ) -> Result<(), ContractError> {
+    fn validate(&self, expected_role: WorkerRole) -> Result<(), ContractError> {
         if self.contract_version != CONTRACT_VERSION {
             return Err(ContractError::UnsupportedContractVersion);
         }
@@ -330,12 +426,6 @@ impl CommonResult {
             || !not_blank(&self.actual_model)
         {
             return Err(ContractError::EmptyRequiredField);
-        }
-        if self.requested_model != self.actual_model && !blocked_unexpected {
-            return Err(ContractError::UnexpectedModel);
-        }
-        if self.requested_model == self.actual_model && blocked_unexpected {
-            return Err(ContractError::InvalidOutcomeEvidence);
         }
         if !is_hex(&self.skills_repository_commit, 40) {
             return Err(ContractError::InvalidCommit);
@@ -432,10 +522,7 @@ impl WorkerResult {
 
 impl PlannerResult {
     fn validate(&self) -> Result<(), ContractError> {
-        self.common.validate(
-            WorkerRole::Planner,
-            self.outcome == PlannerOutcome::BlockedUnexpectedModel,
-        )?;
+        self.common.validate(WorkerRole::Planner)?;
         if self.plan_version == 0 || !is_hex(&self.planned_base_sha, 40) {
             return Err(ContractError::InvalidIdentity);
         }
@@ -445,10 +532,10 @@ impl PlannerResult {
         if self.dependencies.iter().any(|item| !item.is_object()) {
             return Err(ContractError::InvalidOutcomeEvidence);
         }
+        // Sensitive scope is published and focuses review; it does not stop
+        // a plan. Unresolved dependencies or decisions do.
         if self.outcome == PlannerOutcome::Proceed
-            && (!self.sensitive_scope.is_empty()
-                || !self.dependencies.is_empty()
-                || !self.open_decisions.is_empty())
+            && (!self.dependencies.is_empty() || !self.open_decisions.is_empty())
         {
             return Err(ContractError::InvalidOutcomeEvidence);
         }
@@ -458,10 +545,7 @@ impl PlannerResult {
 
 impl BuilderResult {
     fn validate(&self) -> Result<(), ContractError> {
-        self.common.validate(
-            WorkerRole::Builder,
-            self.outcome == BuilderOutcome::BlockedUnexpectedModel,
-        )?;
+        self.common.validate(WorkerRole::Builder)?;
         if self.plan_version == 0 || self.build_round == 0 {
             return Err(ContractError::InvalidIdentity);
         }
@@ -498,10 +582,7 @@ impl ReviewResult {
         ) {
             return Err(ContractError::RoleMismatch);
         }
-        self.common.validate(
-            self.common.role,
-            self.outcome == ReviewOutcome::BlockedUnexpectedModel,
-        )?;
+        self.common.validate(self.common.role)?;
         if self.plan_version == 0
             || self.review_round == 0
             || self.pr_number == 0
@@ -527,10 +608,7 @@ impl ReviewResult {
 
 impl FinalResult {
     fn validate(&self) -> Result<(), ContractError> {
-        self.common.validate(
-            WorkerRole::FinalReviewer,
-            self.outcome == FinalOutcome::BlockedUnexpectedModel,
-        )?;
+        self.common.validate(WorkerRole::FinalReviewer)?;
         if self.plan_version == 0
             || self.final_review_round == 0
             || self.pr_number == 0
