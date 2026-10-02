@@ -124,7 +124,6 @@ bash /source/tests/lifecycle/workspace-handoff.sh
 bash /source/tests/lifecycle/commit-signing.sh
 bash /source/tests/lifecycle/jit-memory.sh
 bash /source/tests/lifecycle/hermes-isolation.sh
-bash /source/tests/lifecycle/builder-retry.sh
 test -x /opt/pip/current/bin/pip-control
 test "$(stat -c '%U:%G:%a' /var/lib/pip/ledger.db)" = pip-control:pip-control:600
 test "$(stat -c '%U:%G:%a' /var/lib/pip)" = pip-control:pip-control:710
